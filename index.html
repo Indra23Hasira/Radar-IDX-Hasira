@@ -684,15 +684,24 @@
   async function runWithConcurrency(items, limit, worker){
     const results = new Array(items.length);
     let idx = 0;
+    let errorCount = 0;
+    let firstError = null;
     async function next(){
       while(idx < items.length){
         const cur = idx++;
-        results[cur] = await worker(items[cur], cur);
+        try{
+          results[cur] = await worker(items[cur], cur);
+        }catch(err){
+          errorCount++;
+          if(!firstError) firstError = err;
+          console.error('Gagal proses item', items[cur], err);
+          results[cur] = null;
+        }
       }
     }
     const runners = Array.from({ length: Math.min(limit, items.length) }, next);
     await Promise.all(runners);
-    return results;
+    return { results, errorCount, firstError };
   }
 
   document.getElementById('btnRecompute4').addEventListener('click', computeRollingStats);
@@ -703,39 +712,48 @@
     const out = document.getElementById('rollingResult');
     out.innerHTML = '';
     document.getElementById('progressWrap4').style.display = 'block';
+    document.getElementById('btnRecompute4').disabled = true;
 
-    // 1. cari tanggal terbaru yang ada di database (bukan tanggal upload terakhir)
-    const metaQ = query(collection(db, 'dailySummary'), orderBy('tradingDate', 'desc'), limit(1));
-    const metaSnap = await getDocs(metaQ);
-    if(metaSnap.empty){
-      out.innerHTML = `<div class="msg-box error">✕ Tidak ada data di dailySummary.</div>`;
-      return;
-    }
-    const latestDate = metaSnap.docs[0].data().tradingDate;
+    try{
+      // 1. cari tanggal terbaru yang ada di database (bukan tanggal upload terakhir)
+      const metaQ = query(collection(db, 'dailySummary'), orderBy('tradingDate', 'desc'), limit(1));
+      const metaSnap = await getDocs(metaQ);
+      if(metaSnap.empty){
+        out.innerHTML = `<div class="msg-box error">✕ Tidak ada data di dailySummary.</div>`;
+        return;
+      }
+      const latestDate = metaSnap.docs[0].data().tradingDate;
+      const warnings = [];
 
-    // 2. ambil seluruh saham untuk tanggal terbaru itu
-    const stocksSnap = await getDocs(collection(db, 'dailySummary', latestDate, 'stocks'));
-    const latestRows = stocksSnap.docs.map(d => d.data());
+      // 2. ambil seluruh saham untuk tanggal terbaru itu
+      const stocksSnap = await getDocs(collection(db, 'dailySummary', latestDate, 'stocks'));
+      const latestRows = stocksSnap.docs.map(d => d.data());
 
-    // 3. universe kandidat = saham aktif (volume>0) di tanggal terbaru
-    const candidates = latestRows.filter(r => r.isActive);
-    updateProgress4(0, candidates.length, 'Mengambil histori');
+      // 3. universe kandidat = saham aktif (volume>0) di tanggal terbaru
+      const candidates = latestRows.filter(r => r.isActive);
+      updateProgress4(0, candidates.length, 'Mengambil histori');
 
-    // 4. ambil s.d. 20 hari histori terakhir per ticker kandidat (paralel dibatasi)
-    let fetched = 0;
-    const historyByTicker = await runWithConcurrency(candidates, 25, async (row) => {
-      const q = query(
-        collection(db, 'tickerHistory', row.ticker, 'days'),
-        orderBy(documentId(), 'desc'),
-        limit(20)
-      );
-      const snap = await getDocs(q);
-      fetched++;
-      updateProgress4(fetched, candidates.length, 'Mengambil histori');
-      return { ticker: row.ticker, days: snap.docs.map(d => d.data()) }; // days[0] = paling baru
-    });
-    const historyMap = {};
-    historyByTicker.forEach(h => { historyMap[h.ticker] = h.days; });
+      // 4. ambil s.d. 20 hari histori terakhir per ticker kandidat (paralel dibatasi)
+      let fetched = 0;
+      const { results: historyResults, errorCount: fetchErrors, firstError: fetchFirstError } =
+        await runWithConcurrency(candidates, 15, async (row) => {
+          const q = query(
+            collection(db, 'tickerHistory', row.ticker, 'days'),
+            orderBy(documentId(), 'desc'),
+            limit(20)
+          );
+          const snap = await getDocs(q);
+          fetched++;
+          updateProgress4(fetched, candidates.length, 'Mengambil histori');
+          return { ticker: row.ticker, days: snap.docs.map(d => d.data()) }; // days[0] = paling baru
+        });
+
+      if(fetchErrors > 0){
+        warnings.push(`⚠ ${fetchErrors} saham gagal diambil histori-nya (dilewati, tidak menghentikan proses). Contoh error: ${fetchFirstError ? fetchFirstError.message : '-'}`);
+      }
+
+      const historyMap = {};
+      historyResults.forEach(h => { if(h) historyMap[h.ticker] = h.days; });
 
     // 5. hitung metrik mentah per ticker
     const raw = candidates.map(row => {
@@ -865,7 +883,7 @@
 
     // 8. simpan ke tickerRollingStats/{ticker}
     let saved = 0;
-    await runWithConcurrency(raw, 25, async (r) => {
+    const { errorCount: saveErrors, firstError: saveFirstError } = await runWithConcurrency(raw, 15, async (r) => {
       await setDoc(doc(db, 'tickerRollingStats', r.ticker), {
         ticker: r.ticker,
         companyName: r.companyName,
@@ -887,12 +905,16 @@
       saved++;
       updateProgress4(saved, raw.length, 'Menyimpan hasil');
     });
+    if(saveErrors > 0){
+      warnings.push(`⚠ ${saveErrors} saham gagal disimpan hasilnya. Contoh error: ${saveFirstError ? saveFirstError.message : '-'}`);
+    }
 
     // 9. ringkasan hasil di UI
     const withHistory3 = raw.filter(r => r.foreignNet3d !== null).length;
     const matched3plus = raw.filter(r => r.matchCount >= 3).sort((a,b)=>b.matchCount-a.matchCount || b.totalScorePartial-a.totalScorePartial).slice(0,10);
 
-    let html = `<div class="stat-row">
+    let html = warnings.map(w => `<div class="msg-box warning">${w}</div>`).join('');
+    html += `<div class="stat-row">
       <div class="stat-box ok"><div class="label">Tanggal Diproses</div><div class="value">${latestDate}</div></div>
       <div class="stat-box"><div class="label">Kandidat Aktif</div><div class="value">${candidates.length}</div></div>
       <div class="stat-box ${withHistory3>=candidates.length*0.5?'ok':'warn'}"><div class="label">Histori \u22653 Hari</div><div class="value">${withHistory3}</div></div>
@@ -927,6 +949,13 @@
 
     document.getElementById('stepNum4').classList.add('done');
     out.innerHTML = html;
+
+    }catch(err){
+      console.error('computeRollingStats gagal:', err);
+      out.innerHTML = `<div class="msg-box error">✕ Proses gagal: ${err.message}<br><span style="font-size:10.5px; opacity:0.8;">Cek Console browser (F12) untuk detail teknis lengkap.</span></div>`;
+    }finally{
+      document.getElementById('btnRecompute4').disabled = false;
+    }
   }
 
   // ============================================================
