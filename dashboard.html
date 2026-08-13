@@ -11,7 +11,7 @@
     --bg:#0A0E14; --panel:#11161F; --panel-alt:#151B26; --border:#232B3A; --border-soft:#1B2230;
     --text:#E6E9EF; --text-dim:#8992A6; --text-faint:#5C6577;
     --gold:#D4A857; --gold-dim:#8B7239; --cyan:#4FD1C5;
-    --positive:#3ECF8E; --negative:#F2545B; --amber-flag:#E8A33D; --radius:3px;
+    --positive:#3ECF8E; --negative:#F2545B; --amber-flag:#E8A33D; --risk-orange:#E8763D; --radius:3px;
   }
   *{box-sizing:border-box; margin:0; padding:0;}
   body{ background:var(--bg); color:var(--text); font-family:'Inter', sans-serif; font-size:14px; line-height:1.5; }
@@ -125,6 +125,11 @@
   .cat-badges{ display:flex; flex-wrap:wrap; gap:5px; margin:10px 0; }
   .cat-badge{ font-size:9.5px; padding:3px 8px; border-radius:10px; background:rgba(79,209,197,0.1); color:var(--cyan); border:1px solid rgba(79,209,197,0.25); }
   .distribution-badge{ font-size:9.5px; padding:3px 8px; border-radius:10px; background:rgba(242,84,91,0.12); color:var(--negative); border:1px solid rgba(242,84,91,0.3); font-weight:600; }
+  .phase-badge{ font-size:9.5px; padding:3px 8px; border-radius:10px; font-weight:600; }
+  .phase-badge.early{ background:rgba(62,207,142,0.12); color:var(--positive); border:1px solid rgba(62,207,142,0.3); }
+  .phase-badge.risk{ background:rgba(232,118,61,0.14); color:var(--risk-orange); border:1px solid rgba(232,118,61,0.35); }
+  .risk-banner{ display:flex; align-items:center; gap:8px; background:rgba(232,118,61,0.08); border:1px solid rgba(232,118,61,0.3);
+    color:#F4A578; font-size:11.5px; padding:8px 12px; border-radius:var(--radius); margin:10px 0; }
   .distribution-banner{ display:flex; align-items:center; gap:8px; background:rgba(242,84,91,0.08); border:1px solid rgba(242,84,91,0.3);
     color:#FF8B92; font-size:11.5px; padding:8px 12px; border-radius:var(--radius); margin:10px 0; }
 
@@ -244,6 +249,7 @@
       <div>
         <div class="main-title">On Radar <span class="count" id="radarCount">·</span></div>
         <div class="main-desc">Ranking berdasar jumlah kategori terpenuhi, lalu Total Score sebagai tie-breaker — likuiditas, akumulasi asing, dan momentum teknikal digabung jadi satu.</div>
+        <div id="phaseSummary" style="margin-top:8px; font-size:12px;"></div>
       </div>
       <div class="view-toggle">
         <button class="active" id="viewCardsBtn">Kartu</button>
@@ -489,6 +495,23 @@
     return tags;
   }
 
+  function computeSignalPhase(r){
+    const c = r.categories || {};
+    const tags = [];
+    // Tahap Awal: masih ditahan diam-diam (Bandar Accum), belum breakout harga
+    if(c.bandarAccum && !c.volumeBreakout){
+      tags.push({ label: '🟢 Tahap Awal', cls: 'early',
+        note: 'Masih dalam fase ditahan/dikumpulkan — belum breakout harga.' });
+    }
+    // Sudah Naik — Rawan Guyur: breakout sudah kejadian + sinyal asing masih ada,
+    // tapi harga sudah lepas dari fase "ditahan" (Bandar Accum tidak lagi terpenuhi)
+    if(c.volumeBreakout && !c.bandarAccum && c.foreignUptrend && c.bigAccum){
+      tags.push({ label: '🟠 Sudah Naik — Rawan Guyur', cls: 'risk',
+        note: 'Harga sudah breakout dari fase sideways — risiko masuk di puncak / kena profit taking.' });
+    }
+    return tags;
+  }
+
   function buildSpiderSVG(scores){
     // scores = [liquidity, foreign, technical], masing2 0-100 atau null
     const cx = 46, cy = 46, maxR = 32;
@@ -530,6 +553,15 @@
 
     document.getElementById('radarCount').textContent = '· ' + filtered.length;
 
+    const earlyCount = filtered.filter(r => computeSignalPhase(r).some(p => p.cls === 'early')).length;
+    const riskCount = filtered.filter(r => computeSignalPhase(r).some(p => p.cls === 'risk')).length;
+    const distCount = filtered.filter(r => r.distributionWarning).length;
+    const phaseParts = [];
+    if(earlyCount) phaseParts.push(`<span style="color:var(--positive);">🟢 ${earlyCount} Tahap Awal</span>`);
+    if(riskCount) phaseParts.push(`<span style="color:var(--risk-orange);">🟠 ${riskCount} Rawan Guyur</span>`);
+    if(distCount) phaseParts.push(`<span style="color:var(--negative);">⚠ ${distCount} Tanda Distribusi</span>`);
+    document.getElementById('phaseSummary').innerHTML = phaseParts.length ? phaseParts.join(' &nbsp;·&nbsp; ') : '';
+
     if(!filtered.length){
       content.innerHTML = `<div class="empty-state">
         <div class="big">📡</div>
@@ -543,6 +575,7 @@
       let html = `<div class="card-grid">`;
       filtered.forEach((r, i) => {
         const tags = categoryTags(r);
+        const phaseTags = computeSignalPhase(r);
         const changePct = r.price?.changePct;
         const tech = r.technicalScore ?? r.ind?.technicalScore;
         html += `<div class="stock-card">
@@ -554,7 +587,8 @@
             </div>
             <div class="score-badge"><div class="num">${r.liveScore ?? '-'}</div><div class="lbl">Score</div></div>
           </div>
-          <div class="cat-badges">${tags.map(t => `<span class="cat-badge">${t}</span>`).join('')}${r.distributionWarning ? `<span class="distribution-badge">⚠ Distribusi</span>` : ''}</div>
+          <div class="cat-badges">${tags.map(t => `<span class="cat-badge">${t}</span>`).join('')}${phaseTags.map(p => `<span class="phase-badge ${p.cls}">${p.label}</span>`).join('')}${r.distributionWarning ? `<span class="distribution-badge">⚠ Distribusi</span>` : ''}</div>
+          ${phaseTags.filter(p=>p.cls==='risk').map(p => `<div class="risk-banner">🟠 ${p.note}</div>`).join('')}
           ${r.distributionWarning ? `<div class="distribution-banner">⚠ Tanda distribusi terdeteksi — tekanan jual mendominasi, closing melemah. Cek ulang sebelum entry.</div>` : ''}
           <div class="card-body">
             <div class="spider-wrap">${buildSpiderSVG([r.liquidityScore, r.foreignScore, tech])}</div>
@@ -586,6 +620,11 @@
       filtered.forEach(r => {
         const changePct = r.price?.changePct;
         const tags = categoryTags(r);
+        const phaseTags = computeSignalPhase(r);
+        const warningCell = [
+          ...phaseTags.map(p => `<span class="phase-badge ${p.cls}">${p.label}</span>`),
+          r.distributionWarning ? '<span class="distribution-badge">⚠ Distribusi</span>' : ''
+        ].filter(Boolean).join(' ');
         html += `<tr>
           <td class="ticker-cell">${r.ticker}<span class="co-name">${r.companyName || ''}</span></td>
           <td>${r.matchCount}/4</td>
@@ -596,7 +635,7 @@
           <td>${r.ind?.rsi14!=null ? r.ind.rsi14.toFixed(1) : '-'}</td>
           <td>${r.ind?.trendLabel ?? '-'}</td>
           <td style="font-family:'Inter'; font-size:11px; color:var(--cyan);">${tags.join(', ')}</td>
-          <td>${r.distributionWarning ? '<span class="distribution-badge">⚠ Distribusi</span>' : ''}</td>
+          <td>${warningCell}</td>
           <td><a class="link-table" href="https://stockbit.com/symbol/${r.ticker}" target="_blank" rel="noopener">Stockbit ↗</a></td>
         </tr>`;
       });
