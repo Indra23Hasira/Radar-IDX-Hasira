@@ -514,25 +514,46 @@
 
   function buildSpiderSVG(scores){
     // scores = [liquidity, foreign, technical], masing2 0-100 atau null
-    const cx = 46, cy = 46, maxR = 32;
-    const angles = [-90, 30, 150].map(d => d * Math.PI / 180); // 3 sumbu, 120 derajat
+    const cx = 54, cy = 50, maxR = 30;
+    const angles = [-90, 30, 150].map(d => d * Math.PI / 180); // 3 sumbu, 120 derajat: atas, kanan-bawah, kiri-bawah
+    const labels = ['Liq', 'For', 'Tec'];
     const pts = (r) => angles.map(a => [cx + r*Math.cos(a), cy + r*Math.sin(a)]);
     const outer = pts(maxR).map(p => p.join(',')).join(' ');
     const mid = pts(maxR*0.5).map(p => p.join(',')).join(' ');
+
     const dataPts = scores.map((s, i) => {
       const r = ((s ?? 0) / 100) * maxR;
-      const [x,y] = [cx + r*Math.cos(angles[i]), cy + r*Math.sin(angles[i])];
-      return [x,y];
+      return [cx + r*Math.cos(angles[i]), cy + r*Math.sin(angles[i])];
     });
     const dataPoly = dataPts.map(p => p.join(',')).join(' ');
     const dots = dataPts.map(([x,y]) => `<circle cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="2.5" fill="#D4A857"/>`).join('');
-    return `<svg width="92" height="92" viewBox="0 0 92 92">
-      <polygon points="${outer}" fill="none" stroke="#232B3A" stroke-width="1"/>
-      <polygon points="${mid}" fill="none" stroke="#1B2230" stroke-width="1"/>
-      <line x1="${cx}" y1="${cy-maxR}" x2="${cx}" y2="${cy+maxR*0.5}" stroke="#1B2230" stroke-width="1"/>
-      <polygon points="${dataPoly}" fill="rgba(212,168,87,0.18)" stroke="#D4A857" stroke-width="1.5"/>
-      ${dots}
-    </svg>`;
+
+    // 3 garis sumbu penuh dari titik tengah ke tiap ujung
+    const spokes = angles.map(a => {
+      const x2 = cx + maxR*Math.cos(a), y2 = cy + maxR*Math.sin(a);
+      return `<line x1="${cx}" y1="${cy}" x2="${x2.toFixed(1)}" y2="${y2.toFixed(1)}" stroke="#1B2230" stroke-width="1"/>`;
+    }).join('');
+
+    // label di tiap ujung sumbu — posisi & alignment disesuaikan per sudut
+    const labelPos = angles.map((a, i) => {
+      const lr = maxR + 11;
+      const x = cx + lr*Math.cos(a), y = cy + lr*Math.sin(a);
+      const anchor = i === 0 ? 'middle' : (Math.cos(a) > 0 ? 'start' : 'end');
+      return `<text x="${x.toFixed(1)}" y="${(y+3).toFixed(1)}" text-anchor="${anchor}" font-size="9" font-family="Inter" fill="#5C6577">${labels[i]}</text>`;
+    }).join('');
+
+    return `<div style="text-align:center;">
+      <svg width="108" height="98" viewBox="0 0 108 98">
+        <polygon points="${outer}" fill="none" stroke="#232B3A" stroke-width="1"/>
+        <polygon points="${mid}" fill="none" stroke="#1B2230" stroke-width="1"/>
+        ${spokes}
+        <circle cx="${cx}" cy="${cy}" r="1.8" fill="#5C6577"/>
+        <polygon points="${dataPoly}" fill="rgba(212,168,87,0.18)" stroke="#D4A857" stroke-width="1.5"/>
+        ${dots}
+        ${labelPos}
+      </svg>
+      <div style="font-size:9px; color:var(--text-faint); margin-top:-4px;">Titik tengah = 0 · Ujung = 100</div>
+    </div>`;
   }
 
   function fmtNum(n, digits=0){ return n!=null ? n.toLocaleString('id-ID', {maximumFractionDigits:digits}) : '-'; }
