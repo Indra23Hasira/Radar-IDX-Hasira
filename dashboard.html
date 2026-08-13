@@ -138,6 +138,7 @@
   .stat-grid{ flex:1; display:grid; grid-template-columns:1fr 1fr; gap:8px 14px; }
   .stat-item .s-label{ font-size:9.5px; color:var(--text-faint); text-transform:uppercase; letter-spacing:0.5px; }
   .stat-item .s-val{ font-family:'IBM Plex Mono', monospace; font-size:13px; margin-top:1px; }
+  .stat-item .s-sub{ font-family:'IBM Plex Mono', monospace; font-size:9.5px; color:var(--text-faint); margin-top:1px; }
   .s-val.pos{ color:var(--positive); } .s-val.neg{ color:var(--negative); } .s-val.gold{ color:var(--gold); }
 
   .card-foot{ display:flex; justify-content:space-between; align-items:center; margin-top:14px; padding-top:12px; border-top:1px solid var(--border-soft); }
@@ -617,7 +618,7 @@
               <div class="stat-item"><div class="s-label">Close</div><div class="s-val">${fmtNum(r.price?.close)}</div></div>
               <div class="stat-item"><div class="s-label">Change</div><div class="s-val ${changePct>=0?'pos':'neg'}">${changePct!=null ? (changePct>=0?'+':'')+changePct.toFixed(2)+'%' : '-'}</div></div>
               <div class="stat-item"><div class="s-label">Value Hari Ini</div><div class="s-val">${fmtValue(r.price?.value)}</div></div>
-              <div class="stat-item"><div class="s-label">Foreign Net 3D</div><div class="s-val ${r.foreignNet3d>=0?'pos':'neg'}">${fmtNum(r.foreignNet3d)}</div></div>
+              <div class="stat-item"><div class="s-label">Foreign Net Value (3D)</div><div class="s-val ${r.foreignNet3d>=0?'pos':'neg'}">${fmtValue(r.foreignNetValue3d)}</div><div class="s-sub">${fmtNum(r.foreignNet3d)} lembar</div></div>
               <div class="stat-item"><div class="s-label">RSI14</div><div class="s-val gold">${r.ind?.rsi14!=null ? r.ind.rsi14.toFixed(1) : '-'}</div></div>
               <div class="stat-item"><div class="s-label">Trend</div><div class="s-val gold">${r.ind?.trendLabel ?? '-'}</div></div>
             </div>
@@ -636,7 +637,7 @@
       content.innerHTML = html;
     }else{
       let html = `<table><thead><tr>
-        <th>Ticker</th><th>Match</th><th>Score</th><th>Close</th><th>Change%</th><th>Foreign Net 3D</th><th>RSI14</th><th>Trend</th><th>Kategori</th><th>Warning</th><th>Cek</th>
+        <th>Ticker</th><th>Match</th><th>Score</th><th>Close</th><th>Change%</th><th>Foreign Net Value (3D)</th><th>RSI14</th><th>Trend</th><th>Kategori</th><th>Warning</th><th>Cek</th>
       </tr></thead><tbody>`;
       filtered.forEach(r => {
         const changePct = r.price?.changePct;
@@ -652,7 +653,7 @@
           <td><span class="score-pill">${r.liveScore ?? '-'}</span></td>
           <td>${fmtNum(r.price?.close)}</td>
           <td class="${changePct>=0?'pos':'neg'}">${changePct!=null ? (changePct>=0?'+':'')+changePct.toFixed(2)+'%' : '-'}</td>
-          <td class="${r.foreignNet3d>=0?'pos':'neg'}">${fmtNum(r.foreignNet3d)}</td>
+          <td class="${r.foreignNet3d>=0?'pos':'neg'}">${fmtValue(r.foreignNetValue3d)}</td>
           <td>${r.ind?.rsi14!=null ? r.ind.rsi14.toFixed(1) : '-'}</td>
           <td>${r.ind?.trendLabel ?? '-'}</td>
           <td style="font-family:'Inter'; font-size:11px; color:var(--cyan);">${tags.join(', ')}</td>
