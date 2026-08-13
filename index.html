@@ -241,6 +241,25 @@
     <div id="rollingResult"></div>
   </div>
 
+  <!-- STEP 5: TECHNICAL INDICATOR -->
+  <div class="step-card" id="stepCard5">
+    <div class="step-head">
+      <div class="step-num" id="stepNum5">5</div>
+      <div class="step-title">Update Indikator Teknikal (EMA/MACD/RSI) — dari Yahoo Finance</div>
+    </div>
+    <div class="msg-box info">ℹ Histori harga (untuk hitung EMA/MACD/RSI) ditarik <b>langsung dari Yahoo Finance</b>, bukan dari data upload harian Anda — karena Yahoo sudah punya histori bertahun-tahun, jadi indikator langsung valid tanpa perlu menunggu berbulan-bulan upload. Hanya diambil untuk <b>emiten yang sudah match kategori di Tahap 4</b> (bukan 836 saham), supaya cepat dan hemat.</div>
+    <div class="field" style="max-width:260px; margin-top:12px;">
+      <label>Ambil untuk saham dengan match kategori minimal</label>
+      <input type="number" id="minMatchThreshold" value="2" min="1" max="4" step="1">
+    </div>
+    <button class="btn btn-ghost" id="btnUpdateIndicators" style="margin-top:4px;">🔄 Update Indikator Sekarang</button>
+    <div class="progress-wrap" id="progressWrap5">
+      <div class="progress-bar-outer"><div class="progress-bar-inner" id="progressBar5"></div></div>
+      <div class="progress-label" id="progressLabel5">Memproses 0 / 0 saham...</div>
+    </div>
+    <div id="indicatorResult"></div>
+  </div>
+
   <!-- HISTORY -->
   <div class="history-section">
     <div class="history-title">Riwayat Upload Terakhir</div>
@@ -957,6 +976,257 @@
       document.getElementById('btnRecompute4').disabled = false;
     }
   }
+
+  // ============================================================
+  // TAHAP 5: TECHNICAL INDICATOR (EMA20, EMA50, MACD, RSI, Volume Trend, ATR)
+  // Trigger MANUAL — tombol terpisah, tidak otomatis setelah upload.
+  // ============================================================
+
+  function calcEMASeries(closes, period){
+    // return array sepanjang closes, undefined sebelum index cukup data (seed = SMA period pertama)
+    const out = new Array(closes.length).fill(undefined);
+    if(closes.length < period) return out;
+    const k = 2 / (period + 1);
+    let seed = 0;
+    for(let i = 0; i < period; i++) seed += closes[i];
+    seed = seed / period;
+    out[period - 1] = seed;
+    for(let i = period; i < closes.length; i++){
+      out[i] = closes[i] * k + out[i-1] * (1 - k);
+    }
+    return out;
+  }
+
+  function calcRSI(closes, period = 14){
+    if(closes.length < period + 1) return null;
+    let gains = 0, losses = 0;
+    for(let i = 1; i <= period; i++){
+      const diff = closes[i] - closes[i-1];
+      if(diff >= 0) gains += diff; else losses -= diff;
+    }
+    let avgGain = gains / period, avgLoss = losses / period;
+    for(let i = period + 1; i < closes.length; i++){
+      const diff = closes[i] - closes[i-1];
+      const gain = diff > 0 ? diff : 0;
+      const loss = diff < 0 ? -diff : 0;
+      avgGain = (avgGain * (period - 1) + gain) / period;
+      avgLoss = (avgLoss * (period - 1) + loss) / period;
+    }
+    if(avgLoss === 0) return 100;
+    const rs = avgGain / avgLoss;
+    return 100 - (100 / (1 + rs));
+  }
+
+  function calcMACD(closes){
+    // butuh minimal 26 hari untuk MACD line, +9 hari lagi (total ~34) untuk signal line
+    if(closes.length < 26) return { macdLine: null, macdSignal: null };
+    const ema12 = calcEMASeries(closes, 12);
+    const ema26 = calcEMASeries(closes, 26);
+    const macdSeries = closes.map((_, i) =>
+      (ema12[i] !== undefined && ema26[i] !== undefined) ? ema12[i] - ema26[i] : undefined
+    );
+    const macdValid = macdSeries.filter(v => v !== undefined);
+    const macdLine = macdValid.length ? macdValid[macdValid.length - 1] : null;
+    if(macdValid.length < 9) return { macdLine, macdSignal: null };
+    const signalSeries = calcEMASeries(macdValid, 9);
+    const macdSignal = signalSeries[signalSeries.length - 1];
+    return { macdLine, macdSignal };
+  }
+
+  function classifyTrend(close, ema20, ema50){
+    if(ema20 === undefined || ema50 === undefined || ema20 === null || ema50 === null) return null;
+    const diffPct = Math.abs(ema20 - ema50) / ema50 * 100;
+    if(diffPct < 2) return 'Sideways';
+    if(close > ema20 && ema20 > ema50) return 'Uptrend';
+    if(close < ema20 && ema20 < ema50) return 'Downtrend';
+    return 'Sideways';
+  }
+
+  function updateProgress5(done, total, label){
+    const pct = total ? Math.round((done/total)*100) : 0;
+    document.getElementById('progressBar5').style.width = pct + '%';
+    document.getElementById('progressLabel5').textContent = `${label || 'Memproses'} ${done} / ${total} saham... (${pct}%)`;
+  }
+
+  document.getElementById('btnUpdateIndicators').addEventListener('click', updateTechnicalIndicators);
+
+  async function fetchYahooHistory(ticker){
+    const symbol = ticker + '.JK';
+    const yahooUrl = `https://query1.finance.yahoo.com/v8/finance/chart/${symbol}?interval=1d&range=6mo`;
+    const proxies = [
+      `https://api.allorigins.win/raw?url=${encodeURIComponent(yahooUrl)}`,
+      `https://corsproxy.io/?${encodeURIComponent(yahooUrl)}`,
+    ];
+    let lastErr = null;
+    for(const proxyUrl of proxies){
+      try{
+        const res = await fetch(proxyUrl);
+        if(!res.ok) throw new Error('HTTP ' + res.status);
+        const json = await res.json();
+        const result = json?.chart?.result?.[0];
+        const yErr = json?.chart?.error;
+        if(yErr) throw new Error(yErr.description || 'Yahoo Finance error');
+        if(!result) throw new Error('Data kosong dari Yahoo (ticker mungkin tidak terdaftar)');
+        const timestamps = result.timestamp || [];
+        const quote = result.indicators?.quote?.[0] || {};
+        const closesRaw = quote.close || [], highsRaw = quote.high || [];
+        const lowsRaw = quote.low || [], volumesRaw = quote.volume || [];
+        const closes = [], highs = [], lows = [], volumes = [];
+        for(let i = 0; i < timestamps.length; i++){
+          if(closesRaw[i] != null && highsRaw[i] != null && lowsRaw[i] != null){
+            closes.push(closesRaw[i]);
+            highs.push(highsRaw[i]);
+            lows.push(lowsRaw[i]);
+            volumes.push(volumesRaw[i] ?? 0);
+          }
+        }
+        if(!closes.length) throw new Error('Tidak ada data harga valid dari Yahoo');
+        return { closes, highs, lows, volumes };
+      }catch(err){
+        lastErr = err;
+        continue; // coba proxy berikutnya
+      }
+    }
+    throw lastErr || new Error('Semua proxy gagal diakses');
+  }
+
+  async function updateTechnicalIndicators(){
+    if(!firebaseReady) return;
+    const { collection, query, where, getDocs, doc, setDoc } = firestoreFns;
+    const out = document.getElementById('indicatorResult');
+    out.innerHTML = '';
+    document.getElementById('progressWrap5').style.display = 'block';
+    document.getElementById('btnUpdateIndicators').disabled = true;
+
+    try{
+      const threshold = parseInt(document.getElementById('minMatchThreshold').value, 10) || 2;
+
+      // 1. ambil emiten yang sudah match kategori >= threshold dari Tahap 4
+      const q = query(collection(db, 'tickerRollingStats'), where('matchCount', '>=', threshold));
+      const snap = await getDocs(q);
+      const candidates = snap.docs.map(d => d.data());
+
+      if(!candidates.length){
+        out.innerHTML = `<div class="msg-box warning">⚠ Tidak ada saham dengan match kategori ≥ ${threshold}. Coba turunkan angka minimal, atau pastikan Tahap 4 (Step 4) sudah dijalankan lebih dulu.</div>`;
+        return;
+      }
+      updateProgress5(0, candidates.length, 'Mengambil histori Yahoo Finance');
+
+      // 2. tarik histori harga dari Yahoo Finance (dual-proxy), konkurensi dibatasi lebih kecil
+      //    karena ini API eksternal (lebih rentan rate-limit dibanding Firestore sendiri)
+      let fetched = 0;
+      const { results, errorCount, firstError } = await runWithConcurrency(candidates, 5, async (row) => {
+        const hist = await fetchYahooHistory(row.ticker);
+        fetched++;
+        updateProgress5(fetched, candidates.length, 'Mengambil histori Yahoo Finance');
+        return { ticker: row.ticker, companyName: row.companyName, ...hist };
+      });
+
+      const warnings = [];
+      if(errorCount > 0){
+        warnings.push(`⚠ ${errorCount} saham gagal diambil dari Yahoo Finance (dilewati). Contoh error: ${firstError ? firstError.message : '-'}`);
+      }
+
+      // 3. hitung indikator per ticker dari histori Yahoo
+      const computed = results.filter(Boolean).map(({ ticker, companyName, closes, highs, lows, volumes }) => {
+        const daysAccumulated = closes.length;
+        const latestClose = closes[closes.length - 1];
+
+        const ema20Series = calcEMASeries(closes, 20);
+        const ema50Series = calcEMASeries(closes, 50);
+        const ema20 = ema20Series[ema20Series.length - 1] ?? null;
+        const ema50 = ema50Series[ema50Series.length - 1] ?? null;
+        const rsi14 = calcRSI(closes, 14);
+        const { macdLine, macdSignal } = calcMACD(closes);
+        const trendLabel = classifyTrend(latestClose, ema20 ?? undefined, ema50 ?? undefined);
+
+        const volWindow = volumes.slice(-20);
+        const avgVol20 = volWindow.length ? volWindow.reduce((a,b)=>a+b,0) / volWindow.length : 0;
+        const volumeTrendRatio = avgVol20 !== 0 ? volumes[volumes.length-1] / avgVol20 : null;
+
+        const rangeSeries = highs.map((h, i) => h - lows[i]);
+        const atrWindow = rangeSeries.slice(-14);
+        const atr14 = atrWindow.length ? atrWindow.reduce((a,b)=>a+b,0) / atrWindow.length : null;
+
+        return {
+          ticker, companyName, daysAccumulated,
+          ema20, ema50, rsi14, macdLine, macdSignal, trendLabel,
+          volumeTrendRatio, atr14,
+        };
+      });
+
+      // 4. simpan ke tickerIndicators/{ticker}
+      let saved = 0;
+      const saveRes = await runWithConcurrency(computed, 15, async (r) => {
+        await setDoc(doc(db, 'tickerIndicators', r.ticker), {
+          ticker: r.ticker,
+          companyName: r.companyName,
+          source: 'yahoo_finance',
+          daysAccumulated: r.daysAccumulated,
+          ema20: r.ema20,
+          ema50: r.ema50,
+          rsi14: r.rsi14,
+          macdLine: r.macdLine,
+          macdSignal: r.macdSignal,
+          trendLabel: r.trendLabel,
+          volumeTrendRatio: r.volumeTrendRatio,
+          atr14: r.atr14,
+          updatedAt: new Date().toISOString(),
+        });
+        saved++;
+        updateProgress5(saved, computed.length, 'Menyimpan indikator');
+      });
+      if(saveRes.errorCount > 0){
+        warnings.push(`⚠ ${saveRes.errorCount} saham gagal disimpan indikatornya. Contoh error: ${saveRes.firstError ? saveRes.firstError.message : '-'}`);
+      }
+
+      // 5. simpan meta status
+      await setDoc(doc(db, 'systemMeta', 'technicalIndicators'), {
+        matchThresholdUsed: threshold,
+        updatedAt: new Date().toISOString(),
+        stockCount: computed.length,
+      });
+
+      // 6. ringkasan UI
+      const withEMA50 = computed.filter(r => r.ema50 !== null).length;
+      const withMACD = computed.filter(r => r.macdSignal !== null).length;
+      const withRSI = computed.filter(r => r.rsi14 !== null).length;
+
+      let html = warnings.map(w => `<div class="msg-box warning">${w}</div>`).join('');
+      html += `<div class="stat-row">
+        <div class="stat-box ok"><div class="label">Kandidat Diproses</div><div class="value">${candidates.length}</div></div>
+        <div class="stat-box ok"><div class="label">RSI14 Siap</div><div class="value">${withRSI}/${computed.length}</div></div>
+        <div class="stat-box ok"><div class="label">EMA50 Siap</div><div class="value">${withEMA50}/${computed.length}</div></div>
+        <div class="stat-box ok"><div class="label">MACD Siap</div><div class="value">${withMACD}/${computed.length}</div></div>
+      </div>`;
+
+      if(computed.length){
+        html += `<div class="preview-table-wrap"><table><thead><tr>
+          <th>Ticker</th><th>RSI14</th><th>Trend</th><th>EMA20</th><th>EMA50</th><th>Hari Data Yahoo</th>
+        </tr></thead><tbody>`;
+        computed.sort((a,b) => (b.rsi14||0) - (a.rsi14||0)).forEach(r => {
+          html += `<tr>
+            <td>${r.ticker}</td>
+            <td>${r.rsi14!==null ? r.rsi14.toFixed(1) : '-'}</td>
+            <td>${r.trendLabel ?? '-'}</td>
+            <td>${r.ema20!==null ? r.ema20.toLocaleString('id-ID',{maximumFractionDigits:0}) : '-'}</td>
+            <td>${r.ema50!==null ? r.ema50.toLocaleString('id-ID',{maximumFractionDigits:0}) : '-'}</td>
+            <td>${r.daysAccumulated}</td>
+          </tr>`;
+        });
+        html += `</tbody></table></div>`;
+      }
+
+      document.getElementById('stepNum5').classList.add('done');
+      out.innerHTML = html;
+    }catch(err){
+      console.error('updateTechnicalIndicators gagal:', err);
+      out.innerHTML = `<div class="msg-box error">✕ Proses gagal: ${err.message}<br><span style="font-size:10.5px; opacity:0.8;">Cek Console browser (F12) untuk detail teknis lengkap.</span></div>`;
+    }finally{
+      document.getElementById('btnUpdateIndicators').disabled = false;
+    }
+  }
+
 
   // ============================================================
   // UPLOAD HISTORY
