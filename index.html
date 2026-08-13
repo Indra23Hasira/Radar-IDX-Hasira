@@ -1,0 +1,673 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Stock Radar — Import Data Harian</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Big+Shoulders+Display:wght@600;700;800&family=Inter:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<style>
+  :root{
+    --bg:#0A0E14; --panel:#11161F; --panel-alt:#151B26; --border:#232B3A; --border-soft:#1B2230;
+    --text:#E6E9EF; --text-dim:#8992A6; --text-faint:#5C6577;
+    --gold:#D4A857; --gold-dim:#8B7239; --cyan:#4FD1C5;
+    --positive:#3ECF8E; --negative:#F2545B; --amber-flag:#E8A33D; --radius:3px;
+  }
+  *{box-sizing:border-box; margin:0; padding:0;}
+  body{ background:var(--bg); color:var(--text); font-family:'Inter', sans-serif; font-size:14px; line-height:1.5; }
+  .mono{ font-family:'IBM Plex Mono', monospace; }
+
+  header{
+    display:flex; align-items:center; justify-content:space-between; padding:18px 28px;
+    border-bottom:1px solid var(--border); background:linear-gradient(180deg, #0D1219 0%, #0A0E14 100%);
+  }
+  .brand{ display:flex; align-items:center; gap:14px; }
+  .radar-icon{ width:34px; height:34px; position:relative; border-radius:50%; border:1px solid var(--gold-dim);
+    background:radial-gradient(circle at center, rgba(212,168,87,0.08) 0%, transparent 70%); }
+  .radar-icon::before, .radar-icon::after{ content:''; position:absolute; border-radius:50%; border:1px solid var(--border-soft); }
+  .radar-icon::before{ inset:7px; } .radar-icon::after{ inset:14px; border-color: rgba(212,168,87,0.25); }
+  .brand-text .title{ font-family:'Big Shoulders Display', sans-serif; font-weight:700; font-size:22px; line-height:1; }
+  .brand-text .sub{ font-size:11px; color:var(--text-dim); letter-spacing:1.5px; text-transform:uppercase; margin-top:3px; }
+  .header-nav a{ color:var(--text-dim); text-decoration:none; font-size:12.5px; margin-left:22px; }
+  .header-nav a.active{ color:var(--gold); }
+  .user-email{ color:var(--text-faint); font-size:12px; margin-left:26px; font-family:'IBM Plex Mono'; }
+
+  .login-overlay{
+    position:fixed; inset:0; background:rgba(10,14,20,0.96); z-index:100;
+    display:flex; align-items:center; justify-content:center;
+  }
+  .login-box{
+    background:var(--panel); border:1px solid var(--border); border-radius:8px;
+    padding:32px 30px; width:340px;
+  }
+  .login-box .field{ margin-bottom:14px; }
+  .login-box .field label{ display:block; font-size:12px; color:var(--text-dim); margin-bottom:6px; }
+  .login-box input{
+    width:100%; background:var(--panel-alt); border:1px solid var(--border); color:var(--text);
+    padding:10px 12px; border-radius:var(--radius); font-family:'Inter'; font-size:13px;
+  }
+  .login-box input:focus{ outline:none; border-color:var(--gold-dim); }
+
+  main{ max-width:920px; margin:0 auto; padding:32px 24px 60px; }
+  .page-title{ font-family:'Big Shoulders Display', sans-serif; font-size:26px; font-weight:700; margin-bottom:4px; }
+  .page-desc{ font-size:12.5px; color:var(--text-dim); margin-bottom:28px; }
+
+  .step-card{ background:var(--panel); border:1px solid var(--border); border-radius:6px; padding:22px; margin-bottom:16px; }
+  .step-card.disabled{ opacity:0.45; pointer-events:none; }
+  .step-head{ display:flex; align-items:center; gap:10px; margin-bottom:16px; }
+  .step-num{ width:22px; height:22px; border-radius:50%; background:var(--panel-alt); border:1px solid var(--border);
+    display:flex; align-items:center; justify-content:center; font-family:'IBM Plex Mono'; font-size:11px; color:var(--text-dim); flex-shrink:0; }
+  .step-num.done{ background:rgba(62,207,142,0.15); border-color:var(--positive); color:var(--positive); }
+  .step-title{ font-size:14px; font-weight:600; }
+
+  .dropzone{
+    border:1.5px dashed var(--border); border-radius:6px; padding:36px 20px; text-align:center; cursor:pointer;
+    transition:.15s; background:var(--panel-alt);
+  }
+  .dropzone:hover, .dropzone.dragover{ border-color:var(--gold-dim); background:rgba(212,168,87,0.04); }
+  .dropzone .dz-icon{ font-size:26px; margin-bottom:8px; color:var(--text-faint); }
+  .dropzone .dz-text{ font-size:13px; color:var(--text-dim); }
+  .dropzone .dz-text b{ color:var(--gold); }
+  .dropzone .dz-hint{ font-size:11px; color:var(--text-faint); margin-top:6px; }
+  #fileInput{ display:none; }
+
+  .file-chip{
+    display:flex; align-items:center; justify-content:space-between; background:var(--panel-alt);
+    border:1px solid var(--border); border-radius:var(--radius); padding:10px 14px; margin-top:12px; font-size:12.5px;
+  }
+  .file-chip .fname{ font-family:'IBM Plex Mono'; color:var(--text); }
+  .file-chip .remove{ color:var(--negative); cursor:pointer; font-size:12px; }
+
+  .stat-row{ display:grid; grid-template-columns:repeat(4,1fr); gap:10px; margin:14px 0; }
+  .stat-box{ background:var(--panel-alt); border:1px solid var(--border); border-radius:var(--radius); padding:12px; }
+  .stat-box .label{ font-size:9.5px; text-transform:uppercase; letter-spacing:0.6px; color:var(--text-faint); }
+  .stat-box .value{ font-family:'IBM Plex Mono'; font-size:16px; margin-top:4px; color:var(--text); }
+  .stat-box.warn .value{ color:var(--amber-flag); }
+  .stat-box.ok .value{ color:var(--positive); }
+
+  .msg-box{ display:flex; gap:9px; padding:10px 12px; border-radius:var(--radius); font-size:12px; margin-top:10px; align-items:flex-start; }
+  .msg-box.error{ background:rgba(242,84,91,0.1); border:1px solid rgba(242,84,91,0.35); color:#FF8B92; }
+  .msg-box.warning{ background:rgba(232,163,61,0.1); border:1px solid rgba(232,163,61,0.35); color:var(--amber-flag); }
+  .msg-box.info{ background:rgba(79,209,197,0.08); border:1px solid rgba(79,209,197,0.3); color:var(--cyan); }
+  .msg-box.success{ background:rgba(62,207,142,0.08); border:1px solid rgba(62,207,142,0.3); color:var(--positive); }
+
+  .preview-table-wrap{ overflow-x:auto; margin-top:14px; border:1px solid var(--border); border-radius:6px; }
+  table{ width:100%; border-collapse:collapse; }
+  thead th{ text-align:left; font-size:10px; text-transform:uppercase; letter-spacing:0.4px; color:var(--text-faint);
+    padding:9px 10px; border-bottom:1px solid var(--border); background:var(--panel-alt); white-space:nowrap; }
+  tbody td{ padding:8px 10px; border-bottom:1px solid var(--border-soft); font-family:'IBM Plex Mono'; font-size:12px; white-space:nowrap; }
+  tbody tr:last-child td{ border-bottom:none; }
+  .pos{ color:var(--positive); } .neg{ color:var(--negative); }
+  .preview-note{ font-size:11px; color:var(--text-faint); margin-top:8px; }
+
+  .overwrite-box{
+    display:flex; align-items:flex-start; gap:10px; background:rgba(232,163,61,0.08); border:1px solid rgba(232,163,61,0.3);
+    border-radius:var(--radius); padding:12px 14px; margin-top:12px;
+  }
+  .overwrite-box input[type="checkbox"]{ margin-top:3px; accent-color:var(--amber-flag); }
+  .overwrite-box label{ font-size:12px; color:var(--text); cursor:pointer; }
+  .overwrite-box .sub{ font-size:11px; color:var(--text-dim); margin-top:2px; }
+
+  .btn{
+    padding:11px 20px; border-radius:var(--radius); font-size:13px; font-weight:600; cursor:pointer; border:none;
+    font-family:'Inter'; transition:opacity .15s;
+  }
+  .btn:disabled{ opacity:0.35; cursor:not-allowed; }
+  .btn-primary{ background:var(--gold); color:#12131A; }
+  .btn-primary:hover:not(:disabled){ opacity:0.88; }
+  .btn-ghost{ background:transparent; border:1px solid var(--border); color:var(--text-dim); }
+
+  .progress-wrap{ margin-top:16px; display:none; }
+  .progress-bar-outer{ height:6px; background:var(--panel-alt); border-radius:4px; overflow:hidden; }
+  .progress-bar-inner{ height:100%; background:var(--gold); width:0%; transition:width .2s; }
+  .progress-label{ font-size:11px; color:var(--text-dim); margin-top:6px; font-family:'IBM Plex Mono'; }
+
+  .config-note{
+    background:var(--panel-alt); border:1px solid var(--border); border-radius:var(--radius);
+    padding:12px 14px; font-size:11.5px; color:var(--text-dim); margin-bottom:20px; line-height:1.6;
+  }
+  .config-note code{ background:#0A0E14; padding:1px 5px; border-radius:2px; color:var(--gold); }
+
+  .history-section{ margin-top:36px; }
+  .history-title{ font-size:11px; text-transform:uppercase; letter-spacing:1.2px; color:var(--text-dim); margin-bottom:12px; }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="brand">
+    <div class="radar-icon"></div>
+    <div class="brand-text">
+      <div class="title">STOCK RADAR</div>
+      <div class="sub">IDX Daily Scanner</div>
+    </div>
+  </div>
+  <nav class="header-nav">
+    <a href="#" class="active">Import Data</a>
+    <a href="#">Dashboard Radar</a>
+    <span id="userEmailLabel" class="user-email"></span>
+    <a href="#" id="btnLogout" style="color:var(--negative);">Logout</a>
+  </nav>
+</header>
+
+<div class="login-overlay" id="loginOverlay">
+  <div class="login-box">
+    <div class="brand" style="justify-content:center; margin-bottom:22px;">
+      <div class="radar-icon"></div>
+      <div class="brand-text">
+        <div class="title">STOCK RADAR</div>
+        <div class="sub">IDX Daily Scanner</div>
+      </div>
+    </div>
+    <form id="loginForm">
+      <div class="field">
+        <label>Email</label>
+        <input type="text" id="loginEmail" placeholder="email@anda.com" autocomplete="username" required>
+      </div>
+      <div class="field">
+        <label>Password</label>
+        <input type="password" id="loginPassword" placeholder="••••••••" autocomplete="current-password" required>
+      </div>
+      <div class="msg-box error" id="loginError" style="display:none;"></div>
+      <button type="submit" class="btn btn-primary" style="width:100%; margin-top:6px;">Masuk</button>
+    </form>
+  </div>
+</div>
+
+<main>
+  <div class="page-title">Import Data Harian</div>
+  <div class="page-desc">Upload file RS (Ringkasan Saham) dari BEI dalam format .xlsx — sistem akan validasi, tampilkan preview, baru disimpan ke database setelah Anda konfirmasi.</div>
+
+  <div class="config-note" id="configNote">
+    ⚙ <b>Setup diperlukan:</b> buka file ini di editor, cari variabel <code>firebaseConfig</code> di bagian bawah (dalam tag <code>&lt;script&gt;</code>), lalu isi dengan konfigurasi project Firebase Anda sebelum di-deploy ke GitHub Pages. Saat ini halaman berjalan dalam <b>mode preview</b> tanpa koneksi database sungguhan.
+  </div>
+
+  <!-- STEP 1: UPLOAD -->
+  <div class="step-card">
+    <div class="step-head">
+      <div class="step-num" id="stepNum1">1</div>
+      <div class="step-title">Pilih File Excel</div>
+    </div>
+    <div class="dropzone" id="dropzone">
+      <div class="dz-icon">📄</div>
+      <div class="dz-text">Seret file ke sini, atau <b>klik untuk pilih file</b></div>
+      <div class="dz-hint">Format .xlsx — struktur kolom RS Harian BEI</div>
+      <input type="file" id="fileInput" accept=".xlsx,.xls">
+    </div>
+    <div id="fileChipWrap"></div>
+  </div>
+
+  <!-- STEP 2: VALIDATE & PREVIEW -->
+  <div class="step-card disabled" id="stepCard2">
+    <div class="step-head">
+      <div class="step-num" id="stepNum2">2</div>
+      <div class="step-title">Validasi &amp; Preview</div>
+    </div>
+    <div id="validationOutput"></div>
+  </div>
+
+  <!-- STEP 3: CONFIRM & SAVE -->
+  <div class="step-card disabled" id="stepCard3">
+    <div class="step-head">
+      <div class="step-num" id="stepNum3">3</div>
+      <div class="step-title">Konfirmasi &amp; Simpan ke Database</div>
+    </div>
+    <div id="overwriteWrap"></div>
+    <div style="display:flex; gap:10px; margin-top:14px;">
+      <button class="btn btn-primary" id="btnSave" disabled>Simpan ke Database</button>
+      <button class="btn btn-ghost" id="btnCancel">Batal</button>
+    </div>
+    <div class="progress-wrap" id="progressWrap">
+      <div class="progress-bar-outer"><div class="progress-bar-inner" id="progressBar"></div></div>
+      <div class="progress-label" id="progressLabel">Menyimpan 0 / 0 saham...</div>
+    </div>
+    <div id="saveResult"></div>
+  </div>
+
+  <!-- HISTORY -->
+  <div class="history-section">
+    <div class="history-title">Riwayat Upload Terakhir</div>
+    <div class="preview-table-wrap">
+      <table>
+        <thead>
+          <tr><th>Tanggal Data</th><th>Diupload Pukul</th><th>Jumlah Saham</th><th>Status</th></tr>
+        </thead>
+        <tbody id="historyBody">
+          <tr><td colspan="4" style="color:var(--text-faint); font-style:italic;">Belum terhubung ke database — riwayat akan muncul di sini setelah konfigurasi Firebase diisi.</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+</main>
+
+<script type="module">
+  // ============================================================
+  // KONFIGURASI FIREBASE — GANTI DENGAN PROJECT ANDA SENDIRI
+  // ============================================================
+  const firebaseConfig = {
+    apiKey: "AIzaSyAlTrAo6MMXjuiiFxdIW58UeaEl4ErMtiI",
+    authDomain: "radar-idx-hasira.firebaseapp.com",
+    projectId: "radar-idx-hasira",
+    storageBucket: "radar-idx-hasira.firebasestorage.app",
+    messagingSenderId: "675342054884",
+    appId: "1:675342054884:web:cd557eacc3b1da649c03f1",
+    measurementId: "G-Q45RVTZBBC"
+  };
+
+  let db = null;
+  let auth = null;
+  let firestoreFns = null;
+  let authFns = null;
+  let firebaseReady = false;
+
+  async function initFirebase(){
+    if (firebaseConfig.apiKey.startsWith("GANTI")) {
+      console.warn("Firebase belum dikonfigurasi — jalan dalam mode preview tanpa database.");
+      return;
+    }
+    try{
+      const { initializeApp } = await import("https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js");
+      const fs = await import("https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js");
+      const af = await import("https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js");
+      const app = initializeApp(firebaseConfig);
+      db = fs.getFirestore(app);
+      auth = af.getAuth(app);
+      firestoreFns = fs;
+      authFns = af;
+      document.getElementById('configNote').style.display = 'none';
+
+      af.onAuthStateChanged(auth, (user) => {
+        if(user){
+          firebaseReady = true;
+          document.getElementById('loginOverlay').style.display = 'none';
+          document.getElementById('userEmailLabel').textContent = user.email;
+          loadUploadHistory();
+        }else{
+          firebaseReady = false;
+          document.getElementById('loginOverlay').style.display = 'flex';
+        }
+      });
+    }catch(err){
+      console.error("Gagal init Firebase:", err);
+      document.getElementById('loginError').textContent = "Gagal inisialisasi Firebase: " + err.message;
+    }
+  }
+  initFirebase();
+
+  // ============================================================
+  // LOGIN
+  // ============================================================
+  document.getElementById('loginForm').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const email = document.getElementById('loginEmail').value.trim();
+    const password = document.getElementById('loginPassword').value;
+    const errEl = document.getElementById('loginError');
+    errEl.textContent = '';
+    errEl.style.display = 'none';
+    if(!authFns || !auth){ errEl.textContent = 'Firebase belum siap, coba lagi sesaat.'; errEl.style.display = 'flex'; return; }
+    try{
+      await authFns.signInWithEmailAndPassword(auth, email, password);
+    }catch(err){
+      errEl.textContent = 'Login gagal: email atau password salah.';
+      errEl.style.display = 'flex';
+      console.error(err);
+    }
+  });
+
+  document.getElementById('btnLogout').addEventListener('click', async () => {
+    if(auth) await authFns.signOut(auth);
+  });
+
+  // ============================================================
+  // KOLOM WAJIB SESUAI FILE RS HARIAN BEI (jangan diubah urutannya
+  // di sini kecuali struktur file BEI berubah — ini hasil analisa nyata)
+  // ============================================================
+  const REQUIRED_COLUMNS = [
+    "Kode Saham","Nama Perusahaan","Remarks","Sebelumnya","Open Price",
+    "Tanggal Perdagangan Terakhir","First Trade","Tertinggi","Terendah","Penutupan",
+    "Selisih","Volume","Nilai","Frekuensi","Index Individual","Offer","Offer Volume",
+    "Bid","Bid Volume","Listed Shares","Tradeble Shares","Weight For Index",
+    "Foreign Sell","Foreign Buy","Non Regular Volume","Non Regular Value","Non Regular Frequency"
+  ];
+
+  const MONTH_MAP = { Jan:"01", Feb:"02", Mar:"03", Apr:"04", Mei:"05", Jun:"06",
+    Jul:"07", Agt:"08", Sep:"09", Okt:"10", Nov:"11", Des:"12" };
+
+  function parseIndoDate(str){
+    // format contoh: "12 Agt 2026"
+    if(!str) return null;
+    const parts = String(str).trim().split(/\s+/);
+    if(parts.length !== 3) return null;
+    const [d, mon, y] = parts;
+    const mm = MONTH_MAP[mon];
+    if(!mm) return null;
+    return `${y}-${mm}-${d.padStart(2,'0')}`;
+  }
+
+  function num(v){
+    const n = typeof v === 'number' ? v : parseFloat(v);
+    return isNaN(n) ? 0 : n;
+  }
+
+  let parsedRows = [];
+  let detectedDate = null;
+  let dateAlreadyExists = false;
+  let overwriteConfirmed = false;
+
+  // ============================================================
+  // STEP 1: FILE HANDLING
+  // ============================================================
+  const dropzone = document.getElementById('dropzone');
+  const fileInput = document.getElementById('fileInput');
+
+  dropzone.addEventListener('click', () => fileInput.click());
+  dropzone.addEventListener('dragover', e => { e.preventDefault(); dropzone.classList.add('dragover'); });
+  dropzone.addEventListener('dragleave', () => dropzone.classList.remove('dragover'));
+  dropzone.addEventListener('drop', e => {
+    e.preventDefault(); dropzone.classList.remove('dragover');
+    if(e.dataTransfer.files.length) handleFile(e.dataTransfer.files[0]);
+  });
+  fileInput.addEventListener('change', e => { if(e.target.files.length) handleFile(e.target.files[0]); });
+
+  function handleFile(file){
+    document.getElementById('fileChipWrap').innerHTML = `
+      <div class="file-chip">
+        <span class="fname">${file.name}</span>
+        <span class="remove" id="removeFile">✕ Hapus</span>
+      </div>`;
+    document.getElementById('removeFile').addEventListener('click', resetAll);
+    document.getElementById('stepNum1').classList.add('done');
+
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      try{
+        const data = new Uint8Array(e.target.result);
+        const wb = XLSX.read(data, { type: 'array' });
+        const sheetName = wb.SheetNames[0];
+        const ws = wb.Sheets[sheetName];
+        const rows = XLSX.utils.sheet_to_json(ws, { defval: null });
+        validateAndPreview(rows);
+      }catch(err){
+        showValidationError("Gagal membaca file: " + err.message);
+      }
+    };
+    reader.readAsArrayBuffer(file);
+  }
+
+  function resetAll(){
+    parsedRows = []; detectedDate = null; dateAlreadyExists = false; overwriteConfirmed = false;
+    document.getElementById('fileChipWrap').innerHTML = '';
+    document.getElementById('stepNum1').classList.remove('done');
+    document.getElementById('stepNum2').classList.remove('done');
+    document.getElementById('stepCard2').classList.add('disabled');
+    document.getElementById('stepCard3').classList.add('disabled');
+    document.getElementById('validationOutput').innerHTML = '';
+    document.getElementById('overwriteWrap').innerHTML = '';
+    document.getElementById('saveResult').innerHTML = '';
+    document.getElementById('btnSave').disabled = true;
+    fileInput.value = '';
+  }
+  document.getElementById('btnCancel').addEventListener('click', resetAll);
+
+  // ============================================================
+  // STEP 2: VALIDATION & PREVIEW
+  // ============================================================
+  function validateAndPreview(rows){
+    const out = document.getElementById('validationOutput');
+    out.innerHTML = '';
+
+    if(!rows.length){
+      showValidationError("File terbaca tapi tidak ada baris data.");
+      return;
+    }
+
+    // cek kolom wajib ada semua — tidak mengarang kolom
+    const actualCols = Object.keys(rows[0]);
+    const missing = REQUIRED_COLUMNS.filter(c => !actualCols.includes(c));
+    if(missing.length){
+      showValidationError("Kolom berikut tidak ditemukan di file — cek apakah struktur file berubah:<br>" +
+        missing.map(m => `<code>${m}</code>`).join(", "));
+      return;
+    }
+
+    // parse & hitung derived fields
+    parsedRows = rows.map(r => {
+      const sebelumnya = num(r["Sebelumnya"]);
+      const volume = num(r["Volume"]);
+      const nilai = num(r["Nilai"]);
+      const foreignBuy = num(r["Foreign Buy"]);
+      const foreignSell = num(r["Foreign Sell"]);
+      const nonRegValue = num(r["Non Regular Value"]);
+      const listedShares = num(r["Listed Shares"]);
+      const penutupan = num(r["Penutupan"]);
+
+      return {
+        ticker: String(r["Kode Saham"] || "").trim(),
+        companyName: String(r["Nama Perusahaan"] || "").trim(),
+        remarks: r["Remarks"] || "",
+        prevClose: sebelumnya,
+        open: num(r["Open Price"]),
+        tradingDateRaw: r["Tanggal Perdagangan Terakhir"],
+        firstTrade: num(r["First Trade"]),
+        high: num(r["Tertinggi"]),
+        low: num(r["Terendah"]),
+        close: penutupan,
+        change: num(r["Selisih"]),
+        changePct: sebelumnya !== 0 ? (num(r["Selisih"]) / sebelumnya) * 100 : 0,
+        volume: volume,
+        value: nilai,
+        frequency: num(r["Frekuensi"]),
+        indexIndividual: num(r["Index Individual"]),
+        offer: num(r["Offer"]),
+        offerVolume: num(r["Offer Volume"]),
+        bid: num(r["Bid"]),
+        bidVolume: num(r["Bid Volume"]),
+        listedShares: listedShares,
+        tradeableShares: num(r["Tradeble Shares"]),
+        weightForIndex: num(r["Weight For Index"]),
+        foreignBuy: foreignBuy,
+        foreignSell: foreignSell,
+        foreignNet: foreignBuy - foreignSell,
+        nonRegVolume: num(r["Non Regular Volume"]),
+        nonRegValue: nonRegValue,
+        nonRegFrequency: num(r["Non Regular Frequency"]),
+        nonRegRatio: nilai !== 0 ? (nonRegValue / nilai) * 100 : 0,
+        marketCapProxy: listedShares * penutupan,
+        isActive: volume > 0,
+      };
+    }).filter(r => r.ticker); // buang baris kosong kalau ada
+
+    // deteksi tanggal (harus konsisten 1 tanggal per file)
+    const uniqueDates = [...new Set(parsedRows.map(r => parseIndoDate(r.tradingDateRaw)))].filter(Boolean);
+    const warnings = [];
+    const errors = [];
+
+    if(uniqueDates.length === 0){
+      errors.push("Tidak bisa membaca tanggal dari kolom 'Tanggal Perdagangan Terakhir'. Cek format tanggal di file.");
+    } else if(uniqueDates.length > 1){
+      warnings.push(`Ditemukan ${uniqueDates.length} tanggal berbeda dalam 1 file (${uniqueDates.join(', ')}). Biasanya file RS harian hanya berisi 1 tanggal — pastikan file ini benar.`);
+    }
+    detectedDate = uniqueDates[0] || null;
+
+    if(parsedRows.length < 800 || parsedRows.length > 1100){
+      warnings.push(`Jumlah baris (${parsedRows.length}) di luar rentang wajar (800-1100 saham). Cek apakah file lengkap.`);
+    }
+
+    const zeroVolumeCount = parsedRows.filter(r => r.volume === 0).length;
+    const zeroOpenCount = parsedRows.filter(r => r.open === 0).length;
+
+    if(errors.length){
+      showValidationError(errors.join("<br>"));
+      return;
+    }
+
+    // render summary stats
+    let html = `<div class="stat-row">
+      <div class="stat-box ok"><div class="label">Jumlah Saham</div><div class="value">${parsedRows.length}</div></div>
+      <div class="stat-box ${uniqueDates.length===1?'ok':'warn'}"><div class="label">Tanggal Terdeteksi</div><div class="value">${detectedDate || '—'}</div></div>
+      <div class="stat-box"><div class="label">Volume = 0 (Suspend?)</div><div class="value">${zeroVolumeCount}</div></div>
+      <div class="stat-box"><div class="label">Open = 0</div><div class="value">${zeroOpenCount}</div></div>
+    </div>`;
+
+    warnings.forEach(w => { html += `<div class="msg-box warning">⚠ ${w}</div>`; });
+    if(!warnings.length) html += `<div class="msg-box success">✓ Data lolos validasi dasar, siap di-preview.</div>`;
+
+    // preview table — top 10 by value
+    const preview = [...parsedRows].sort((a,b) => b.value - a.value).slice(0, 10);
+    html += `<div class="preview-table-wrap"><table><thead><tr>
+      <th>Ticker</th><th>Nama</th><th>Close</th><th>Change%</th><th>Value</th><th>Volume</th><th>Foreign Net</th>
+    </tr></thead><tbody>`;
+    preview.forEach(r => {
+      html += `<tr>
+        <td>${r.ticker}</td>
+        <td style="font-family:'Inter'; font-size:11.5px; color:var(--text-dim);">${r.companyName}</td>
+        <td>${r.close.toLocaleString('id-ID')}</td>
+        <td class="${r.changePct>=0?'pos':'neg'}">${r.changePct>=0?'+':''}${r.changePct.toFixed(2)}%</td>
+        <td>${r.value.toLocaleString('id-ID')}</td>
+        <td>${r.volume.toLocaleString('id-ID')}</td>
+        <td class="${r.foreignNet>=0?'pos':'neg'}">${r.foreignNet.toLocaleString('id-ID')}</td>
+      </tr>`;
+    });
+    html += `</tbody></table></div>
+    <div class="preview-note">Menampilkan 10 saham teratas berdasarkan Value sebagai contoh — seluruh ${parsedRows.length} saham akan disimpan.</div>`;
+
+    out.innerHTML = html;
+    document.getElementById('stepNum2').classList.add('done');
+    document.getElementById('stepCard2').classList.remove('disabled');
+    document.getElementById('stepCard3').classList.remove('disabled');
+
+    checkExistingDateAndPrepareStep3();
+  }
+
+  function showValidationError(msg){
+    document.getElementById('validationOutput').innerHTML = `<div class="msg-box error">✕ ${msg}</div>`;
+    document.getElementById('stepCard2').classList.remove('disabled');
+    document.getElementById('stepCard3').classList.add('disabled');
+  }
+
+  // ============================================================
+  // STEP 3: CHECK DUPLICATE DATE & SAVE
+  // ============================================================
+  async function checkExistingDateAndPrepareStep3(){
+    const wrap = document.getElementById('overwriteWrap');
+    const btnSave = document.getElementById('btnSave');
+
+    if(!firebaseReady){
+      wrap.innerHTML = `<div class="msg-box info">ℹ Mode preview — belum terhubung ke Firestore, tombol simpan dinonaktifkan sampai <code>firebaseConfig</code> diisi.</div>`;
+      btnSave.disabled = true;
+      return;
+    }
+
+    const { doc, getDoc } = firestoreFns;
+    const metaRef = doc(db, 'dailySummary', detectedDate);
+    const metaSnap = await getDoc(metaRef);
+    dateAlreadyExists = metaSnap.exists();
+
+    if(dateAlreadyExists){
+      wrap.innerHTML = `<div class="overwrite-box">
+        <input type="checkbox" id="confirmOverwrite">
+        <div>
+          <label for="confirmOverwrite">Tanggal <b>${detectedDate}</b> sudah ada di database (${metaSnap.data().stockCount || '?'} saham). Timpa data ini?</label>
+          <div class="sub">Data lama untuk tanggal ini akan digantikan dengan data dari file yang baru diupload.</div>
+        </div>
+      </div>`;
+      document.getElementById('confirmOverwrite').addEventListener('change', e => {
+        overwriteConfirmed = e.target.checked;
+        btnSave.disabled = !overwriteConfirmed;
+      });
+      btnSave.disabled = true;
+    }else{
+      wrap.innerHTML = `<div class="msg-box success">✓ Tanggal ${detectedDate} belum ada di database — siap disimpan sebagai data baru.</div>`;
+      btnSave.disabled = false;
+    }
+  }
+
+  document.getElementById('btnSave').addEventListener('click', saveToFirestore);
+
+  async function saveToFirestore(){
+    if(!firebaseReady || !parsedRows.length || !detectedDate) return;
+    const btnSave = document.getElementById('btnSave');
+    btnSave.disabled = true;
+    document.getElementById('progressWrap').style.display = 'block';
+
+    const { doc, writeBatch, setDoc, collection, serverTimestamp } = firestoreFns;
+    const CHUNK_SIZE = 200; // ~200 stocks x 2 writes = 400 ops per batch, aman di bawah limit 500
+    const total = parsedRows.length;
+    let done = 0;
+
+    try{
+      for(let i = 0; i < total; i += CHUNK_SIZE){
+        const chunk = parsedRows.slice(i, i + CHUNK_SIZE);
+        const batch = writeBatch(db);
+        chunk.forEach(r => {
+          const dailyRef = doc(db, 'dailySummary', detectedDate, 'stocks', r.ticker);
+          batch.set(dailyRef, r);
+          const histRef = doc(db, 'tickerHistory', r.ticker, 'days', detectedDate);
+          batch.set(histRef, r);
+        });
+        await batch.commit();
+        done += chunk.length;
+        updateProgress(done, total);
+      }
+
+      // meta doc
+      await setDoc(doc(db, 'dailySummary', detectedDate), {
+        tradingDate: detectedDate,
+        uploadedAt: serverTimestamp(),
+        stockCount: total,
+      });
+
+      // log riwayat
+      await setDoc(doc(collection(db, 'uploadHistory')), {
+        tradingDate: detectedDate,
+        uploadedAt: serverTimestamp(),
+        stockCount: total,
+        overwritten: dateAlreadyExists,
+      });
+
+      document.getElementById('saveResult').innerHTML =
+        `<div class="msg-box success">✓ Berhasil menyimpan ${total} saham untuk tanggal ${detectedDate}.</div>`;
+      loadUploadHistory();
+    }catch(err){
+      document.getElementById('saveResult').innerHTML =
+        `<div class="msg-box error">✕ Gagal menyimpan: ${err.message}</div>`;
+      btnSave.disabled = false;
+    }
+  }
+
+  function updateProgress(done, total){
+    const pct = Math.round((done/total)*100);
+    document.getElementById('progressBar').style.width = pct + '%';
+    document.getElementById('progressLabel').textContent = `Menyimpan ${done} / ${total} saham... (${pct}%)`;
+  }
+
+  // ============================================================
+  // UPLOAD HISTORY
+  // ============================================================
+  async function loadUploadHistory(){
+    if(!firebaseReady) return;
+    const { collection, query, orderBy, limit, getDocs } = firestoreFns;
+    const q = query(collection(db, 'uploadHistory'), orderBy('uploadedAt', 'desc'), limit(10));
+    const snap = await getDocs(q);
+    const tbody = document.getElementById('historyBody');
+    if(snap.empty){
+      tbody.innerHTML = `<tr><td colspan="4" style="color:var(--text-faint); font-style:italic;">Belum ada riwayat upload.</td></tr>`;
+      return;
+    }
+    let html = '';
+    snap.forEach(d => {
+      const v = d.data();
+      const uploadedAt = v.uploadedAt ? v.uploadedAt.toDate().toLocaleString('id-ID') : '—';
+      html += `<tr>
+        <td>${v.tradingDate}</td>
+        <td>${uploadedAt}</td>
+        <td>${v.stockCount}</td>
+        <td>${v.overwritten ? '<span style="color:var(--amber-flag)">Ditimpa</span>' : '<span style="color:var(--positive)">Baru</span>'}</td>
+      </tr>`;
+    });
+    tbody.innerHTML = html;
+  }
+</script>
+</body>
+</html>
