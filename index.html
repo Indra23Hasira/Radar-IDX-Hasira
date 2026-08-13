@@ -1177,6 +1177,33 @@
         };
       });
 
+      // 3b. hitung Technical Score (0-100) per ticker — formula 4 komponen sesuai desain Tahap 6
+      const macdMagList = computed.filter(r => r.macdLine!==null && r.macdSignal!==null).map(r => Math.abs(r.macdLine - r.macdSignal));
+      const volRatioList = computed.filter(r => r.volumeTrendRatio!==null).map(r => r.volumeTrendRatio);
+
+      computed.forEach(r => {
+        const parts = [];
+        if(r.trendLabel !== null){
+          const trendScore = r.trendLabel === 'Uptrend' ? 100 : r.trendLabel === 'Downtrend' ? 0 : 50;
+          parts.push({ w: 30, s: trendScore });
+        }
+        if(r.rsi14 !== null){
+          const rsiScore = Math.max(0, 100 - Math.abs(r.rsi14 - 60) * 2.2); // puncak di RSI 60, turun ke arah ekstrem
+          parts.push({ w: 25, s: rsiScore });
+        }
+        if(r.macdLine !== null && r.macdSignal !== null){
+          const bullish = r.macdLine > r.macdSignal;
+          const magnitude = Math.abs(r.macdLine - r.macdSignal);
+          const macdScore = bullish ? percentileRank(macdMagList, magnitude) : 0;
+          parts.push({ w: 25, s: macdScore });
+        }
+        if(r.volumeTrendRatio !== null){
+          parts.push({ w: 20, s: percentileRank(volRatioList, r.volumeTrendRatio) });
+        }
+        const totalW = parts.reduce((a,p)=>a+p.w, 0);
+        r.technicalScore = totalW ? Math.round(parts.reduce((a,p)=>a+p.w*p.s, 0) / totalW) : null;
+      });
+
       // 4. simpan ke tickerIndicators/{ticker}
       let saved = 0;
       const saveRes = await runWithConcurrency(computed, 15, async (r) => {
@@ -1193,6 +1220,7 @@
           trendLabel: r.trendLabel,
           volumeTrendRatio: r.volumeTrendRatio,
           atr14: r.atr14,
+          technicalScore: r.technicalScore,
           updatedAt: new Date().toISOString(),
         });
         saved++;
@@ -1200,6 +1228,34 @@
       });
       if(saveRes.errorCount > 0){
         warnings.push(`⚠ ${saveRes.errorCount} saham gagal disimpan indikatornya. Contoh error: ${saveRes.firstError ? saveRes.firstError.message : '-'}`);
+      }
+
+      // 4b. gabungkan Technical Score ke Total Score di tickerRollingStats
+      //     (Liquidity 25% + Foreign 30% + Technical 20%, redistribusi otomatis
+      //     kalau ada pilar yang belum tersedia — Fundamental sudah ditiadakan permanen)
+      let merged = 0;
+      const { getDoc } = firestoreFns;
+      const mergeRes = await runWithConcurrency(computed, 15, async (r) => {
+        const rsRef = doc(db, 'tickerRollingStats', r.ticker);
+        const rsSnap = await getDoc(rsRef);
+        if(!rsSnap.exists()) return; // belum ada data Tahap 4 untuk ticker ini, lewati
+        const rs = rsSnap.data();
+        const pillars = [
+          { w: 25, s: rs.liquidityScore ?? null },
+          { w: 30, s: rs.foreignScore ?? null },
+          { w: 20, s: r.technicalScore ?? null },
+        ].filter(p => p.s !== null);
+        const totalW = pillars.reduce((a,p)=>a+p.w, 0);
+        const totalScore = totalW ? Math.round(pillars.reduce((a,p)=>a+p.w*p.s, 0) / totalW) : null;
+        await setDoc(rsRef, {
+          technicalScore: r.technicalScore,
+          totalScore,
+        }, { merge: true });
+        merged++;
+        updateProgress5(merged, computed.length, 'Menggabungkan skor');
+      });
+      if(mergeRes.errorCount > 0){
+        warnings.push(`⚠ ${mergeRes.errorCount} saham gagal digabung skornya ke tickerRollingStats. Contoh error: ${mergeRes.firstError ? mergeRes.firstError.message : '-'}`);
       }
 
       // 5. simpan meta status
@@ -1213,27 +1269,29 @@
       const withEMA50 = computed.filter(r => r.ema50 !== null).length;
       const withMACD = computed.filter(r => r.macdSignal !== null).length;
       const withRSI = computed.filter(r => r.rsi14 !== null).length;
+      const withTechScore = computed.filter(r => r.technicalScore !== null).length;
 
       let html = warnings.map(w => `<div class="msg-box warning">${w}</div>`).join('');
       html += `<div class="stat-row">
         <div class="stat-box ok"><div class="label">Kandidat Diproses</div><div class="value">${candidates.length}</div></div>
         <div class="stat-box ok"><div class="label">RSI14 Siap</div><div class="value">${withRSI}/${computed.length}</div></div>
         <div class="stat-box ok"><div class="label">EMA50 Siap</div><div class="value">${withEMA50}/${computed.length}</div></div>
-        <div class="stat-box ok"><div class="label">MACD Siap</div><div class="value">${withMACD}/${computed.length}</div></div>
-      </div>`;
+        <div class="stat-box ok"><div class="label">Technical Score Siap</div><div class="value">${withTechScore}/${computed.length}</div></div>
+      </div>
+      <div class="msg-box success">✓ Technical Score sudah digabung ke Total Score di <code>tickerRollingStats</code> (Liquidity 25% + Foreign 30% + Technical 20%, bobot redistribusi otomatis kalau ada pilar kosong).</div>`;
 
       if(computed.length){
         html += `<div class="preview-table-wrap"><table><thead><tr>
-          <th>Ticker</th><th>RSI14</th><th>Trend</th><th>EMA20</th><th>EMA50</th><th>Hari Data Yahoo</th><th>Cek</th>
+          <th>Ticker</th><th>RSI14</th><th>Trend</th><th>Tech Score</th><th>EMA20</th><th>EMA50</th><th>Cek</th>
         </tr></thead><tbody>`;
-        computed.sort((a,b) => (b.rsi14||0) - (a.rsi14||0)).forEach(r => {
+        computed.sort((a,b) => (b.technicalScore||0) - (a.technicalScore||0)).forEach(r => {
           html += `<tr>
             <td>${r.ticker}</td>
             <td>${r.rsi14!==null ? r.rsi14.toFixed(1) : '-'}</td>
             <td>${r.trendLabel ?? '-'}</td>
+            <td class="pos">${r.technicalScore ?? '-'}</td>
             <td>${r.ema20!==null ? r.ema20.toLocaleString('id-ID',{maximumFractionDigits:0}) : '-'}</td>
             <td>${r.ema50!==null ? r.ema50.toLocaleString('id-ID',{maximumFractionDigits:0}) : '-'}</td>
-            <td>${r.daysAccumulated}</td>
             <td><a href="https://stockbit.com/symbol/${r.ticker}" target="_blank" rel="noopener" style="color:var(--gold); text-decoration:none; font-size:11.5px;">Stockbit ↗</a></td>
           </tr>`;
         });
