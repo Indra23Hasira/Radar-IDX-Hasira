@@ -714,6 +714,16 @@
     document.getElementById('progressLabel4').textContent = `${label || 'Memproses'} ${done} / ${total} saham... (${pct}%)`;
   }
 
+  function fmtValue(v){
+    if(v==null) return '-';
+    const sign = v < 0 ? '-' : '';
+    const abs = Math.abs(v);
+    if(abs >= 1e12) return sign + 'Rp ' + (abs/1e12).toFixed(1) + ' T';
+    if(abs >= 1e9) return sign + 'Rp ' + (abs/1e9).toFixed(1) + ' M';
+    if(abs >= 1e6) return sign + 'Rp ' + (abs/1e6).toFixed(1) + ' Jt';
+    return sign + 'Rp ' + abs.toLocaleString('id-ID');
+  }
+
   function percentileRank(arr, value){
     if(!arr.length || arr.length <= 1) return 50; // netral kalau peer terlalu sedikit
     const countLE = arr.filter(v => v <= value).length;
@@ -878,11 +888,12 @@
     const rankableForeign = raw.filter(r => r.foreignNet3d !== null);
     const foreignValueList = rankableForeign.map(r => r.foreignNet3d * (r.row.close||0));
     raw.forEach(r => {
-      if(r.foreignNet3d === null){ r.bigAccum = null; return; }
+      if(r.foreignNet3d === null){ r.bigAccum = null; r.foreignNetValue3d = null; return; }
       const val = r.foreignNet3d * (r.row.close||0);
       const pct = percentileRank(foreignValueList, val);
       r.bigAccum = pct >= 80; // top ~20%
       r.bigAccumPercentile = pct;
+      r.foreignNetValue3d = val; // estimasi nilai Rupiah net beli asing 3 hari (net lembar x harga close terbaru)
     });
 
     // 7. Liquidity & Foreign Score (percentile rank antar kandidat)
@@ -938,6 +949,7 @@
         spreadPct: r.spreadPct,
         liquidityScore: r.liquidityScore,
         foreignNet3d: r.foreignNet3d,
+        foreignNetValue3d: r.foreignNetValue3d,
         foreignRatio3d: r.foreignRatio3d,
         consecutiveNetBuy: r.consecutiveNetBuy,
         foreignScore: r.foreignScore,
@@ -972,7 +984,7 @@
 
     if(matched3plus.length){
       html += `<div class="preview-table-wrap"><table><thead><tr>
-        <th>Ticker</th><th>Match</th><th>Kategori</th><th>Score Sementara</th><th>Warning</th><th>Cek</th>
+        <th>Ticker</th><th>Match</th><th>Kategori</th><th>Score Sementara</th><th>Foreign Net Value (3D)</th><th>Warning</th><th>Cek</th>
       </tr></thead><tbody>`;
       matched3plus.forEach(r => {
         const tags = [];
@@ -985,6 +997,7 @@
           <td>${r.matchCount}/4</td>
           <td style="font-family:'Inter'; font-size:11.5px; color:var(--cyan);">${tags.join(', ')}</td>
           <td class="pos">${r.totalScorePartial ?? '-'}</td>
+          <td class="${r.foreignNetValue3d>=0?'pos':'neg'}">${fmtValue(r.foreignNetValue3d)}</td>
           <td>${r.distributionWarning ? '<span style="color:var(--amber-flag); font-size:11px;">⚠ Distribusi</span>' : ''}</td>
           <td><a href="https://stockbit.com/symbol/${r.ticker}" target="_blank" rel="noopener" style="color:var(--gold); text-decoration:none; font-size:11.5px;">Stockbit ↗</a></td>
         </tr>`;
