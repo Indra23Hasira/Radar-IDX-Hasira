@@ -708,7 +708,7 @@
 
   async function computeRollingStats(){
     if(!firebaseReady) return;
-    const { collection, query, orderBy, limit, getDocs, doc, setDoc, documentId } = firestoreFns;
+    const { collection, query, orderBy, limit, getDocs, doc, setDoc } = firestoreFns;
     const out = document.getElementById('rollingResult');
     out.innerHTML = '';
     document.getElementById('progressWrap4').style.display = 'block';
@@ -739,7 +739,7 @@
         await runWithConcurrency(candidates, 15, async (row) => {
           const q = query(
             collection(db, 'tickerHistory', row.ticker, 'days'),
-            orderBy(documentId(), 'desc'),
+            orderBy('date', 'desc'),
             limit(20)
           );
           const snap = await getDocs(q);
