@@ -810,11 +810,11 @@
       const covValue = meanV !== 0 ? stddevV / meanV : 0;
       const spreadPct = row.bid > 0 ? ((row.offer - row.bid) / row.bid) * 100 : null;
 
-      // --- window 3 hari (foreign + banda), null kalau kurang dari 3 hari ---
+      // --- window 3 hari (foreign + bandar + distribusi), null kalau kurang dari 3 hari ---
       const w3 = days.slice(0, 3); // [terbaru, kemarin, 2 hari lalu]
       const has3 = w3.length === 3;
       let foreignNet3d = null, foreignRatio3d = null, consecutiveNetBuy = null, accel = null;
-      let volumeBreakout = null, foreignUptrend = null, bandaAccum = null;
+      let volumeBreakout = null, foreignUptrend = null, bandarAccum = null, distributionWarning = null;
 
       if(has3){
         const nets = w3.map(d => (d.foreignBuy||0) - (d.foreignSell||0)); // [terbaru..lama]
@@ -837,18 +837,22 @@
         const ratioNewest = vols[0] !== 0 ? (nets[0]/vols[0])*100 : 0;
         foreignUptrend = monotonicUp && foreignNet3d > 0 && ratioNewest > ratioOldest;
 
-        // Banda Accumulation: sideways + volume naik + bid dominan + closing kuat
+        // Bandar Accumulation: sideways + volume naik + bid dominan + closing kuat
         const highs = w3.map(d => d.high || 0);
         const lows = w3.map(d => d.low || 0);
         const rangePct = row.close !== 0 ? ((Math.max(...highs) - Math.min(...lows)) / row.close) * 100 : 999;
         const volIncreasing = vols[0] > ((vols[1] + vols[2]) / 2);
         const bidDominantDays = w3.filter(d => (d.bidVolume||0) > (d.offerVolume||0)).length;
+        const offerDominantDays = w3.filter(d => (d.offerVolume||0) > (d.bidVolume||0)).length;
         const closingStrengths = w3.map(d => {
           const range = (d.high||0) - (d.low||0);
           return range > 0 ? ((d.close||0) - (d.low||0)) / range : 0.5;
         });
         const avgClosingStrength = closingStrengths.reduce((a,b)=>a+b,0) / closingStrengths.length;
-        bandaAccum = rangePct <= 8 && volIncreasing && bidDominantDays >= 2 && avgClosingStrength >= 0.6;
+        bandarAccum = rangePct <= 8 && volIncreasing && bidDominantDays >= 2 && avgClosingStrength >= 0.6;
+
+        // Distribution Warning: kebalikan dari Bandar Accum — offer dominan, closing lemah, volume tetap ramai
+        distributionWarning = offerDominantDays >= 2 && avgClosingStrength <= 0.4 && volIncreasing;
       }
 
       // --- Volume Breakout (butuh histori selain hari ini) ---
@@ -865,7 +869,7 @@
         ticker: row.ticker, companyName: row.companyName, daysAvailable,
         avgValue20d, avgFreq20d, spreadPct, covValue,
         foreignNet3d, foreignRatio3d, consecutiveNetBuy, accel,
-        volumeBreakout, foreignUptrend, bandaAccum,
+        volumeBreakout, foreignUptrend, bandarAccum, distributionWarning,
         row,
       };
     });
@@ -912,12 +916,12 @@
       const totalW = pillars.reduce((a,p)=>a+p.w,0);
       r.totalScorePartial = totalW ? Math.round(pillars.reduce((a,p)=>a+p.w*p.s,0)/totalW) : null;
 
-      // match count kategori
-      const cats = [r.volumeBreakout, r.foreignUptrend, r.bigAccum, r.bandaAccum];
+      // match count kategori (distributionWarning TIDAK dihitung — itu warning, bukan sinyal masuk)
+      const cats = [r.volumeBreakout, r.foreignUptrend, r.bigAccum, r.bandarAccum];
       r.matchCount = cats.filter(c => c === true).length;
       r.categoryFlags = {
         volumeBreakout: r.volumeBreakout, foreignUptrend: r.foreignUptrend,
-        bigAccum: r.bigAccum, bandaAccum: r.bandaAccum,
+        bigAccum: r.bigAccum, bandarAccum: r.bandarAccum,
       };
     });
 
@@ -940,6 +944,7 @@
         totalScorePartial: r.totalScorePartial,
         categories: r.categoryFlags,
         matchCount: r.matchCount,
+        distributionWarning: r.distributionWarning,
         updatedAt: new Date().toISOString(),
       });
       saved++;
@@ -962,24 +967,25 @@
     </div>`;
 
     if(withHistory3 < candidates.length){
-      html += `<div class="msg-box warning">⚠ ${candidates.length - withHistory3} saham belum punya histori 3 hari — kategori Foreign Uptrend/Big Accum/Banda Accum untuk saham itu belum bisa dievaluasi (butuh upload beberapa hari lagi, termasuk backfill kalau ada).</div>`;
+      html += `<div class="msg-box warning">⚠ ${candidates.length - withHistory3} saham belum punya histori 3 hari — kategori Foreign Uptrend/Big Accum/Bandar Accum untuk saham itu belum bisa dievaluasi (butuh upload beberapa hari lagi, termasuk backfill kalau ada).</div>`;
     }
 
     if(matched3plus.length){
       html += `<div class="preview-table-wrap"><table><thead><tr>
-        <th>Ticker</th><th>Match</th><th>Kategori</th><th>Score Sementara</th><th>Cek</th>
+        <th>Ticker</th><th>Match</th><th>Kategori</th><th>Score Sementara</th><th>Warning</th><th>Cek</th>
       </tr></thead><tbody>`;
       matched3plus.forEach(r => {
         const tags = [];
         if(r.volumeBreakout) tags.push('Volume Breakout');
         if(r.foreignUptrend) tags.push('Foreign Uptrend');
         if(r.bigAccum) tags.push('Big Accum');
-        if(r.bandaAccum) tags.push('Banda Accum');
+        if(r.bandarAccum) tags.push('Bandar Accum');
         html += `<tr>
           <td>${r.ticker}</td>
           <td>${r.matchCount}/4</td>
           <td style="font-family:'Inter'; font-size:11.5px; color:var(--cyan);">${tags.join(', ')}</td>
           <td class="pos">${r.totalScorePartial ?? '-'}</td>
+          <td>${r.distributionWarning ? '<span style="color:var(--amber-flag); font-size:11px;">⚠ Distribusi</span>' : ''}</td>
           <td><a href="https://stockbit.com/symbol/${r.ticker}" target="_blank" rel="noopener" style="color:var(--gold); text-decoration:none; font-size:11.5px;">Stockbit ↗</a></td>
         </tr>`;
       });
