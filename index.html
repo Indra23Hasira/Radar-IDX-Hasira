@@ -131,6 +131,27 @@
   code{ background:#0A0E14; padding:1px 5px; border-radius:2px; color:var(--gold); font-family:'IBM Plex Mono'; font-size:0.92em; }
 
   .history-section{ margin-top:36px; }
+
+  .form-table-wrap{ overflow-x:auto; border:1px solid var(--border); border-radius:6px; }
+  .form-table{ width:100%; border-collapse:collapse; }
+  .form-table thead th{
+    text-align:left; font-size:10px; text-transform:uppercase; letter-spacing:0.4px; color:var(--text-faint);
+    padding:9px 8px; border-bottom:1px solid var(--border); background:var(--panel-alt); white-space:nowrap;
+  }
+  .form-table tbody td{ padding:6px 8px; border-bottom:1px solid var(--border-soft); vertical-align:middle; }
+  .form-table tbody tr:last-child td{ border-bottom:none; }
+  .form-table .ticker-label{ font-family:'IBM Plex Mono'; font-weight:600; white-space:nowrap; }
+  .form-table .co-name-small{ display:block; font-size:10px; color:var(--text-faint); font-weight:400; max-width:140px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .form-table input{
+    width:88px; background:var(--panel-alt); border:1px solid var(--border); color:var(--text);
+    padding:6px 8px; border-radius:var(--radius); font-family:'IBM Plex Mono'; font-size:12px;
+  }
+  .form-table input.sector-input{ width:120px; font-family:'Inter'; }
+  .form-table input:focus{ outline:none; border-color:var(--gold-dim); }
+  .freshness-badge{ font-size:9.5px; padding:2px 6px; border-radius:8px; white-space:nowrap; }
+  .freshness-badge.fresh{ background:rgba(62,207,142,0.12); color:var(--positive); }
+  .freshness-badge.stale{ background:rgba(232,163,61,0.12); color:var(--amber-flag); }
+  .freshness-badge.empty{ background:rgba(92,101,119,0.12); color:var(--text-faint); }
   .history-title{ font-size:11px; text-transform:uppercase; letter-spacing:1.2px; color:var(--text-dim); margin-bottom:12px; }
 </style>
 </head>
@@ -258,31 +279,6 @@
       <div class="progress-label" id="progressLabel5">Memproses 0 / 0 saham...</div>
     </div>
     <div id="indicatorResult"></div>
-  </div>
-
-  <!-- STEP 6: FUNDAMENTAL DATA -->
-  <div class="step-card" id="stepCard6">
-    <div class="step-head">
-      <div class="step-num" id="stepNum6">6</div>
-      <div class="step-title">Update Fundamental — dari Yahoo Finance</div>
-    </div>
-    <div class="msg-box info">ℹ Ambil PER, PBV, ROE, DER, growth, dividend yield, sektor — hanya untuk emiten yang sudah match kategori (sama seperti Step 5). Data di-<b>cache 7 hari</b> (fundamental jarang berubah harian) — kalau sudah pernah ditarik dan belum 7 hari, otomatis dilewati kecuali Anda centang paksa update.</div>
-    <div class="field-row" style="max-width:500px; margin-top:12px; align-items:flex-end;">
-      <div class="field" style="max-width:260px;">
-        <label>Ambil untuk saham dengan match kategori minimal</label>
-        <input type="number" id="minMatchThresholdFundamental" value="2" min="1" max="4" step="1">
-      </div>
-    </div>
-    <div class="toggle-row" style="max-width:400px; border-bottom:none; padding-top:10px;">
-      <div><div class="t-label">Paksa update semua (abaikan cache 7 hari)</div><div class="t-hint">Normalnya biarkan mati — hemat panggilan ke Yahoo</div></div>
-      <div class="switch" id="forceUpdateFundamentalToggle"></div>
-    </div>
-    <button class="btn btn-ghost" id="btnUpdateFundamental" style="margin-top:8px;">🔄 Update Fundamental Sekarang</button>
-    <div class="progress-wrap" id="progressWrap6">
-      <div class="progress-bar-outer"><div class="progress-bar-inner" id="progressBar6"></div></div>
-      <div class="progress-label" id="progressLabel6">Memproses 0 / 0 saham...</div>
-    </div>
-    <div id="fundamentalResult"></div>
   </div>
 
   <!-- HISTORY -->
@@ -971,7 +967,7 @@
 
     if(matched3plus.length){
       html += `<div class="preview-table-wrap"><table><thead><tr>
-        <th>Ticker</th><th>Match</th><th>Kategori</th><th>Score Sementara</th>
+        <th>Ticker</th><th>Match</th><th>Kategori</th><th>Score Sementara</th><th>Cek</th>
       </tr></thead><tbody>`;
       matched3plus.forEach(r => {
         const tags = [];
@@ -984,6 +980,7 @@
           <td>${r.matchCount}/4</td>
           <td style="font-family:'Inter'; font-size:11.5px; color:var(--cyan);">${tags.join(', ')}</td>
           <td class="pos">${r.totalScorePartial ?? '-'}</td>
+          <td><a href="https://stockbit.com/symbol/${r.ticker}" target="_blank" rel="noopener" style="color:var(--gold); text-decoration:none; font-size:11.5px;">Stockbit ↗</a></td>
         </tr>`;
       });
       html += `</tbody></table></div>`;
@@ -1227,7 +1224,7 @@
 
       if(computed.length){
         html += `<div class="preview-table-wrap"><table><thead><tr>
-          <th>Ticker</th><th>RSI14</th><th>Trend</th><th>EMA20</th><th>EMA50</th><th>Hari Data Yahoo</th>
+          <th>Ticker</th><th>RSI14</th><th>Trend</th><th>EMA20</th><th>EMA50</th><th>Hari Data Yahoo</th><th>Cek</th>
         </tr></thead><tbody>`;
         computed.sort((a,b) => (b.rsi14||0) - (a.rsi14||0)).forEach(r => {
           html += `<tr>
@@ -1237,6 +1234,7 @@
             <td>${r.ema20!==null ? r.ema20.toLocaleString('id-ID',{maximumFractionDigits:0}) : '-'}</td>
             <td>${r.ema50!==null ? r.ema50.toLocaleString('id-ID',{maximumFractionDigits:0}) : '-'}</td>
             <td>${r.daysAccumulated}</td>
+            <td><a href="https://stockbit.com/symbol/${r.ticker}" target="_blank" rel="noopener" style="color:var(--gold); text-decoration:none; font-size:11.5px;">Stockbit ↗</a></td>
           </tr>`;
         });
         html += `</tbody></table></div>`;
@@ -1249,213 +1247,6 @@
       out.innerHTML = `<div class="msg-box error">✕ Proses gagal: ${err.message}<br><span style="font-size:10.5px; opacity:0.8;">Cek Console browser (F12) untuk detail teknis lengkap.</span></div>`;
     }finally{
       document.getElementById('btnUpdateIndicators').disabled = false;
-    }
-  }
-
-  // ============================================================
-  // TAHAP 7: FUNDAMENTAL DATA (Yahoo Finance) — cache 7 hari
-  // ============================================================
-
-  const forceToggleEl = document.getElementById('forceUpdateFundamentalToggle');
-  let forceUpdateFundamental = false;
-  forceToggleEl.addEventListener('click', () => {
-    forceUpdateFundamental = !forceUpdateFundamental;
-    forceToggleEl.classList.toggle('on', forceUpdateFundamental);
-  });
-
-  function updateProgress6(done, total, label){
-    const pct = total ? Math.round((done/total)*100) : 0;
-    document.getElementById('progressBar6').style.width = pct + '%';
-    document.getElementById('progressLabel6').textContent = `${label || 'Memproses'} ${done} / ${total} saham... (${pct}%)`;
-  }
-
-  function rawVal(field){
-    // field Yahoo biasanya berbentuk {raw, fmt} — ambil raw, null kalau tidak ada
-    return (field && typeof field.raw === 'number') ? field.raw : null;
-  }
-
-  async function fetchYahooFundamental(ticker){
-    const symbol = ticker + '.JK';
-    const modules = 'defaultKeyStatistics,financialData,summaryDetail,assetProfile';
-    const yahooUrl = `https://query1.finance.yahoo.com/v10/finance/quoteSummary/${symbol}?modules=${modules}`;
-    const proxies = [
-      `https://api.allorigins.win/raw?url=${encodeURIComponent(yahooUrl)}`,
-      `https://corsproxy.io/?${encodeURIComponent(yahooUrl)}`,
-    ];
-    let lastErr = null;
-    for(const proxyUrl of proxies){
-      try{
-        const res = await fetch(proxyUrl);
-        if(!res.ok) throw new Error('HTTP ' + res.status);
-        const json = await res.json();
-        const err = json?.quoteSummary?.error;
-        if(err) throw new Error(err.description || 'Yahoo Finance error');
-        const result = json?.quoteSummary?.result?.[0];
-        if(!result) throw new Error('Data fundamental kosong dari Yahoo');
-
-        const dks = result.defaultKeyStatistics || {};
-        const fd = result.financialData || {};
-        const sd = result.summaryDetail || {};
-        const ap = result.assetProfile || {};
-
-        return {
-          dataAvailable: true,
-          sector: ap.sector || null,
-          industry: ap.industry || null,
-          per: rawVal(sd.trailingPE) ?? rawVal(dks.trailingEps ? null : dks.forwardPE) ?? rawVal(dks.forwardPE),
-          pbv: rawVal(dks.priceToBook),
-          roe: rawVal(fd.returnOnEquity),
-          der: rawVal(fd.debtToEquity), // dalam persen (mis. 45.3 = 45.3%)
-          revenueGrowthYoY: rawVal(fd.revenueGrowth),
-          dividendYield: rawVal(sd.dividendYield),
-          marketCap: rawVal(sd.marketCap),
-        };
-      }catch(e){
-        lastErr = e;
-        continue;
-      }
-    }
-    throw lastErr || new Error('Semua proxy gagal diakses');
-  }
-
-  document.getElementById('btnUpdateFundamental').addEventListener('click', updateFundamentalData);
-
-  async function updateFundamentalData(){
-    if(!firebaseReady) return;
-    const { collection, query, where, getDocs, getDoc, doc, setDoc } = firestoreFns;
-    const out = document.getElementById('fundamentalResult');
-    out.innerHTML = '';
-    document.getElementById('progressWrap6').style.display = 'block';
-    document.getElementById('btnUpdateFundamental').disabled = true;
-
-    try{
-      const threshold = parseInt(document.getElementById('minMatchThresholdFundamental').value, 10) || 2;
-
-      // 1. ambil emiten kandidat (sama seperti Step 5)
-      const q = query(collection(db, 'tickerRollingStats'), where('matchCount', '>=', threshold));
-      const snap = await getDocs(q);
-      const candidates = snap.docs.map(d => d.data());
-
-      if(!candidates.length){
-        out.innerHTML = `<div class="msg-box warning">⚠ Tidak ada saham dengan match kategori ≥ ${threshold}.</div>`;
-        return;
-      }
-      updateProgress6(0, candidates.length, 'Cek cache');
-
-      // 2. cek cache 7 hari per ticker, pisahkan mana yang perlu fetch baru
-      const SEVEN_DAYS_MS = 7 * 24 * 60 * 60 * 1000;
-      const now = Date.now();
-      let checked = 0;
-      const needFetch = [];
-      const skippedCached = [];
-      for(const row of candidates){
-        const existingSnap = await getDoc(doc(db, 'tickerFundamental', row.ticker));
-        checked++;
-        updateProgress6(checked, candidates.length, 'Cek cache');
-        if(existingSnap.exists() && !forceUpdateFundamental){
-          const data = existingSnap.data();
-          const lastUpdated = data.lastUpdated ? new Date(data.lastUpdated).getTime() : 0;
-          if(now - lastUpdated < SEVEN_DAYS_MS){
-            skippedCached.push(row.ticker);
-            continue;
-          }
-        }
-        needFetch.push(row);
-      }
-
-      const warnings = [];
-      if(!needFetch.length){
-        out.innerHTML = `<div class="msg-box success">✓ Semua ${candidates.length} saham sudah punya data fundamental fresh (< 7 hari) — tidak ada yang perlu ditarik ulang. Centang "Paksa update" kalau tetap mau refresh.</div>`;
-        return;
-      }
-
-      // 3. fetch fundamental untuk yang perlu (konkurensi kecil, API eksternal)
-      let fetched = 0;
-      const { results, errorCount, firstError } = await runWithConcurrency(needFetch, 5, async (row) => {
-        try{
-          const fund = await fetchYahooFundamental(row.ticker);
-          fetched++;
-          updateProgress6(fetched, needFetch.length, 'Menarik data Yahoo Finance');
-          return { ticker: row.ticker, companyName: row.companyName, ...fund };
-        }catch(e){
-          fetched++;
-          updateProgress6(fetched, needFetch.length, 'Menarik data Yahoo Finance');
-          return { ticker: row.ticker, companyName: row.companyName, dataAvailable: false, fetchError: e.message };
-        }
-      });
-      if(errorCount > 0){
-        warnings.push(`⚠ ${errorCount} saham gagal total diproses (bukan cuma data kosong). Contoh error: ${firstError ? firstError.message : '-'}`);
-      }
-
-      // 4. simpan ke tickerFundamental/{ticker}
-      let saved = 0;
-      const saveRes = await runWithConcurrency(results.filter(Boolean), 15, async (r) => {
-        await setDoc(doc(db, 'tickerFundamental', r.ticker), {
-          ticker: r.ticker,
-          companyName: r.companyName,
-          sector: r.sector ?? null,
-          industry: r.industry ?? null,
-          per: r.per ?? null,
-          pbv: r.pbv ?? null,
-          roe: r.roe ?? null,
-          der: r.der ?? null,
-          revenueGrowthYoY: r.revenueGrowthYoY ?? null,
-          dividendYield: r.dividendYield ?? null,
-          marketCap: r.marketCap ?? null,
-          dataAvailable: !!r.dataAvailable,
-          fetchError: r.fetchError ?? null,
-          lastUpdated: new Date().toISOString(),
-        });
-        saved++;
-        updateProgress6(saved, results.length, 'Menyimpan hasil');
-      });
-      if(saveRes.errorCount > 0){
-        warnings.push(`⚠ ${saveRes.errorCount} saham gagal disimpan. Contoh error: ${saveRes.firstError ? saveRes.firstError.message : '-'}`);
-      }
-
-      // 5. ringkasan UI
-      const successCount = results.filter(r => r && r.dataAvailable).length;
-      const noDataCount = results.filter(r => r && !r.dataAvailable).length;
-
-      let html = warnings.map(w => `<div class="msg-box warning">${w}</div>`).join('');
-      html += `<div class="stat-row">
-        <div class="stat-box"><div class="label">Total Kandidat</div><div class="value">${candidates.length}</div></div>
-        <div class="stat-box ok"><div class="label">Dari Cache (skip)</div><div class="value">${skippedCached.length}</div></div>
-        <div class="stat-box ok"><div class="label">Berhasil Ditarik</div><div class="value">${successCount}</div></div>
-        <div class="stat-box ${noDataCount>0?'warn':'ok'}"><div class="label">Data Tidak Tersedia</div><div class="value">${noDataCount}</div></div>
-      </div>`;
-
-      const withData = results.filter(r => r && r.dataAvailable);
-      if(withData.length){
-        html += `<div class="preview-table-wrap"><table><thead><tr>
-          <th>Ticker</th><th>Sektor</th><th>PER</th><th>PBV</th><th>ROE</th><th>DER</th><th>Div Yield</th>
-        </tr></thead><tbody>`;
-        withData.forEach(r => {
-          html += `<tr>
-            <td>${r.ticker}</td>
-            <td style="font-family:'Inter'; font-size:11px; color:var(--cyan);">${r.sector ?? '-'}</td>
-            <td>${r.per!==null ? r.per.toFixed(1)+'x' : '-'}</td>
-            <td>${r.pbv!==null ? r.pbv.toFixed(1)+'x' : '-'}</td>
-            <td>${r.roe!==null ? (r.roe*100).toFixed(1)+'%' : '-'}</td>
-            <td>${r.der!==null ? r.der.toFixed(0)+'%' : '-'}</td>
-            <td>${r.dividendYield!==null ? (r.dividendYield*100).toFixed(1)+'%' : '-'}</td>
-          </tr>`;
-        });
-        html += `</tbody></table></div>`;
-      }
-
-      if(noDataCount > 0){
-        const noDataTickers = results.filter(r => r && !r.dataAvailable).map(r => r.ticker).join(', ');
-        html += `<div class="msg-box info">ℹ Tidak ada data fundamental untuk: ${noDataTickers} — biasanya emiten baru IPO, atau kode tidak standar (bukan error sistem).</div>`;
-      }
-
-      document.getElementById('stepNum6').classList.add('done');
-      out.innerHTML = html;
-    }catch(err){
-      console.error('updateFundamentalData gagal:', err);
-      out.innerHTML = `<div class="msg-box error">✕ Proses gagal: ${err.message}<br><span style="font-size:10.5px; opacity:0.8;">Cek Console browser (F12) untuk detail teknis lengkap.</span></div>`;
-    }finally{
-      document.getElementById('btnUpdateFundamental').disabled = false;
     }
   }
 
