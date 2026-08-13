@@ -1,0 +1,604 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Stock Radar — Dashboard</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Big+Shoulders+Display:wght@600;700;800&family=Inter:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --bg:#0A0E14; --panel:#11161F; --panel-alt:#151B26; --border:#232B3A; --border-soft:#1B2230;
+    --text:#E6E9EF; --text-dim:#8992A6; --text-faint:#5C6577;
+    --gold:#D4A857; --gold-dim:#8B7239; --cyan:#4FD1C5;
+    --positive:#3ECF8E; --negative:#F2545B; --amber-flag:#E8A33D; --radius:3px;
+  }
+  *{box-sizing:border-box; margin:0; padding:0;}
+  body{ background:var(--bg); color:var(--text); font-family:'Inter', sans-serif; font-size:14px; line-height:1.5; }
+  .mono{ font-family:'IBM Plex Mono', monospace; }
+
+  /* ===== HEADER ===== */
+  header{
+    position:relative; display:flex; align-items:center; justify-content:space-between;
+    padding:18px 28px; border-bottom:1px solid var(--border);
+    background:linear-gradient(180deg, #0D1219 0%, #0A0E14 100%); overflow:hidden;
+  }
+  .brand{ display:flex; align-items:center; gap:14px; position:relative; z-index:2; }
+  .radar-icon{ width:34px; height:34px; position:relative; flex-shrink:0; border-radius:50%;
+    border:1px solid var(--gold-dim); background:radial-gradient(circle at center, rgba(212,168,87,0.08) 0%, transparent 70%); }
+  .radar-icon::before, .radar-icon::after{ content:''; position:absolute; border-radius:50%; border:1px solid var(--border-soft); }
+  .radar-icon::before{ inset:7px; } .radar-icon::after{ inset:14px; border-color: rgba(212,168,87,0.25); }
+  .radar-sweep{ position:absolute; inset:0; border-radius:50%; overflow:hidden; animation: sweep 4s linear infinite; }
+  .radar-sweep::before{ content:''; position:absolute; top:0; left:50%; width:50%; height:50%;
+    background:conic-gradient(from 0deg, rgba(212,168,87,0.55), transparent 70deg); transform-origin:0% 100%; }
+  @keyframes sweep{ from{transform:rotate(0deg);} to{transform:rotate(360deg);} }
+  .brand-text .title{ font-family:'Big Shoulders Display', sans-serif; font-weight:700; font-size:22px; letter-spacing:0.5px; line-height:1; }
+  .brand-text .sub{ font-size:11px; color:var(--text-dim); letter-spacing:1.5px; text-transform:uppercase; margin-top:3px; }
+  .header-nav{ display:flex; align-items:center; }
+  .header-nav a{ color:var(--text-dim); text-decoration:none; font-size:12.5px; margin-left:22px; }
+  .header-nav a.active{ color:var(--gold); }
+  .user-email{ color:var(--text-faint); font-size:12px; margin-left:26px; font-family:'IBM Plex Mono'; }
+
+  .login-overlay{ position:fixed; inset:0; background:rgba(10,14,20,0.96); z-index:100; display:flex; align-items:center; justify-content:center; }
+  .login-box{ background:var(--panel); border:1px solid var(--border); border-radius:8px; padding:32px 30px; width:340px; }
+  .login-box .field{ margin-bottom:14px; }
+  .login-box .field label{ display:block; font-size:12px; color:var(--text-dim); margin-bottom:6px; }
+  .login-box input{ width:100%; background:var(--panel-alt); border:1px solid var(--border); color:var(--text);
+    padding:10px 12px; border-radius:var(--radius); font-family:'Inter'; font-size:13px; }
+  .login-box input:focus{ outline:none; border-color:var(--gold-dim); }
+
+  /* ===== FRESHNESS BAR ===== */
+  .freshness-bar{
+    display:flex; align-items:center; gap:22px; padding:10px 28px; background:var(--panel-alt);
+    border-bottom:1px solid var(--border); font-size:11.5px; color:var(--text-dim); flex-wrap:wrap;
+  }
+  .freshness-item{ display:flex; align-items:center; gap:6px; }
+  .dot{ width:6px; height:6px; border-radius:50%; flex-shrink:0; }
+  .dot.fresh{ background:var(--positive); box-shadow:0 0 5px var(--positive); }
+  .dot.stale{ background:var(--amber-flag); box-shadow:0 0 5px var(--amber-flag); }
+  .freshness-item b{ color:var(--text); font-family:'IBM Plex Mono'; font-weight:500; }
+
+  /* ===== LAYOUT ===== */
+  .layout{ display:grid; grid-template-columns:270px 1fr; min-height:calc(100vh - 106px); }
+  aside{ border-right:1px solid var(--border); background:var(--panel); padding:22px 18px; overflow-y:auto; }
+  .side-section{ margin-bottom:24px; }
+  .side-section-title{ font-size:11px; text-transform:uppercase; letter-spacing:1.2px; color:var(--gold);
+    margin-bottom:12px; display:flex; align-items:center; gap:8px; }
+  .side-section-title::after{ content:''; flex:1; height:1px; background:var(--border); }
+
+  .match-btns{ display:flex; gap:6px; }
+  .match-btn{ flex:1; padding:9px 0; text-align:center; border:1px solid var(--border); border-radius:var(--radius);
+    font-family:'IBM Plex Mono'; font-size:13px; color:var(--text-dim); cursor:pointer; background:var(--panel-alt); }
+  .match-btn.active{ background:rgba(212,168,87,0.12); border-color:var(--gold-dim); color:var(--gold); font-weight:600; }
+  .match-hint{ font-size:10.5px; color:var(--text-faint); margin-top:8px; line-height:1.5; }
+
+  .weight-row{ margin-bottom:16px; }
+  .weight-label{ display:flex; justify-content:space-between; font-size:12px; margin-bottom:6px; }
+  .weight-label .w-name{ color:var(--text); }
+  .weight-label .w-val{ font-family:'IBM Plex Mono', monospace; color:var(--gold); }
+  input[type="range"]{ -webkit-appearance:none; width:100%; height:3px; background:var(--border); border-radius:2px; outline:none; }
+  input[type="range"]::-webkit-slider-thumb{ -webkit-appearance:none; width:13px; height:13px; border-radius:50%;
+    background:var(--gold); cursor:pointer; border:2px solid #0A0E14; box-shadow:0 0 0 1px var(--gold-dim); }
+  .weight-total{ margin-top:6px; padding:8px 10px; background:var(--panel-alt); border-radius:var(--radius);
+    font-size:11px; color:var(--text-dim); text-align:center; font-family:'IBM Plex Mono', monospace; }
+  .weight-total.ok{ color:var(--positive); }
+
+  .btn-apply{ width:100%; background:var(--gold); color:#12131A; border:none; padding:11px; border-radius:var(--radius);
+    font-size:13px; font-weight:600; cursor:pointer; margin-top:6px; font-family:'Inter'; transition:opacity .15s, box-shadow .15s; }
+  .btn-apply:hover{ opacity:.9; }
+  .btn-apply.pending{ box-shadow:0 0 0 3px rgba(212,168,87,0.25); animation: pulse 1.4s ease-in-out infinite; }
+  @keyframes pulse{ 0%,100%{opacity:1;} 50%{opacity:.75;} }
+  .apply-hint{ font-size:10.5px; color:var(--text-faint); margin-top:8px; line-height:1.5; }
+  .apply-hint b{ color:var(--text-dim); }
+  .btn-reset{ width:100%; background:transparent; border:1px solid var(--border); color:var(--text-dim);
+    padding:9px; border-radius:var(--radius); font-size:12px; cursor:pointer; margin-top:8px; }
+  .btn-reset:hover{ border-color:var(--text-faint); color:var(--text); }
+
+  /* ===== MAIN ===== */
+  main{ padding:24px 28px; }
+  .main-header{ display:flex; align-items:baseline; justify-content:space-between; margin-bottom:18px; flex-wrap:wrap; gap:10px; }
+  .main-title{ font-family:'Big Shoulders Display', sans-serif; font-size:26px; font-weight:700; }
+  .main-title .count{ color:var(--gold); }
+  .main-desc{ font-size:12px; color:var(--text-dim); margin-top:3px; }
+  .view-toggle{ display:flex; gap:2px; background:var(--panel-alt); border:1px solid var(--border); border-radius:var(--radius); padding:2px; }
+  .view-toggle button{ background:transparent; border:none; color:var(--text-dim); padding:6px 14px; font-size:12px;
+    border-radius:2px; cursor:pointer; font-family:'Inter'; }
+  .view-toggle button.active{ background:var(--panel); color:var(--gold); }
+
+  .empty-state{ text-align:center; padding:70px 20px; color:var(--text-dim); }
+  .empty-state .big{ font-size:40px; margin-bottom:14px; }
+  .empty-state .msg{ font-size:14px; margin-bottom:6px; }
+  .empty-state .sub{ font-size:12px; color:var(--text-faint); }
+
+  .card-grid{ display:grid; grid-template-columns:repeat(auto-fill, minmax(340px, 1fr)); gap:14px; margin-bottom:32px; }
+  .stock-card{ background:var(--panel); border:1px solid var(--border); border-radius:6px; padding:18px; position:relative; transition:border-color .15s; }
+  .stock-card:hover{ border-color:var(--gold-dim); }
+  .stock-card .rank-badge{ position:absolute; top:-9px; left:16px; background:var(--gold); color:#12131A;
+    font-family:'IBM Plex Mono', monospace; font-weight:600; font-size:11px; padding:2px 8px; border-radius:10px; }
+  .card-top{ display:flex; justify-content:space-between; align-items:flex-start; margin-bottom:4px; }
+  .ticker-block .ticker{ font-family:'Big Shoulders Display', sans-serif; font-size:24px; font-weight:700; letter-spacing:0.5px; }
+  .ticker-block .company{ font-size:11.5px; color:var(--text-dim); margin-top:1px; max-width:200px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .score-badge{ text-align:center; }
+  .score-badge .num{ font-family:'IBM Plex Mono', monospace; font-size:26px; font-weight:600; color:var(--gold); line-height:1; }
+  .score-badge .lbl{ font-size:9px; color:var(--text-faint); text-transform:uppercase; letter-spacing:1px; margin-top:2px; }
+
+  .cat-badges{ display:flex; flex-wrap:wrap; gap:5px; margin:10px 0; }
+  .cat-badge{ font-size:9.5px; padding:3px 8px; border-radius:10px; background:rgba(79,209,197,0.1); color:var(--cyan); border:1px solid rgba(79,209,197,0.25); }
+
+  .card-body{ display:flex; gap:16px; margin-top:10px; align-items:center; }
+  .spider-wrap{ flex-shrink:0; }
+  .stat-grid{ flex:1; display:grid; grid-template-columns:1fr 1fr; gap:8px 14px; }
+  .stat-item .s-label{ font-size:9.5px; color:var(--text-faint); text-transform:uppercase; letter-spacing:0.5px; }
+  .stat-item .s-val{ font-family:'IBM Plex Mono', monospace; font-size:13px; margin-top:1px; }
+  .s-val.pos{ color:var(--positive); } .s-val.neg{ color:var(--negative); } .s-val.gold{ color:var(--gold); }
+
+  .card-foot{ display:flex; justify-content:space-between; align-items:center; margin-top:14px; padding-top:12px; border-top:1px solid var(--border-soft); }
+  .pillar-mini{ display:flex; gap:10px; }
+  .pillar-mini .p{ font-size:10px; color:var(--text-faint); }
+  .pillar-mini .p b{ color:var(--text-dim); font-family:'IBM Plex Mono', monospace; }
+  .link-chart{ font-size:11.5px; color:var(--gold); text-decoration:none; display:flex; align-items:center; gap:4px; }
+  .link-chart:hover{ text-decoration:underline; }
+
+  .table-section-title{ font-size:11px; text-transform:uppercase; letter-spacing:1.2px; color:var(--text-dim); margin:8px 0 12px; }
+  table{ width:100%; border-collapse:collapse; background:var(--panel); border:1px solid var(--border); border-radius:6px; overflow:hidden; }
+  thead th{ text-align:left; font-size:10px; text-transform:uppercase; letter-spacing:0.5px; color:var(--text-faint);
+    padding:10px 12px; border-bottom:1px solid var(--border); background:var(--panel-alt); font-weight:500; cursor:pointer; white-space:nowrap; }
+  thead th:hover{ color:var(--gold); }
+  tbody td{ padding:10px 12px; border-bottom:1px solid var(--border-soft); font-family:'IBM Plex Mono', monospace; font-size:12.5px; white-space:nowrap; }
+  tbody tr:last-child td{ border-bottom:none; }
+  tbody tr:hover{ background:var(--panel-alt); }
+  td.ticker-cell{ font-family:'Inter'; font-weight:600; }
+  td.ticker-cell .co-name{ display:block; font-family:'IBM Plex Mono'; font-weight:400; font-size:10.5px; color:var(--text-faint); }
+  .pos{ color:var(--positive); } .neg{ color:var(--negative); }
+  .score-pill{ display:inline-block; padding:2px 8px; border-radius:10px; background:rgba(212,168,87,0.12); color:var(--gold); font-weight:600; }
+  .link-table{ color:var(--gold); text-decoration:none; }
+  .link-table:hover{ text-decoration:underline; }
+
+  .loading-msg{ text-align:center; padding:60px 20px; color:var(--text-dim); font-family:'IBM Plex Mono'; font-size:13px; }
+
+  footer{ text-align:center; padding:20px; font-size:11px; color:var(--text-faint); }
+
+  @media (max-width: 860px){ .layout{ grid-template-columns:1fr; } aside{ border-right:none; border-bottom:1px solid var(--border); } }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="brand">
+    <div class="radar-icon"><div class="radar-sweep"></div></div>
+    <div class="brand-text">
+      <div class="title">STOCK RADAR</div>
+      <div class="sub">IDX Daily Scanner</div>
+    </div>
+  </div>
+  <nav class="header-nav">
+    <a href="index.html">Import Data</a>
+    <a href="#" class="active">Dashboard Radar</a>
+    <span id="userEmailLabel" class="user-email"></span>
+    <a href="#" id="btnLogout" style="color:var(--negative);">Logout</a>
+  </nav>
+</header>
+
+<div class="login-overlay" id="loginOverlay">
+  <div class="login-box">
+    <div class="brand" style="justify-content:center; margin-bottom:22px;">
+      <div class="radar-icon"></div>
+      <div class="brand-text">
+        <div class="title">STOCK RADAR</div>
+        <div class="sub">IDX Daily Scanner</div>
+      </div>
+    </div>
+    <form id="loginForm">
+      <div class="field"><label>Email</label><input type="text" id="loginEmail" placeholder="email@anda.com" autocomplete="username" required></div>
+      <div class="field"><label>Password</label><input type="password" id="loginPassword" placeholder="••••••••" autocomplete="current-password" required></div>
+      <div id="loginError" style="display:none; color:var(--negative); font-size:12px; margin-bottom:10px;"></div>
+      <button type="submit" class="btn-apply" style="width:100%;">Masuk</button>
+    </form>
+  </div>
+</div>
+
+<div class="freshness-bar" id="freshnessBar">
+  <div class="freshness-item"><span class="dot fresh"></span>Memuat status data...</div>
+</div>
+
+<div class="layout">
+  <aside>
+    <div class="side-section">
+      <div class="side-section-title">Match Kategori Min.</div>
+      <div class="match-btns">
+        <div class="match-btn" data-val="1">1</div>
+        <div class="match-btn" data-val="2">2</div>
+        <div class="match-btn active" data-val="3">3</div>
+        <div class="match-btn" data-val="4">4</div>
+      </div>
+      <div class="match-hint">Hanya tampilkan saham yang memenuhi minimal sekian dari 4 kategori (Volume Breakout, Foreign Uptrend, Big Accum, Banda Accum).</div>
+    </div>
+
+    <div class="side-section">
+      <div class="side-section-title">Bobot Skor</div>
+      <div class="weight-row">
+        <div class="weight-label"><span class="w-name">Liquidity</span><span class="w-val" id="wv-liq">33%</span></div>
+        <input type="range" min="0" max="100" value="33" class="w-slider" id="w-liq" data-name="liq">
+      </div>
+      <div class="weight-row">
+        <div class="weight-label"><span class="w-name">Foreign Accum</span><span class="w-val" id="wv-for">40%</span></div>
+        <input type="range" min="0" max="100" value="40" class="w-slider" id="w-for" data-name="for">
+      </div>
+      <div class="weight-row">
+        <div class="weight-label"><span class="w-name">Technical</span><span class="w-val" id="wv-tec">27%</span></div>
+        <input type="range" min="0" max="100" value="27" class="w-slider" id="w-tec" data-name="tec">
+      </div>
+      <div class="weight-total ok" id="weightTotal">TOTAL 100% — SEIMBANG</div>
+    </div>
+
+    <button class="btn-apply" id="btnApply">Terapkan Filter</button>
+    <button class="btn-reset" id="btnReset">Reset ke Default</button>
+    <div class="apply-hint" id="applyHint">Ubah match minimal / bobot di atas, lalu klik <b>Terapkan Filter</b> untuk hitung ulang ranking.</div>
+  </aside>
+
+  <main>
+    <div class="main-header">
+      <div>
+        <div class="main-title">On Radar <span class="count" id="radarCount">·</span></div>
+        <div class="main-desc">Ranking berdasar jumlah kategori terpenuhi, lalu Total Score sebagai tie-breaker — likuiditas, akumulasi asing, dan momentum teknikal digabung jadi satu.</div>
+      </div>
+      <div class="view-toggle">
+        <button class="active" id="viewCardsBtn">Kartu</button>
+        <button id="viewTableBtn">Tabel</button>
+      </div>
+    </div>
+
+    <div id="dashboardContent"><div class="loading-msg">Memuat data...</div></div>
+
+    <footer>Data dari Firestore Anda sendiri — perbarui lewat halaman Import Data.</footer>
+  </main>
+</div>
+
+<script type="module">
+  const firebaseConfig = {
+    apiKey: "AIzaSyAlTrAo6MMXjuiiFxdIW58UeaEl4ErMtiI",
+    authDomain: "radar-idx-hasira.firebaseapp.com",
+    projectId: "radar-idx-hasira",
+    storageBucket: "radar-idx-hasira.firebasestorage.app",
+    messagingSenderId: "675342054884",
+    appId: "1:675342054884:web:cd557eacc3b1da649c03f1",
+    measurementId: "G-Q45RVTZBBC"
+  };
+
+  let db = null, auth = null, firestoreFns = null, authFns = null, firebaseReady = false;
+
+  async function initFirebase(){
+    try{
+      const { initializeApp } = await import("https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js");
+      const fs = await import("https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js");
+      const af = await import("https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js");
+      const app = initializeApp(firebaseConfig);
+      db = fs.getFirestore(app);
+      auth = af.getAuth(app);
+      firestoreFns = fs;
+      authFns = af;
+
+      af.onAuthStateChanged(auth, (user) => {
+        if(user){
+          firebaseReady = true;
+          document.getElementById('loginOverlay').style.display = 'none';
+          document.getElementById('userEmailLabel').textContent = user.email;
+          loadDashboard();
+        }else{
+          firebaseReady = false;
+          document.getElementById('loginOverlay').style.display = 'flex';
+        }
+      });
+    }catch(err){
+      console.error('Gagal init Firebase:', err);
+      document.getElementById('loginError').textContent = 'Gagal inisialisasi Firebase: ' + err.message;
+      document.getElementById('loginError').style.display = 'block';
+    }
+  }
+  initFirebase();
+
+  document.getElementById('loginForm').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const email = document.getElementById('loginEmail').value.trim();
+    const password = document.getElementById('loginPassword').value;
+    const errEl = document.getElementById('loginError');
+    errEl.style.display = 'none';
+    try{
+      await authFns.signInWithEmailAndPassword(auth, email, password);
+    }catch(err){
+      errEl.textContent = 'Login gagal: email atau password salah.';
+      errEl.style.display = 'block';
+    }
+  });
+  document.getElementById('btnLogout').addEventListener('click', async () => { if(auth) await authFns.signOut(auth); });
+
+  // ============================================================
+  // STATE
+  // ============================================================
+  let matchThreshold = 3;
+  let weights = { liq: 33, for: 40, tec: 27 };
+  let currentView = 'cards';
+  let lastRenderedData = [];
+
+  // match kategori buttons
+  document.querySelectorAll('.match-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      document.querySelectorAll('.match-btn').forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+      matchThreshold = parseInt(btn.dataset.val, 10);
+      markPending();
+    });
+  });
+
+  // weight sliders
+  const sliders = document.querySelectorAll('.w-slider');
+  const totalEl = document.getElementById('weightTotal');
+  const applyBtn = document.getElementById('btnApply');
+  const applyHint = document.getElementById('applyHint');
+
+  function refreshWeights(){
+    let total = 0;
+    sliders.forEach(s => {
+      const val = parseInt(s.value, 10);
+      total += val;
+      document.getElementById('wv-' + s.dataset.name).textContent = val + '%';
+      weights[s.dataset.name] = val;
+    });
+    totalEl.textContent = 'TOTAL ' + total + '%' + (total === 100 ? ' — SEIMBANG' : total > 100 ? ' — TERLALU TINGGI' : ' — KURANG DARI 100');
+    totalEl.classList.toggle('ok', total === 100);
+    markPending();
+  }
+  function markPending(){
+    applyBtn.classList.add('pending');
+    applyHint.innerHTML = 'Ada perubahan belum diterapkan. Klik <b>Terapkan Filter</b> untuk hitung ulang ranking.';
+  }
+  sliders.forEach(s => s.addEventListener('input', refreshWeights));
+
+  document.getElementById('btnApply').addEventListener('click', () => {
+    applyBtn.classList.remove('pending');
+    applyHint.innerHTML = 'Filter diterapkan.';
+    renderDashboard(lastRenderedData);
+  });
+
+  document.getElementById('btnReset').addEventListener('click', () => {
+    matchThreshold = 3;
+    weights = { liq: 33, for: 40, tec: 27 };
+    document.querySelectorAll('.match-btn').forEach(b => b.classList.toggle('active', b.dataset.val === '3'));
+    document.getElementById('w-liq').value = 33; document.getElementById('wv-liq').textContent = '33%';
+    document.getElementById('w-for').value = 40; document.getElementById('wv-for').textContent = '40%';
+    document.getElementById('w-tec').value = 27; document.getElementById('wv-tec').textContent = '27%';
+    totalEl.textContent = 'TOTAL 100% — SEIMBANG'; totalEl.classList.add('ok');
+    applyBtn.classList.remove('pending');
+    applyHint.innerHTML = 'Ubah match minimal / bobot di atas, lalu klik <b>Terapkan Filter</b> untuk hitung ulang ranking.';
+    loadDashboard();
+  });
+
+  document.getElementById('viewCardsBtn').addEventListener('click', () => { currentView = 'cards'; toggleViewBtns(); renderDashboard(lastRenderedData); });
+  document.getElementById('viewTableBtn').addEventListener('click', () => { currentView = 'table'; toggleViewBtns(); renderDashboard(lastRenderedData); });
+  function toggleViewBtns(){
+    document.getElementById('viewCardsBtn').classList.toggle('active', currentView === 'cards');
+    document.getElementById('viewTableBtn').classList.toggle('active', currentView === 'table');
+  }
+
+  async function runWithConcurrency(items, limit, worker){
+    const results = new Array(items.length);
+    let idx = 0, errorCount = 0, firstError = null;
+    async function next(){
+      while(idx < items.length){
+        const cur = idx++;
+        try{ results[cur] = await worker(items[cur], cur); }
+        catch(err){ errorCount++; if(!firstError) firstError = err; results[cur] = null; }
+      }
+    }
+    await Promise.all(Array.from({ length: Math.min(limit, items.length) }, next));
+    return { results, errorCount, firstError };
+  }
+
+  // ============================================================
+  // LOAD DATA
+  // ============================================================
+  async function loadDashboard(){
+    if(!firebaseReady) return;
+    const content = document.getElementById('dashboardContent');
+    content.innerHTML = `<div class="loading-msg">Memuat kandidat radar...</div>`;
+
+    const { collection, query, where, getDocs, doc, getDoc } = firestoreFns;
+
+    try{
+      // 1. ambil kandidat dengan match >= 1 sekaligus (filter ketat diterapkan saat render, biar ganti threshold tidak perlu query ulang)
+      const q = query(collection(db, 'tickerRollingStats'), where('matchCount', '>=', 1));
+      const snap = await getDocs(q);
+      const rollingStats = snap.docs.map(d => d.data());
+
+      if(!rollingStats.length){
+        content.innerHTML = `<div class="empty-state">
+          <div class="big">📡</div>
+          <div class="msg">Belum ada kandidat di radar.</div>
+          <div class="sub">Jalankan Step 4 (Hitung Kategori) di halaman Import Data dulu.</div>
+        </div>`;
+        document.getElementById('freshnessBar').innerHTML = `<div class="freshness-item"><span class="dot stale"></span>Belum ada data</div>`;
+        return;
+      }
+
+      const latestDate = rollingStats[0].date;
+
+      // 2. lengkapi tiap kandidat dengan data harga (dailySummary) + indikator (tickerIndicators)
+      const { results } = await runWithConcurrency(rollingStats, 15, async (rs) => {
+        const [priceSnap, indSnap] = await Promise.all([
+          getDoc(doc(db, 'dailySummary', latestDate, 'stocks', rs.ticker)),
+          getDoc(doc(db, 'tickerIndicators', rs.ticker)),
+        ]);
+        const price = priceSnap.exists() ? priceSnap.data() : {};
+        const ind = indSnap.exists() ? indSnap.data() : {};
+        return { ...rs, price, ind };
+      });
+
+      lastRenderedData = results.filter(Boolean);
+
+      // 3. status freshness
+      const metaSnap = await getDoc(doc(db, 'systemMeta', 'technicalIndicators'));
+      const indMeta = metaSnap.exists() ? metaSnap.data() : null;
+      renderFreshnessBar(latestDate, indMeta);
+
+      renderDashboard(lastRenderedData);
+    }catch(err){
+      console.error('loadDashboard gagal:', err);
+      content.innerHTML = `<div class="empty-state"><div class="big">⚠</div><div class="msg">Gagal memuat data.</div><div class="sub">${err.message}</div></div>`;
+    }
+  }
+
+  function renderFreshnessBar(latestDate, indMeta){
+    const bar = document.getElementById('freshnessBar');
+    const today = new Date().toISOString().slice(0,10);
+    const priceFresh = latestDate === today;
+    let html = `<div class="freshness-item"><span class="dot ${priceFresh?'fresh':'stale'}"></span>Data harga: <b>${latestDate}</b></div>`;
+    if(indMeta){
+      const updatedDate = indMeta.updatedAt ? new Date(indMeta.updatedAt) : null;
+      const daysAgo = updatedDate ? Math.floor((Date.now()-updatedDate.getTime())/(864e5)) : null;
+      const fresh = daysAgo !== null && daysAgo < 1;
+      html += `<div class="freshness-item"><span class="dot ${fresh?'fresh':'stale'}"></span>Indikator teknikal: <b>${daysAgo!==null ? (daysAgo===0?'hari ini':daysAgo+' hari lalu') : '-'}</b> (${indMeta.stockCount} saham)</div>`;
+    }else{
+      html += `<div class="freshness-item"><span class="dot stale"></span>Indikator teknikal: <b>belum pernah diupdate</b></div>`;
+    }
+    bar.innerHTML = html;
+  }
+
+  // ============================================================
+  // COMPUTE LIVE TOTAL SCORE + RENDER
+  // ============================================================
+  function computeLiveScore(r){
+    const pillars = [
+      { w: weights.liq, s: r.liquidityScore ?? null },
+      { w: weights.for, s: r.foreignScore ?? null },
+      { w: weights.tec, s: (r.technicalScore ?? r.ind?.technicalScore) ?? null },
+    ].filter(p => p.s !== null && p.w > 0);
+    const totalW = pillars.reduce((a,p)=>a+p.w, 0);
+    return totalW ? Math.round(pillars.reduce((a,p)=>a+p.w*p.s, 0) / totalW) : null;
+  }
+
+  function categoryTags(r){
+    const c = r.categories || {};
+    const tags = [];
+    if(c.volumeBreakout) tags.push('Volume Breakout');
+    if(c.foreignUptrend) tags.push('Foreign Uptrend');
+    if(c.bigAccum) tags.push('Big Accum');
+    if(c.bandaAccum) tags.push('Banda Accum');
+    return tags;
+  }
+
+  function buildSpiderSVG(scores){
+    // scores = [liquidity, foreign, technical], masing2 0-100 atau null
+    const cx = 46, cy = 46, maxR = 32;
+    const angles = [-90, 30, 150].map(d => d * Math.PI / 180); // 3 sumbu, 120 derajat
+    const pts = (r) => angles.map(a => [cx + r*Math.cos(a), cy + r*Math.sin(a)]);
+    const outer = pts(maxR).map(p => p.join(',')).join(' ');
+    const mid = pts(maxR*0.5).map(p => p.join(',')).join(' ');
+    const dataPts = scores.map((s, i) => {
+      const r = ((s ?? 0) / 100) * maxR;
+      const [x,y] = [cx + r*Math.cos(angles[i]), cy + r*Math.sin(angles[i])];
+      return [x,y];
+    });
+    const dataPoly = dataPts.map(p => p.join(',')).join(' ');
+    const dots = dataPts.map(([x,y]) => `<circle cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="2.5" fill="#D4A857"/>`).join('');
+    return `<svg width="92" height="92" viewBox="0 0 92 92">
+      <polygon points="${outer}" fill="none" stroke="#232B3A" stroke-width="1"/>
+      <polygon points="${mid}" fill="none" stroke="#1B2230" stroke-width="1"/>
+      <line x1="${cx}" y1="${cy-maxR}" x2="${cx}" y2="${cy+maxR*0.5}" stroke="#1B2230" stroke-width="1"/>
+      <polygon points="${dataPoly}" fill="rgba(212,168,87,0.18)" stroke="#D4A857" stroke-width="1.5"/>
+      ${dots}
+    </svg>`;
+  }
+
+  function fmtNum(n, digits=0){ return n!=null ? n.toLocaleString('id-ID', {maximumFractionDigits:digits}) : '-'; }
+  function fmtValue(v){
+    if(v==null) return '-';
+    if(v >= 1e12) return 'Rp ' + (v/1e12).toFixed(1) + ' T';
+    if(v >= 1e9) return 'Rp ' + (v/1e9).toFixed(1) + ' M';
+    if(v >= 1e6) return 'Rp ' + (v/1e6).toFixed(1) + ' Jt';
+    return 'Rp ' + fmtNum(v);
+  }
+
+  function renderDashboard(data){
+    const content = document.getElementById('dashboardContent');
+    const filtered = data
+      .filter(r => r.matchCount >= matchThreshold)
+      .map(r => ({ ...r, liveScore: computeLiveScore(r) }))
+      .sort((a,b) => (b.matchCount - a.matchCount) || ((b.liveScore||0) - (a.liveScore||0)));
+
+    document.getElementById('radarCount').textContent = '· ' + filtered.length;
+
+    if(!filtered.length){
+      content.innerHTML = `<div class="empty-state">
+        <div class="big">📡</div>
+        <div class="msg">Tidak ada saham yang memenuhi ≥${matchThreshold} kategori.</div>
+        <div class="sub">Coba turunkan Match Kategori Minimal di panel kiri.</div>
+      </div>`;
+      return;
+    }
+
+    if(currentView === 'cards'){
+      let html = `<div class="card-grid">`;
+      filtered.forEach((r, i) => {
+        const tags = categoryTags(r);
+        const changePct = r.price?.changePct;
+        const tech = r.technicalScore ?? r.ind?.technicalScore;
+        html += `<div class="stock-card">
+          <div class="rank-badge">#${i+1}</div>
+          <div class="card-top">
+            <div class="ticker-block">
+              <div class="ticker">${r.ticker}</div>
+              <div class="company">${r.companyName || ''}</div>
+            </div>
+            <div class="score-badge"><div class="num">${r.liveScore ?? '-'}</div><div class="lbl">Score</div></div>
+          </div>
+          <div class="cat-badges">${tags.map(t => `<span class="cat-badge">${t}</span>`).join('')}</div>
+          <div class="card-body">
+            <div class="spider-wrap">${buildSpiderSVG([r.liquidityScore, r.foreignScore, tech])}</div>
+            <div class="stat-grid">
+              <div class="stat-item"><div class="s-label">Close</div><div class="s-val">${fmtNum(r.price?.close)}</div></div>
+              <div class="stat-item"><div class="s-label">Change</div><div class="s-val ${changePct>=0?'pos':'neg'}">${changePct!=null ? (changePct>=0?'+':'')+changePct.toFixed(2)+'%' : '-'}</div></div>
+              <div class="stat-item"><div class="s-label">Value Hari Ini</div><div class="s-val">${fmtValue(r.price?.value)}</div></div>
+              <div class="stat-item"><div class="s-label">Foreign Net 3D</div><div class="s-val ${r.foreignNet3d>=0?'pos':'neg'}">${fmtNum(r.foreignNet3d)}</div></div>
+              <div class="stat-item"><div class="s-label">RSI14</div><div class="s-val gold">${r.ind?.rsi14!=null ? r.ind.rsi14.toFixed(1) : '-'}</div></div>
+              <div class="stat-item"><div class="s-label">Trend</div><div class="s-val gold">${r.ind?.trendLabel ?? '-'}</div></div>
+            </div>
+          </div>
+          <div class="card-foot">
+            <div class="pillar-mini">
+              <div class="p">Liq <b>${r.liquidityScore ?? '-'}</b></div>
+              <div class="p">For <b>${r.foreignScore ?? '-'}</b></div>
+              <div class="p">Tec <b>${tech ?? '-'}</b></div>
+            </div>
+            <a class="link-chart" href="https://stockbit.com/symbol/${r.ticker}" target="_blank" rel="noopener">Cek Stockbit ↗</a>
+          </div>
+        </div>`;
+      });
+      html += `</div>`;
+      content.innerHTML = html;
+    }else{
+      let html = `<table><thead><tr>
+        <th>Ticker</th><th>Match</th><th>Score</th><th>Close</th><th>Change%</th><th>Foreign Net 3D</th><th>RSI14</th><th>Trend</th><th>Kategori</th><th>Cek</th>
+      </tr></thead><tbody>`;
+      filtered.forEach(r => {
+        const changePct = r.price?.changePct;
+        const tags = categoryTags(r);
+        html += `<tr>
+          <td class="ticker-cell">${r.ticker}<span class="co-name">${r.companyName || ''}</span></td>
+          <td>${r.matchCount}/4</td>
+          <td><span class="score-pill">${r.liveScore ?? '-'}</span></td>
+          <td>${fmtNum(r.price?.close)}</td>
+          <td class="${changePct>=0?'pos':'neg'}">${changePct!=null ? (changePct>=0?'+':'')+changePct.toFixed(2)+'%' : '-'}</td>
+          <td class="${r.foreignNet3d>=0?'pos':'neg'}">${fmtNum(r.foreignNet3d)}</td>
+          <td>${r.ind?.rsi14!=null ? r.ind.rsi14.toFixed(1) : '-'}</td>
+          <td>${r.ind?.trendLabel ?? '-'}</td>
+          <td style="font-family:'Inter'; font-size:11px; color:var(--cyan);">${tags.join(', ')}</td>
+          <td><a class="link-table" href="https://stockbit.com/symbol/${r.ticker}" target="_blank" rel="noopener">Stockbit ↗</a></td>
+        </tr>`;
+      });
+      html += `</tbody></table>`;
+      content.innerHTML = html;
+    }
+  }
+</script>
+</body>
+</html>
