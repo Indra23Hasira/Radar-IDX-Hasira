@@ -128,6 +128,7 @@
     padding:12px 14px; font-size:11.5px; color:var(--text-dim); margin-bottom:20px; line-height:1.6;
   }
   .config-note code{ background:#0A0E14; padding:1px 5px; border-radius:2px; color:var(--gold); }
+  code{ background:#0A0E14; padding:1px 5px; border-radius:2px; color:var(--gold); font-family:'IBM Plex Mono'; font-size:0.92em; }
 
   .history-section{ margin-top:36px; }
   .history-title{ font-size:11px; text-transform:uppercase; letter-spacing:1.2px; color:var(--text-dim); margin-bottom:12px; }
@@ -223,6 +224,20 @@
       <div class="progress-label" id="progressLabel">Menyimpan 0 / 0 saham...</div>
     </div>
     <div id="saveResult"></div>
+  </div>
+
+  <!-- STEP 4: ROLLING STATS + KATEGORI -->
+  <div class="step-card disabled" id="stepCard4">
+    <div class="step-head">
+      <div class="step-num" id="stepNum4">4</div>
+      <div class="step-title">Hitung Liquidity + Foreign Score + Kategori</div>
+    </div>
+    <div class="msg-box info">ℹ Berjalan otomatis setelah data tersimpan — menghitung ulang untuk <b>tanggal terbaru di database</b> (bukan cuma tanggal yang baru diupload), supaya kalau Anda upload data lampau (backfill), hasilnya tetap akurat.</div>
+    <div class="progress-wrap" id="progressWrap4">
+      <div class="progress-bar-outer"><div class="progress-bar-inner" id="progressBar4"></div></div>
+      <div class="progress-label" id="progressLabel4">Memproses 0 / 0 saham...</div>
+    </div>
+    <div id="rollingResult"></div>
   </div>
 
   <!-- HISTORY -->
@@ -601,10 +616,11 @@
         const chunk = parsedRows.slice(i, i + CHUNK_SIZE);
         const batch = writeBatch(db);
         chunk.forEach(r => {
+          const rowWithDate = { ...r, date: detectedDate };
           const dailyRef = doc(db, 'dailySummary', detectedDate, 'stocks', r.ticker);
-          batch.set(dailyRef, r);
+          batch.set(dailyRef, rowWithDate);
           const histRef = doc(db, 'tickerHistory', r.ticker, 'days', detectedDate);
-          batch.set(histRef, r);
+          batch.set(histRef, rowWithDate);
         });
         await batch.commit();
         done += chunk.length;
@@ -629,6 +645,10 @@
       document.getElementById('saveResult').innerHTML =
         `<div class="msg-box success">✓ Berhasil menyimpan ${total} saham untuk tanggal ${detectedDate}.</div>`;
       loadUploadHistory();
+
+      // Tahap 4: hitung ulang Liquidity + Foreign + Kategori untuk tanggal terbaru di database
+      document.getElementById('stepCard4').classList.remove('disabled');
+      computeRollingStats();
     }catch(err){
       document.getElementById('saveResult').innerHTML =
         `<div class="msg-box error">✕ Gagal menyimpan: ${err.message}</div>`;
@@ -640,6 +660,271 @@
     const pct = Math.round((done/total)*100);
     document.getElementById('progressBar').style.width = pct + '%';
     document.getElementById('progressLabel').textContent = `Menyimpan ${done} / ${total} saham... (${pct}%)`;
+  }
+
+  // ============================================================
+  // TAHAP 4: LIQUIDITY SCORE + FOREIGN SCORE + 4 KATEGORI
+  // Dihitung untuk TANGGAL TERBARU di database (bukan tanggal yang
+  // baru diupload) — supaya backfill data lampau tetap akurat.
+  // ============================================================
+
+  function updateProgress4(done, total, label){
+    const pct = total ? Math.round((done/total)*100) : 0;
+    document.getElementById('progressBar4').style.width = pct + '%';
+    document.getElementById('progressLabel4').textContent = `${label || 'Memproses'} ${done} / ${total} saham... (${pct}%)`;
+  }
+
+  function percentileRank(arr, value){
+    if(!arr.length || arr.length <= 1) return 50; // netral kalau peer terlalu sedikit
+    const countLE = arr.filter(v => v <= value).length;
+    return (countLE / arr.length) * 100;
+  }
+
+  // batasi jumlah request paralel ke Firestore supaya browser & kuota aman
+  async function runWithConcurrency(items, limit, worker){
+    const results = new Array(items.length);
+    let idx = 0;
+    async function next(){
+      while(idx < items.length){
+        const cur = idx++;
+        results[cur] = await worker(items[cur], cur);
+      }
+    }
+    const runners = Array.from({ length: Math.min(limit, items.length) }, next);
+    await Promise.all(runners);
+    return results;
+  }
+
+  async function computeRollingStats(){
+    if(!firebaseReady) return;
+    const { collection, query, orderBy, limit, getDocs, doc, setDoc } = firestoreFns;
+    const out = document.getElementById('rollingResult');
+    out.innerHTML = '';
+    document.getElementById('progressWrap4').style.display = 'block';
+
+    // 1. cari tanggal terbaru yang ada di database (bukan tanggal upload terakhir)
+    const metaQ = query(collection(db, 'dailySummary'), orderBy('tradingDate', 'desc'), limit(1));
+    const metaSnap = await getDocs(metaQ);
+    if(metaSnap.empty){
+      out.innerHTML = `<div class="msg-box error">✕ Tidak ada data di dailySummary.</div>`;
+      return;
+    }
+    const latestDate = metaSnap.docs[0].data().tradingDate;
+
+    // 2. ambil seluruh saham untuk tanggal terbaru itu
+    const stocksSnap = await getDocs(collection(db, 'dailySummary', latestDate, 'stocks'));
+    const latestRows = stocksSnap.docs.map(d => d.data());
+
+    // 3. universe kandidat = saham aktif (volume>0) di tanggal terbaru
+    const candidates = latestRows.filter(r => r.isActive);
+    updateProgress4(0, candidates.length, 'Mengambil histori');
+
+    // 4. ambil s.d. 20 hari histori terakhir per ticker kandidat (paralel dibatasi)
+    let fetched = 0;
+    const historyByTicker = await runWithConcurrency(candidates, 25, async (row) => {
+      const q = query(
+        collection(db, 'tickerHistory', row.ticker, 'days'),
+        orderBy('date', 'desc'),
+        limit(20)
+      );
+      const snap = await getDocs(q);
+      fetched++;
+      updateProgress4(fetched, candidates.length, 'Mengambil histori');
+      return { ticker: row.ticker, days: snap.docs.map(d => d.data()) }; // days[0] = paling baru
+    });
+    const historyMap = {};
+    historyByTicker.forEach(h => { historyMap[h.ticker] = h.days; });
+
+    // 5. hitung metrik mentah per ticker
+    const raw = candidates.map(row => {
+      const days = historyMap[row.ticker] || [row];
+      const daysAvailable = days.length;
+
+      // --- Liquidity (s.d. 20 hari) ---
+      const values = days.map(d => d.value || 0);
+      const freqs = days.map(d => d.frequency || 0);
+      const avgValue20d = values.reduce((a,b)=>a+b,0) / daysAvailable;
+      const avgFreq20d = freqs.reduce((a,b)=>a+b,0) / daysAvailable;
+      const meanV = avgValue20d;
+      const stddevV = Math.sqrt(values.reduce((s,v)=>s+Math.pow(v-meanV,2),0) / daysAvailable);
+      const covValue = meanV !== 0 ? stddevV / meanV : 0;
+      const spreadPct = row.bid > 0 ? ((row.offer - row.bid) / row.bid) * 100 : null;
+
+      // --- window 3 hari (foreign + banda), null kalau kurang dari 3 hari ---
+      const w3 = days.slice(0, 3); // [terbaru, kemarin, 2 hari lalu]
+      const has3 = w3.length === 3;
+      let foreignNet3d = null, foreignRatio3d = null, consecutiveNetBuy = null, accel = null;
+      let volumeBreakout = null, foreignUptrend = null, bandaAccum = null;
+
+      if(has3){
+        const nets = w3.map(d => (d.foreignBuy||0) - (d.foreignSell||0)); // [terbaru..lama]
+        const vols = w3.map(d => d.volume || 0);
+        foreignNet3d = nets.reduce((a,b)=>a+b,0);
+        const totalVol3d = vols.reduce((a,b)=>a+b,0);
+        foreignRatio3d = totalVol3d !== 0 ? (foreignNet3d / totalVol3d) * 100 : 0;
+
+        // consecutive net buy days (dari yang terbaru mundur)
+        consecutiveNetBuy = 0;
+        for(const n of nets){ if(n > 0) consecutiveNetBuy++; else break; }
+
+        // acceleration: net hari terbaru - net 2 hari lalu (urutan nets = [terbaru, tengah, lama])
+        accel = nets[0] - nets[2];
+
+        // Foreign Flow Uptrend: naik berurutan dari lama->baru, kumulatif positif
+        const ascNets = [...nets].reverse(); // [lama, tengah, terbaru]
+        const monotonicUp = ascNets[1] >= ascNets[0] && ascNets[2] >= ascNets[1];
+        const ratioOldest = vols[2] !== 0 ? (nets[2]/vols[2])*100 : 0;
+        const ratioNewest = vols[0] !== 0 ? (nets[0]/vols[0])*100 : 0;
+        foreignUptrend = monotonicUp && foreignNet3d > 0 && ratioNewest > ratioOldest;
+
+        // Banda Accumulation: sideways + volume naik + bid dominan + closing kuat
+        const highs = w3.map(d => d.high || 0);
+        const lows = w3.map(d => d.low || 0);
+        const rangePct = row.close !== 0 ? ((Math.max(...highs) - Math.min(...lows)) / row.close) * 100 : 999;
+        const volIncreasing = vols[0] > ((vols[1] + vols[2]) / 2);
+        const bidDominantDays = w3.filter(d => (d.bidVolume||0) > (d.offerVolume||0)).length;
+        const closingStrengths = w3.map(d => {
+          const range = (d.high||0) - (d.low||0);
+          return range > 0 ? ((d.close||0) - (d.low||0)) / range : 0.5;
+        });
+        const avgClosingStrength = closingStrengths.reduce((a,b)=>a+b,0) / closingStrengths.length;
+        bandaAccum = rangePct <= 8 && volIncreasing && bidDominantDays >= 2 && avgClosingStrength >= 0.6;
+      }
+
+      // --- Volume Breakout (butuh histori selain hari ini) ---
+      if(daysAvailable >= 2){
+        const priorDays = days.slice(1); // exclude hari terbaru
+        const avgVolPrior = priorDays.reduce((a,d)=>a+(d.volume||0),0) / priorDays.length;
+        const volumeRatio = avgVolPrior !== 0 ? row.volume / avgVolPrior : 0;
+        const range = (row.high||0) - (row.low||0);
+        const closePos = range > 0 ? ((row.close||0) - (row.low||0)) / range : 0.5;
+        volumeBreakout = volumeRatio >= 2.0 && row.changePct >= 3 && closePos >= 0.7;
+      }
+
+      return {
+        ticker: row.ticker, companyName: row.companyName, daysAvailable,
+        avgValue20d, avgFreq20d, spreadPct, covValue,
+        foreignNet3d, foreignRatio3d, consecutiveNetBuy, accel,
+        volumeBreakout, foreignUptrend, bandaAccum,
+        row,
+      };
+    });
+
+    // 6. Big Accumulation: percentile rank Foreign Net Value 3D relatif ke seluruh kandidat
+    const rankableForeign = raw.filter(r => r.foreignNet3d !== null);
+    const foreignValueList = rankableForeign.map(r => r.foreignNet3d * (r.row.close||0));
+    raw.forEach(r => {
+      if(r.foreignNet3d === null){ r.bigAccum = null; return; }
+      const val = r.foreignNet3d * (r.row.close||0);
+      const pct = percentileRank(foreignValueList, val);
+      r.bigAccum = pct >= 80; // top ~20%
+      r.bigAccumPercentile = pct;
+    });
+
+    // 7. Liquidity & Foreign Score (percentile rank antar kandidat)
+    const valueList = raw.map(r => r.avgValue20d);
+    const freqList = raw.map(r => r.avgFreq20d);
+    const spreadList = raw.filter(r=>r.spreadPct!==null).map(r => -r.spreadPct);
+    const covList = raw.map(r => -r.covValue);
+    const ratioList = rankableForeign.map(r => r.foreignRatio3d);
+    const accelList = rankableForeign.map(r => r.accel);
+
+    raw.forEach(r => {
+      const liqScore =
+        0.40 * percentileRank(valueList, r.avgValue20d) +
+        0.25 * percentileRank(freqList, r.avgFreq20d) +
+        0.20 * (r.spreadPct!==null ? percentileRank(spreadList, -r.spreadPct) : 50) +
+        0.15 * percentileRank(covList, -r.covValue);
+      r.liquidityScore = Math.round(liqScore);
+
+      if(r.foreignNet3d !== null){
+        const forScore =
+          0.50 * percentileRank(ratioList, r.foreignRatio3d) +
+          0.30 * ((Math.min(r.consecutiveNetBuy,3)/3) * 100) +
+          0.20 * percentileRank(accelList, r.accel);
+        r.foreignScore = Math.round(forScore);
+      } else {
+        r.foreignScore = null;
+      }
+
+      // Total Score sementara (baru Liquidity+Foreign, Technical & Fundamental menyusul di tahap lain)
+      const pillars = [{w:25, s:r.liquidityScore}, {w:30, s:r.foreignScore}].filter(p => p.s !== null);
+      const totalW = pillars.reduce((a,p)=>a+p.w,0);
+      r.totalScorePartial = totalW ? Math.round(pillars.reduce((a,p)=>a+p.w*p.s,0)/totalW) : null;
+
+      // match count kategori
+      const cats = [r.volumeBreakout, r.foreignUptrend, r.bigAccum, r.bandaAccum];
+      r.matchCount = cats.filter(c => c === true).length;
+      r.categoryFlags = {
+        volumeBreakout: r.volumeBreakout, foreignUptrend: r.foreignUptrend,
+        bigAccum: r.bigAccum, bandaAccum: r.bandaAccum,
+      };
+    });
+
+    // 8. simpan ke tickerRollingStats/{ticker}
+    let saved = 0;
+    await runWithConcurrency(raw, 25, async (r) => {
+      await setDoc(doc(db, 'tickerRollingStats', r.ticker), {
+        ticker: r.ticker,
+        companyName: r.companyName,
+        date: latestDate,
+        daysAvailable: r.daysAvailable,
+        avgValue20d: r.avgValue20d,
+        avgFreq20d: r.avgFreq20d,
+        spreadPct: r.spreadPct,
+        liquidityScore: r.liquidityScore,
+        foreignNet3d: r.foreignNet3d,
+        foreignRatio3d: r.foreignRatio3d,
+        consecutiveNetBuy: r.consecutiveNetBuy,
+        foreignScore: r.foreignScore,
+        totalScorePartial: r.totalScorePartial,
+        categories: r.categoryFlags,
+        matchCount: r.matchCount,
+        updatedAt: new Date().toISOString(),
+      });
+      saved++;
+      updateProgress4(saved, raw.length, 'Menyimpan hasil');
+    });
+
+    // 9. ringkasan hasil di UI
+    const withHistory3 = raw.filter(r => r.foreignNet3d !== null).length;
+    const matched3plus = raw.filter(r => r.matchCount >= 3).sort((a,b)=>b.matchCount-a.matchCount || b.totalScorePartial-a.totalScorePartial).slice(0,10);
+
+    let html = `<div class="stat-row">
+      <div class="stat-box ok"><div class="label">Tanggal Diproses</div><div class="value">${latestDate}</div></div>
+      <div class="stat-box"><div class="label">Kandidat Aktif</div><div class="value">${candidates.length}</div></div>
+      <div class="stat-box ${withHistory3>=candidates.length*0.5?'ok':'warn'}"><div class="label">Histori \u22653 Hari</div><div class="value">${withHistory3}</div></div>
+      <div class="stat-box"><div class="label">Match \u22653 Kategori</div><div class="value">${matched3plus.length}</div></div>
+    </div>`;
+
+    if(withHistory3 < candidates.length){
+      html += `<div class="msg-box warning">⚠ ${candidates.length - withHistory3} saham belum punya histori 3 hari — kategori Foreign Uptrend/Big Accum/Banda Accum untuk saham itu belum bisa dievaluasi (butuh upload beberapa hari lagi, termasuk backfill kalau ada).</div>`;
+    }
+
+    if(matched3plus.length){
+      html += `<div class="preview-table-wrap"><table><thead><tr>
+        <th>Ticker</th><th>Match</th><th>Kategori</th><th>Score Sementara</th>
+      </tr></thead><tbody>`;
+      matched3plus.forEach(r => {
+        const tags = [];
+        if(r.volumeBreakout) tags.push('Volume Breakout');
+        if(r.foreignUptrend) tags.push('Foreign Uptrend');
+        if(r.bigAccum) tags.push('Big Accum');
+        if(r.bandaAccum) tags.push('Banda Accum');
+        html += `<tr>
+          <td>${r.ticker}</td>
+          <td>${r.matchCount}/4</td>
+          <td style="font-family:'Inter'; font-size:11.5px; color:var(--cyan);">${tags.join(', ')}</td>
+          <td class="pos">${r.totalScorePartial ?? '-'}</td>
+        </tr>`;
+      });
+      html += `</tbody></table></div>`;
+    } else {
+      html += `<div class="msg-box info">ℹ Belum ada saham yang memenuhi ≥3 kategori — wajar kalau histori masih sedikit. Hasil lengkap tersimpan di collection <code>tickerRollingStats</code> untuk semua ${raw.length} kandidat.</div>`;
+    }
+
+    document.getElementById('stepNum4').classList.add('done');
+    out.innerHTML = html;
   }
 
   // ============================================================
