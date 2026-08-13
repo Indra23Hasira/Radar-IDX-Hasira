@@ -227,12 +227,13 @@
   </div>
 
   <!-- STEP 4: ROLLING STATS + KATEGORI -->
-  <div class="step-card disabled" id="stepCard4">
+  <div class="step-card" id="stepCard4">
     <div class="step-head">
       <div class="step-num" id="stepNum4">4</div>
       <div class="step-title">Hitung Liquidity + Foreign Score + Kategori</div>
     </div>
     <div class="msg-box info">ℹ Berjalan otomatis setelah data tersimpan — menghitung ulang untuk <b>tanggal terbaru di database</b> (bukan cuma tanggal yang baru diupload), supaya kalau Anda upload data lampau (backfill), hasilnya tetap akurat.</div>
+    <button class="btn btn-ghost" id="btnRecompute4" style="margin-top:4px;">🔄 Hitung Ulang Sekarang (tanpa upload baru)</button>
     <div class="progress-wrap" id="progressWrap4">
       <div class="progress-bar-outer"><div class="progress-bar-inner" id="progressBar4"></div></div>
       <div class="progress-label" id="progressLabel4">Memproses 0 / 0 saham...</div>
@@ -647,7 +648,6 @@
       loadUploadHistory();
 
       // Tahap 4: hitung ulang Liquidity + Foreign + Kategori untuk tanggal terbaru di database
-      document.getElementById('stepCard4').classList.remove('disabled');
       computeRollingStats();
     }catch(err){
       document.getElementById('saveResult').innerHTML =
@@ -695,9 +695,11 @@
     return results;
   }
 
+  document.getElementById('btnRecompute4').addEventListener('click', computeRollingStats);
+
   async function computeRollingStats(){
     if(!firebaseReady) return;
-    const { collection, query, orderBy, limit, getDocs, doc, setDoc } = firestoreFns;
+    const { collection, query, orderBy, limit, getDocs, doc, setDoc, documentId } = firestoreFns;
     const out = document.getElementById('rollingResult');
     out.innerHTML = '';
     document.getElementById('progressWrap4').style.display = 'block';
@@ -724,7 +726,7 @@
     const historyByTicker = await runWithConcurrency(candidates, 25, async (row) => {
       const q = query(
         collection(db, 'tickerHistory', row.ticker, 'days'),
-        orderBy('date', 'desc'),
+        orderBy(documentId(), 'desc'),
         limit(20)
       );
       const snap = await getDocs(q);
