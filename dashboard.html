@@ -59,7 +59,28 @@
   .freshness-item b{ color:var(--text); font-family:'IBM Plex Mono'; font-weight:500; }
 
   /* ===== LAYOUT ===== */
+  .tab-bar{ display:flex; gap:2px; padding:0 28px; background:var(--bg); border-bottom:1px solid var(--border); }
+  .tab-btn{ background:transparent; border:none; border-bottom:2px solid transparent; color:var(--text-dim);
+    padding:12px 16px; font-size:13px; font-family:'Inter'; cursor:pointer; }
+  .tab-btn.active{ color:var(--gold); border-bottom-color:var(--gold); }
+  .tab-btn span{ font-family:'IBM Plex Mono'; font-size:11px; color:var(--text-faint); }
   .layout{ display:grid; grid-template-columns:270px 1fr; min-height:calc(100vh - 106px); }
+  .layout.watchlist-mode{ grid-template-columns:1fr; }
+  .layout.watchlist-mode aside{ display:none; }
+
+  .watchlist-btn{ background:transparent; border:1px solid var(--border); color:var(--text-dim); border-radius:var(--radius);
+    padding:5px 10px; font-size:11px; cursor:pointer; font-family:'Inter'; display:flex; align-items:center; gap:5px; }
+  .watchlist-btn:hover{ border-color:var(--gold-dim); color:var(--gold); }
+  .watchlist-btn.saved{ background:rgba(212,168,87,0.12); border-color:var(--gold-dim); color:var(--gold); }
+  .snapshot-panel{ background:var(--panel-alt); border:1px solid var(--border-soft); border-radius:var(--radius);
+    padding:10px 12px; margin-top:12px; font-size:11px; }
+  .snapshot-panel .sp-title{ color:var(--text-faint); text-transform:uppercase; letter-spacing:0.5px; font-size:9.5px; margin-bottom:6px; }
+  .snapshot-row{ display:flex; justify-content:space-between; margin-top:4px; }
+  .snapshot-row .sp-label{ color:var(--text-dim); }
+  .snapshot-row .sp-val{ font-family:'IBM Plex Mono'; }
+  .btn-remove-watchlist{ background:transparent; border:1px solid rgba(242,84,91,0.35); color:var(--negative); border-radius:var(--radius);
+    padding:6px 12px; font-size:11px; cursor:pointer; font-family:'Inter'; }
+  .btn-remove-watchlist:hover{ background:rgba(242,84,91,0.1); }
   aside{ border-right:1px solid var(--border); background:var(--panel); padding:22px 18px; overflow-y:auto; }
   .side-section{ margin-bottom:24px; }
   .side-section-title{ font-size:11px; text-transform:uppercase; letter-spacing:1.2px; color:var(--gold);
@@ -128,8 +149,11 @@
   .phase-badge{ font-size:9.5px; padding:3px 8px; border-radius:10px; font-weight:600; }
   .phase-badge.early{ background:rgba(62,207,142,0.12); color:var(--positive); border:1px solid rgba(62,207,142,0.3); }
   .phase-badge.risk{ background:rgba(232,118,61,0.14); color:var(--risk-orange); border:1px solid rgba(232,118,61,0.35); }
+  .phase-badge.reversal{ background:rgba(79,209,197,0.12); color:var(--cyan); border:1px solid rgba(79,209,197,0.3); }
   .risk-banner{ display:flex; align-items:center; gap:8px; background:rgba(232,118,61,0.08); border:1px solid rgba(232,118,61,0.3);
     color:#F4A578; font-size:11.5px; padding:8px 12px; border-radius:var(--radius); margin:10px 0; }
+  .reversal-banner{ display:flex; align-items:center; gap:8px; background:rgba(79,209,197,0.08); border:1px solid rgba(79,209,197,0.3);
+    color:var(--cyan); font-size:11.5px; padding:8px 12px; border-radius:var(--radius); margin:10px 0; }
   .context10-panel{ display:flex; justify-content:space-between; align-items:center; background:var(--panel-alt); border:1px solid var(--border-soft);
     border-radius:var(--radius); padding:9px 12px; margin-top:12px; font-size:11px; }
   .context10-panel .c10-label{ color:var(--text-faint); text-transform:uppercase; letter-spacing:0.5px; font-size:9.5px; }
@@ -214,7 +238,12 @@
   <div class="freshness-item"><span class="dot fresh"></span>Memuat status data...</div>
 </div>
 
-<div class="layout">
+<div class="tab-bar">
+  <button class="tab-btn active" id="tabRadarBtn">📡 Radar</button>
+  <button class="tab-btn" id="tabWatchlistBtn">⭐ Watchlist <span id="watchlistCountBadge"></span></button>
+</div>
+
+<div class="layout" id="mainLayout">
   <aside>
     <div class="side-section">
       <div class="side-section-title">Match Kategori Min.</div>
@@ -250,25 +279,37 @@
   </aside>
 
   <main>
-    <div class="main-header">
-      <div>
-        <div class="main-title">On Radar <span class="count" id="radarCount">·</span></div>
-        <div class="main-desc" id="mainDesc">Ranking berdasar jumlah kategori terpenuhi, lalu Total Score sebagai tie-breaker — likuiditas, akumulasi asing, dan momentum teknikal digabung jadi satu.</div>
-        <div id="phaseSummary" style="margin-top:8px; font-size:12px;"></div>
-      </div>
-      <div style="display:flex; flex-direction:column; align-items:flex-end; gap:8px;">
-        <div class="view-toggle">
-          <button class="active" id="sortMatchBtn">Kategori Dulu</button>
-          <button id="sortScoreBtn">Score Dulu</button>
+    <div id="radarSection">
+      <div class="main-header">
+        <div>
+          <div class="main-title">On Radar <span class="count" id="radarCount">·</span></div>
+          <div class="main-desc" id="mainDesc">Ranking berdasar jumlah kategori terpenuhi, lalu Total Score sebagai tie-breaker — likuiditas, akumulasi asing, dan momentum teknikal digabung jadi satu.</div>
+          <div id="phaseSummary" style="margin-top:8px; font-size:12px;"></div>
         </div>
-        <div class="view-toggle">
-          <button class="active" id="viewCardsBtn">Kartu</button>
-          <button id="viewTableBtn">Tabel</button>
+        <div style="display:flex; flex-direction:column; align-items:flex-end; gap:8px;">
+          <div class="view-toggle">
+            <button class="active" id="sortMatchBtn">Kategori Dulu</button>
+            <button id="sortScoreBtn">Score Dulu</button>
+          </div>
+          <div class="view-toggle">
+            <button class="active" id="viewCardsBtn">Kartu</button>
+            <button id="viewTableBtn">Tabel</button>
+          </div>
         </div>
       </div>
+
+      <div id="dashboardContent"><div class="loading-msg">Memuat data...</div></div>
     </div>
 
-    <div id="dashboardContent"><div class="loading-msg">Memuat data...</div></div>
+    <div id="watchlistSection" style="display:none;">
+      <div class="main-header">
+        <div>
+          <div class="main-title">Watchlist <span class="count" id="watchlistCount">·</span></div>
+          <div class="main-desc">Saham yang Anda tandai untuk dipantau — bandingkan kondisi saat ditambahkan vs sekarang, buat uji apakah sinyal radar terbukti akurat.</div>
+        </div>
+      </div>
+      <div id="watchlistContent"><div class="loading-msg">Memuat watchlist...</div></div>
+    </div>
 
     <footer>Data dari Firestore Anda sendiri — perbarui lewat halaman Import Data.</footer>
   </main>
@@ -340,6 +381,8 @@
   let currentView = 'cards';
   let sortMode = 'match'; // 'match' = kategori dulu (default), 'score' = score dulu
   let lastRenderedData = [];
+  let watchlistTickers = new Set(); // ticker yang sudah masuk watchlist, buat status tombol di kartu
+  let currentTab = 'radar';
 
   document.getElementById('sortMatchBtn').addEventListener('click', () => {
     sortMode = 'match';
@@ -441,6 +484,11 @@
     const { collection, query, where, getDocs, doc, getDoc } = firestoreFns;
 
     try{
+      // 0. ambil daftar ticker yang sudah di watchlist (buat status tombol di tiap kartu)
+      const wlSnap = await getDocs(collection(db, 'watchlist'));
+      watchlistTickers = new Set(wlSnap.docs.map(d => d.id));
+      updateWatchlistCountBadge(wlSnap.size);
+
       // 1. ambil kandidat dengan match >= 1 sekaligus (filter ketat diterapkan saat render, biar ganti threshold tidak perlu query ulang)
       const q = query(collection(db, 'tickerRollingStats'), where('matchCount', '>=', 1));
       const snap = await getDocs(q);
@@ -500,6 +548,192 @@
   }
 
   // ============================================================
+  // TAB SWITCHING (Radar / Watchlist)
+  // ============================================================
+  document.getElementById('tabRadarBtn').addEventListener('click', () => switchTab('radar'));
+  document.getElementById('tabWatchlistBtn').addEventListener('click', () => switchTab('watchlist'));
+
+  function switchTab(tab){
+    currentTab = tab;
+    document.getElementById('tabRadarBtn').classList.toggle('active', tab === 'radar');
+    document.getElementById('tabWatchlistBtn').classList.toggle('active', tab === 'watchlist');
+    document.getElementById('radarSection').style.display = tab === 'radar' ? 'block' : 'none';
+    document.getElementById('watchlistSection').style.display = tab === 'watchlist' ? 'block' : 'none';
+    document.getElementById('mainLayout').classList.toggle('watchlist-mode', tab === 'watchlist');
+    if(tab === 'watchlist') loadWatchlist();
+  }
+
+  function updateWatchlistCountBadge(n){
+    document.getElementById('watchlistCountBadge').textContent = n > 0 ? `(${n})` : '';
+  }
+
+  // klik tombol "Watchlist" / "Tersimpan" di kartu radar (event delegation)
+  document.getElementById('dashboardContent').addEventListener('click', async (e) => {
+    const btn = e.target.closest('.watchlist-btn');
+    if(!btn) return;
+    const ticker = btn.dataset.ticker;
+    const row = lastRenderedData.find(r => r.ticker === ticker);
+    if(!row) return;
+    btn.disabled = true;
+    if(watchlistTickers.has(ticker)){
+      await removeFromWatchlist(ticker);
+      btn.classList.remove('saved');
+      btn.textContent = '☆ Watchlist';
+    }else{
+      await addToWatchlist(row);
+      btn.classList.add('saved');
+      btn.textContent = '★ Tersimpan';
+    }
+    btn.disabled = false;
+    updateWatchlistCountBadge(watchlistTickers.size);
+  });
+
+  async function addToWatchlist(r){
+    const { doc, setDoc } = firestoreFns;
+    const tags = categoryTags(r);
+    const phaseTags = computeSignalPhase(r);
+    await setDoc(doc(db, 'watchlist', r.ticker), {
+      ticker: r.ticker,
+      companyName: r.companyName || '',
+      addedDate: r.date || new Date().toISOString().slice(0,10),
+      addedAt: new Date().toISOString(),
+      snapshot: {
+        close: r.price?.close ?? null,
+        score: r.liveScore ?? null,
+        matchCount: r.matchCount ?? null,
+        categories: tags,
+        phase: phaseTags.map(p => p.label),
+        distributionWarning: !!r.distributionWarning,
+        foreignNetValue3d: r.foreignNetValue3d ?? null,
+        rsi14: r.ind?.rsi14 ?? null,
+        trendLabel: r.ind?.trendLabel ?? null,
+      },
+    });
+    watchlistTickers.add(r.ticker);
+  }
+
+  async function removeFromWatchlist(ticker){
+    const { doc, deleteDoc } = firestoreFns;
+    await deleteDoc(doc(db, 'watchlist', ticker));
+    watchlistTickers.delete(ticker);
+  }
+
+  // ============================================================
+  // RENDER WATCHLIST (bandingkan snapshot saat ditambahkan vs kondisi sekarang)
+  // ============================================================
+  async function loadWatchlist(){
+    if(!firebaseReady) return;
+    const content = document.getElementById('watchlistContent');
+    content.innerHTML = `<div class="loading-msg">Memuat watchlist...</div>`;
+    const { collection, getDocs, doc, getDoc } = firestoreFns;
+
+    try{
+      const wlSnap = await getDocs(collection(db, 'watchlist'));
+      const items = wlSnap.docs.map(d => d.data());
+      document.getElementById('watchlistCount').textContent = '· ' + items.length;
+
+      if(!items.length){
+        content.innerHTML = `<div class="empty-state">
+          <div class="big">⭐</div>
+          <div class="msg">Watchlist masih kosong.</div>
+          <div class="sub">Klik "☆ Watchlist" di kartu radar untuk mulai memantau saham yang menarik.</div>
+        </div>`;
+        return;
+      }
+
+      // ambil kondisi TERKINI tiap ticker (sama seperti radar), untuk dibandingkan dengan snapshot
+      const metaSnap = await getDocs(collection(db, 'dailySummary'));
+      // ambil tanggal terbaru dari salah satu tickerRollingStats (lebih murah daripada scan semua dailySummary)
+      const anyRsSnap = await getDocs(collection(db, 'tickerRollingStats'));
+      const latestDate = anyRsSnap.docs[0]?.data()?.date;
+
+      const { results } = await runWithConcurrency(items, 15, async (item) => {
+        const [rsSnap, priceSnap, indSnap] = await Promise.all([
+          getDoc(doc(db, 'tickerRollingStats', item.ticker)),
+          latestDate ? getDoc(doc(db, 'dailySummary', latestDate, 'stocks', item.ticker)) : Promise.resolve(null),
+          getDoc(doc(db, 'tickerIndicators', item.ticker)),
+        ]);
+        const rs = rsSnap.exists() ? rsSnap.data() : {};
+        const price = priceSnap && priceSnap.exists() ? priceSnap.data() : {};
+        const ind = indSnap.exists() ? indSnap.data() : {};
+        return { ...item, current: { ...rs, price, ind } };
+      });
+
+      renderWatchlistCards(results.filter(Boolean));
+    }catch(err){
+      console.error('loadWatchlist gagal:', err);
+      content.innerHTML = `<div class="empty-state"><div class="big">⚠</div><div class="msg">Gagal memuat watchlist.</div><div class="sub">${err.message}</div></div>`;
+    }
+  }
+
+  function renderWatchlistCards(items){
+    const content = document.getElementById('watchlistContent');
+    items.sort((a,b) => new Date(b.addedAt) - new Date(a.addedAt));
+
+    let html = `<div class="card-grid">`;
+    items.forEach(item => {
+      const s = item.snapshot || {};
+      const cur = item.current || {};
+      const curClose = cur.price?.close;
+      const priceDiffPct = (s.close && curClose) ? ((curClose - s.close) / s.close) * 100 : null;
+      const curScore = cur.technicalScore != null || cur.foreignScore != null || cur.liquidityScore != null
+        ? Math.round(((cur.liquidityScore??0)*33 + (cur.foreignScore??0)*40 + ((cur.technicalScore??cur.ind?.technicalScore)??0)*27) / 100)
+        : null;
+      const scoreDiff = (s.score!=null && curScore!=null) ? curScore - s.score : null;
+      const daysHeld = s ? Math.floor((Date.now() - new Date(item.addedAt).getTime()) / 864e5) : null;
+      const curTags = categoryTags(cur);
+      const curPhase = computeSignalPhase(cur);
+
+      html += `<div class="stock-card">
+        <div class="card-top">
+          <div class="ticker-block">
+            <div class="ticker">${item.ticker}</div>
+            <div class="company">${item.companyName || ''}</div>
+            <div style="font-size:10px; color:var(--text-faint); margin-top:4px;">Ditambahkan ${item.addedDate} (${daysHeld}${daysHeld===1?' hari':' hari'} lalu)</div>
+          </div>
+          <button class="btn-remove-watchlist" data-ticker="${item.ticker}">🗑 Hapus</button>
+        </div>
+
+        <div class="snapshot-panel">
+          <div class="sp-title">Saat Ditambahkan (${item.addedDate})</div>
+          <div class="snapshot-row"><span class="sp-label">Close</span><span class="sp-val">${fmtNum(s.close)}</span></div>
+          <div class="snapshot-row"><span class="sp-label">Score</span><span class="sp-val gold">${s.score ?? '-'}</span></div>
+          <div class="snapshot-row"><span class="sp-label">Kategori</span><span class="sp-val" style="color:var(--cyan); font-size:10px;">${(s.categories||[]).join(', ') || '-'}</span></div>
+          ${s.phase && s.phase.length ? `<div class="snapshot-row"><span class="sp-label">Fase</span><span class="sp-val" style="font-size:10px;">${s.phase.join(', ')}</span></div>` : ''}
+        </div>
+
+        <div class="snapshot-panel" style="background:rgba(212,168,87,0.05); border-color:rgba(212,168,87,0.2);">
+          <div class="sp-title">Sekarang</div>
+          <div class="snapshot-row"><span class="sp-label">Close</span><span class="sp-val ${priceDiffPct>=0?'pos':'neg'}">${fmtNum(curClose)} ${priceDiffPct!=null ? `(${priceDiffPct>=0?'+':''}${priceDiffPct.toFixed(2)}%)` : ''}</span></div>
+          <div class="snapshot-row"><span class="sp-label">Score</span><span class="sp-val gold">${curScore ?? '-'} ${scoreDiff!=null ? `(${scoreDiff>=0?'+':''}${scoreDiff})` : ''}</span></div>
+          <div class="snapshot-row"><span class="sp-label">Match Kategori</span><span class="sp-val">${cur.matchCount ?? '-'}/4</span></div>
+          ${cur.distributionWarning ? `<div class="snapshot-row"><span class="sp-label">⚠</span><span class="sp-val" style="color:var(--negative);">Tanda Distribusi</span></div>` : ''}
+          ${curPhase.length ? `<div class="snapshot-row"><span class="sp-label">Fase</span><span class="sp-val" style="font-size:10px;">${curPhase.map(p=>p.label).join(', ')}</span></div>` : ''}
+        </div>
+
+        <div class="card-foot">
+          <div class="pillar-mini">
+            <div class="p">RSI <b>${cur.ind?.rsi14!=null ? cur.ind.rsi14.toFixed(1) : '-'}</b></div>
+            <div class="p">Trend <b>${cur.ind?.trendLabel ?? '-'}</b></div>
+          </div>
+          <a class="link-chart" href="https://stockbit.com/symbol/${item.ticker}" target="_blank" rel="noopener">Cek Stockbit ↗</a>
+        </div>
+      </div>`;
+    });
+    html += `</div>`;
+    content.innerHTML = html;
+  }
+
+  document.getElementById('watchlistContent').addEventListener('click', async (e) => {
+    const btn = e.target.closest('.btn-remove-watchlist');
+    if(!btn) return;
+    if(!confirm(`Hapus ${btn.dataset.ticker} dari watchlist?`)) return;
+    await removeFromWatchlist(btn.dataset.ticker);
+    updateWatchlistCountBadge(watchlistTickers.size);
+    loadWatchlist();
+  });
+
+  // ============================================================
   // COMPUTE LIVE TOTAL SCORE + RENDER
   // ============================================================
   function computeLiveScore(r){
@@ -535,6 +769,16 @@
     if(c.volumeBreakout && !c.bandarAccum && c.foreignUptrend && c.bigAccum){
       tags.push({ label: '🟠 Sudah Naik — Rawan Guyur', cls: 'risk',
         note: 'Harga sudah breakout dari fase sideways — risiko masuk di puncak / kena profit taking.' });
+    }
+    // Divergensi 3D vs 10D: bagian dari 10 hari yang lebih tua vs 3 hari terbaru arahnya berlawanan
+    if(r.foreignNet3d != null && r.foreignNet10d != null){
+      if(r.foreignNet3d > 0 && r.foreignNet10d < 0){
+        tags.push({ label: '🔄 Potensi Reversal', cls: 'reversal',
+          note: 'Asing sempat net jual lebih besar sebelumnya, tapi 3 hari terakhir mulai berbalik beli dan menguat. Baru tahap awal — pantau apakah berlanjut sebelum yakin ini pembalikan beneran.' });
+      } else if(r.foreignNet3d < 0 && r.foreignNet10d > 0){
+        tags.push({ label: '🔄 Momentum Melemah', cls: 'reversal',
+          note: 'Sebelumnya asing net beli, tapi 3 hari terakhir mulai berbalik jual. Waspada — bisa jadi awal dari pembalikan arah ke bawah.' });
+      }
     }
     return tags;
   }
@@ -606,10 +850,12 @@
 
     const earlyCount = filtered.filter(r => computeSignalPhase(r).some(p => p.cls === 'early')).length;
     const riskCount = filtered.filter(r => computeSignalPhase(r).some(p => p.cls === 'risk')).length;
+    const reversalCount = filtered.filter(r => computeSignalPhase(r).some(p => p.cls === 'reversal')).length;
     const distCount = filtered.filter(r => r.distributionWarning).length;
     const phaseParts = [];
     if(earlyCount) phaseParts.push(`<span style="color:var(--positive);">🟢 ${earlyCount} Tahap Awal</span>`);
     if(riskCount) phaseParts.push(`<span style="color:var(--risk-orange);">🟠 ${riskCount} Rawan Guyur</span>`);
+    if(reversalCount) phaseParts.push(`<span style="color:var(--cyan);">🔄 ${reversalCount} Reversal/Melemah</span>`);
     if(distCount) phaseParts.push(`<span style="color:var(--negative);">⚠ ${distCount} Tanda Distribusi</span>`);
     document.getElementById('phaseSummary').innerHTML = phaseParts.length ? phaseParts.join(' &nbsp;·&nbsp; ') : '';
 
@@ -636,10 +882,14 @@
               <div class="ticker">${r.ticker}</div>
               <div class="company">${r.companyName || ''}</div>
             </div>
-            <div class="score-badge"><div class="num">${r.liveScore ?? '-'}</div><div class="lbl">Score</div></div>
+            <div style="text-align:right;">
+              <div class="score-badge"><div class="num">${r.liveScore ?? '-'}</div><div class="lbl">Score</div></div>
+              <button class="watchlist-btn ${watchlistTickers.has(r.ticker)?'saved':''}" data-ticker="${r.ticker}" style="margin-top:6px;">${watchlistTickers.has(r.ticker) ? '★ Tersimpan' : '☆ Watchlist'}</button>
+            </div>
           </div>
           <div class="cat-badges">${tags.map(t => `<span class="cat-badge">${t}</span>`).join('')}${phaseTags.map(p => `<span class="phase-badge ${p.cls}">${p.label}</span>`).join('')}${r.distributionWarning ? `<span class="distribution-badge">⚠ Distribusi</span>` : ''}</div>
           ${phaseTags.filter(p=>p.cls==='risk').map(p => `<div class="risk-banner">🟠 ${p.note}</div>`).join('')}
+          ${phaseTags.filter(p=>p.cls==='reversal').map(p => `<div class="reversal-banner">🔄 ${p.note}</div>`).join('')}
           ${r.distributionWarning ? `<div class="distribution-banner">⚠ Tanda distribusi terdeteksi — tekanan jual mendominasi, closing melemah. Cek ulang sebelum entry.</div>` : ''}
           <div class="card-body">
             <div class="spider-wrap">${buildSpiderSVG([r.liquidityScore, r.foreignScore, tech])}</div>
