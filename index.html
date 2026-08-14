@@ -820,6 +820,19 @@
       const covValue = meanV !== 0 ? stddevV / meanV : 0;
       const spreadPct = row.bid > 0 ? ((row.offer - row.bid) / row.bid) * 100 : null;
 
+      // --- window 10 hari: KONTEKS PEMBANDING SAJA, tidak dipakai untuk kategori/filter ---
+      // Tujuannya: bedakan "beneran distribusi/kehabisan tenaga" vs "cuma kalah di window 3 hari
+      // yang cepat, padahal masih ada tren naik lebih panjang".
+      const w10 = days.slice(0, Math.min(10, days.length));
+      let foreignNet10d = null, foreignNetValue10d = null, priceChange10d = null;
+      const daysUsed10d = w10.length;
+      if(w10.length >= 2){
+        foreignNet10d = w10.reduce((a,d) => a + ((d.foreignBuy||0) - (d.foreignSell||0)), 0);
+        foreignNetValue10d = foreignNet10d * (row.close || 0);
+        const oldestClose10 = w10[w10.length - 1].close;
+        priceChange10d = oldestClose10 ? ((row.close - oldestClose10) / oldestClose10) * 100 : null;
+      }
+
       // --- window 3 hari (foreign + bandar + distribusi), null kalau kurang dari 3 hari ---
       const w3 = days.slice(0, 3); // [terbaru, kemarin, 2 hari lalu]
       const has3 = w3.length === 3;
@@ -880,6 +893,7 @@
         avgValue20d, avgFreq20d, spreadPct, covValue,
         foreignNet3d, foreignRatio3d, consecutiveNetBuy, accel,
         volumeBreakout, foreignUptrend, bandarAccum, distributionWarning,
+        foreignNet10d, foreignNetValue10d, priceChange10d, daysUsed10d,
         row,
       };
     });
@@ -957,6 +971,10 @@
         categories: r.categoryFlags,
         matchCount: r.matchCount,
         distributionWarning: r.distributionWarning,
+        foreignNet10d: r.foreignNet10d,
+        foreignNetValue10d: r.foreignNetValue10d,
+        priceChange10d: r.priceChange10d,
+        daysUsed10d: r.daysUsed10d,
         updatedAt: new Date().toISOString(),
       });
       saved++;
