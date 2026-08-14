@@ -130,6 +130,10 @@
   .phase-badge.risk{ background:rgba(232,118,61,0.14); color:var(--risk-orange); border:1px solid rgba(232,118,61,0.35); }
   .risk-banner{ display:flex; align-items:center; gap:8px; background:rgba(232,118,61,0.08); border:1px solid rgba(232,118,61,0.3);
     color:#F4A578; font-size:11.5px; padding:8px 12px; border-radius:var(--radius); margin:10px 0; }
+  .context10-panel{ display:flex; justify-content:space-between; align-items:center; background:var(--panel-alt); border:1px solid var(--border-soft);
+    border-radius:var(--radius); padding:9px 12px; margin-top:12px; font-size:11px; }
+  .context10-panel .c10-label{ color:var(--text-faint); text-transform:uppercase; letter-spacing:0.5px; font-size:9.5px; }
+  .context10-panel .c10-val{ font-family:'IBM Plex Mono'; margin-top:2px; }
   .distribution-banner{ display:flex; align-items:center; gap:8px; background:rgba(242,84,91,0.08); border:1px solid rgba(242,84,91,0.3);
     color:#FF8B92; font-size:11.5px; padding:8px 12px; border-radius:var(--radius); margin:10px 0; }
 
@@ -249,12 +253,18 @@
     <div class="main-header">
       <div>
         <div class="main-title">On Radar <span class="count" id="radarCount">·</span></div>
-        <div class="main-desc">Ranking berdasar jumlah kategori terpenuhi, lalu Total Score sebagai tie-breaker — likuiditas, akumulasi asing, dan momentum teknikal digabung jadi satu.</div>
+        <div class="main-desc" id="mainDesc">Ranking berdasar jumlah kategori terpenuhi, lalu Total Score sebagai tie-breaker — likuiditas, akumulasi asing, dan momentum teknikal digabung jadi satu.</div>
         <div id="phaseSummary" style="margin-top:8px; font-size:12px;"></div>
       </div>
-      <div class="view-toggle">
-        <button class="active" id="viewCardsBtn">Kartu</button>
-        <button id="viewTableBtn">Tabel</button>
+      <div style="display:flex; flex-direction:column; align-items:flex-end; gap:8px;">
+        <div class="view-toggle">
+          <button class="active" id="sortMatchBtn">Kategori Dulu</button>
+          <button id="sortScoreBtn">Score Dulu</button>
+        </div>
+        <div class="view-toggle">
+          <button class="active" id="viewCardsBtn">Kartu</button>
+          <button id="viewTableBtn">Tabel</button>
+        </div>
       </div>
     </div>
 
@@ -328,7 +338,23 @@
   let matchThreshold = 3;
   let weights = { liq: 33, for: 40, tec: 27 };
   let currentView = 'cards';
+  let sortMode = 'match'; // 'match' = kategori dulu (default), 'score' = score dulu
   let lastRenderedData = [];
+
+  document.getElementById('sortMatchBtn').addEventListener('click', () => {
+    sortMode = 'match';
+    document.getElementById('sortMatchBtn').classList.add('active');
+    document.getElementById('sortScoreBtn').classList.remove('active');
+    document.getElementById('mainDesc').textContent = 'Ranking berdasar jumlah kategori terpenuhi, lalu Total Score sebagai tie-breaker — makin banyak sinyal independen setuju, makin diprioritaskan.';
+    renderDashboard(lastRenderedData);
+  });
+  document.getElementById('sortScoreBtn').addEventListener('click', () => {
+    sortMode = 'score';
+    document.getElementById('sortScoreBtn').classList.add('active');
+    document.getElementById('sortMatchBtn').classList.remove('active');
+    document.getElementById('mainDesc').textContent = 'Ranking murni berdasar Total Score (Liquidity+Foreign+Technical digabung) — tidak peduli jumlah kategori, asal masih lolos batas minimal di kiri.';
+    renderDashboard(lastRenderedData);
+  });
 
   // match kategori buttons
   document.querySelectorAll('.match-btn').forEach(btn => {
@@ -568,10 +594,13 @@
 
   function renderDashboard(data){
     const content = document.getElementById('dashboardContent');
+    const sortFn = sortMode === 'match'
+      ? (a,b) => (b.matchCount - a.matchCount) || ((b.liveScore||0) - (a.liveScore||0))
+      : (a,b) => ((b.liveScore||0) - (a.liveScore||0)) || (b.matchCount - a.matchCount);
     const filtered = data
       .filter(r => r.matchCount >= matchThreshold)
       .map(r => ({ ...r, liveScore: computeLiveScore(r) }))
-      .sort((a,b) => (b.matchCount - a.matchCount) || ((b.liveScore||0) - (a.liveScore||0)));
+      .sort(sortFn);
 
     document.getElementById('radarCount').textContent = '· ' + filtered.length;
 
@@ -623,6 +652,16 @@
               <div class="stat-item"><div class="s-label">Trend</div><div class="s-val gold">${r.ind?.trendLabel ?? '-'}</div></div>
             </div>
           </div>
+          <div class="context10-panel">
+            <div>
+              <div class="c10-label">Foreign Net Value (10D)</div>
+              <div class="c10-val ${r.foreignNet10d>=0?'pos':'neg'}">${r.foreignNetValue10d!=null ? fmtValue(r.foreignNetValue10d) : `Data <${r.daysUsed10d??0} hari`}</div>
+            </div>
+            <div style="text-align:right;">
+              <div class="c10-label">Harga vs 10D Lalu</div>
+              <div class="c10-val ${r.priceChange10d>=0?'pos':'neg'}">${r.priceChange10d!=null ? (r.priceChange10d>=0?'+':'')+r.priceChange10d.toFixed(2)+'%' : '-'}</div>
+            </div>
+          </div>
           <div class="card-foot">
             <div class="pillar-mini">
               <div class="p">Liq <b>${r.liquidityScore ?? '-'}</b></div>
@@ -637,7 +676,7 @@
       content.innerHTML = html;
     }else{
       let html = `<table><thead><tr>
-        <th>Ticker</th><th>Match</th><th>Score</th><th>Close</th><th>Change%</th><th>Foreign Net Value (3D)</th><th>RSI14</th><th>Trend</th><th>Kategori</th><th>Warning</th><th>Cek</th>
+        <th>Ticker</th><th>Match</th><th>Score</th><th>Close</th><th>Change%</th><th>Foreign Net Value (3D)</th><th>Harga vs 10D</th><th>RSI14</th><th>Trend</th><th>Kategori</th><th>Warning</th><th>Cek</th>
       </tr></thead><tbody>`;
       filtered.forEach(r => {
         const changePct = r.price?.changePct;
@@ -654,6 +693,7 @@
           <td>${fmtNum(r.price?.close)}</td>
           <td class="${changePct>=0?'pos':'neg'}">${changePct!=null ? (changePct>=0?'+':'')+changePct.toFixed(2)+'%' : '-'}</td>
           <td class="${r.foreignNet3d>=0?'pos':'neg'}">${fmtValue(r.foreignNetValue3d)}</td>
+          <td class="${r.priceChange10d>=0?'pos':'neg'}">${r.priceChange10d!=null ? (r.priceChange10d>=0?'+':'')+r.priceChange10d.toFixed(2)+'%' : '-'}</td>
           <td>${r.ind?.rsi14!=null ? r.ind.rsi14.toFixed(1) : '-'}</td>
           <td>${r.ind?.trendLabel ?? '-'}</td>
           <td style="font-family:'Inter'; font-size:11px; color:var(--cyan);">${tags.join(', ')}</td>
