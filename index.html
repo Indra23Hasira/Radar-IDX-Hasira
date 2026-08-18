@@ -254,7 +254,12 @@
       <div class="step-title">Hitung Liquidity + Foreign Score + Kategori</div>
     </div>
     <div class="msg-box info">ℹ Berjalan otomatis setelah data tersimpan — menghitung ulang untuk <b>tanggal terbaru di database</b> (bukan cuma tanggal yang baru diupload), supaya kalau Anda upload data lampau (backfill), hasilnya tetap akurat.</div>
-    <button class="btn btn-ghost" id="btnRecompute4" style="margin-top:4px;">🔄 Hitung Ulang Sekarang (tanpa upload baru)</button>
+    <div class="field" style="max-width:220px; margin-top:12px;">
+      <label>Harga Minimum per Lembar (Rp)</label>
+      <input type="number" id="minPriceFilter" value="100" min="0" step="10">
+    </div>
+    <div style="font-size:10.5px; color:var(--text-faint); margin-top:-6px; margin-bottom:10px;">Saham di bawah harga ini (biasanya rawan digoreng/likuiditas semu) dibuang sebelum masuk perhitungan kategori.</div>
+    <button class="btn btn-ghost" id="btnRecompute4">🔄 Hitung Ulang Sekarang (tanpa upload baru)</button>
     <div class="progress-wrap" id="progressWrap4">
       <div class="progress-bar-outer"><div class="progress-bar-inner" id="progressBar4"></div></div>
       <div class="progress-label" id="progressLabel4">Memproses 0 / 0 saham...</div>
@@ -779,8 +784,10 @@
       const stocksSnap = await getDocs(collection(db, 'dailySummary', latestDate, 'stocks'));
       const latestRows = stocksSnap.docs.map(d => d.data());
 
-      // 3. universe kandidat = saham aktif (volume>0) di tanggal terbaru
-      const candidates = latestRows.filter(r => r.isActive);
+      // 3. universe kandidat = saham aktif (volume>0) DAN harga >= minimum (buang saham gocap/likuiditas semu)
+      const minPrice = parseFloat(document.getElementById('minPriceFilter').value) || 0;
+      const belowMinPrice = latestRows.filter(r => r.isActive && r.close < minPrice).length;
+      const candidates = latestRows.filter(r => r.isActive && r.close >= minPrice);
       updateProgress4(0, candidates.length, 'Mengambil histori');
 
       // 4. ambil s.d. 20 hari histori terakhir per ticker kandidat (paralel dibatasi)
@@ -991,10 +998,11 @@
     let html = warnings.map(w => `<div class="msg-box warning">${w}</div>`).join('');
     html += `<div class="stat-row">
       <div class="stat-box ok"><div class="label">Tanggal Diproses</div><div class="value">${latestDate}</div></div>
-      <div class="stat-box"><div class="label">Kandidat Aktif</div><div class="value">${candidates.length}</div></div>
+      <div class="stat-box"><div class="label">Kandidat Aktif (≥Rp${minPrice})</div><div class="value">${candidates.length}</div></div>
       <div class="stat-box ${withHistory3>=candidates.length*0.5?'ok':'warn'}"><div class="label">Histori \u22653 Hari</div><div class="value">${withHistory3}</div></div>
       <div class="stat-box"><div class="label">Match \u22653 Kategori</div><div class="value">${matched3plus.length}</div></div>
-    </div>`;
+    </div>
+    <div class="msg-box info">ℹ ${belowMinPrice} saham dibuang karena harga di bawah Rp${minPrice}/lembar (rawan likuiditas semu).</div>`;
 
     if(withHistory3 < candidates.length){
       html += `<div class="msg-box warning">⚠ ${candidates.length - withHistory3} saham belum punya histori 3 hari — kategori Foreign Uptrend/Big Accum/Bandar Accum untuk saham itu belum bisa dievaluasi (butuh upload beberapa hari lagi, termasuk backfill kalau ada).</div>`;
