@@ -259,6 +259,17 @@
       <input type="number" id="minPriceFilter" value="100" min="0" step="10">
       <div style="font-size:10.5px; color:var(--text-faint); margin-top:6px; line-height:1.5;">Saham di bawah harga ini (biasanya rawan digoreng/likuiditas semu) dibuang sebelum masuk perhitungan kategori.</div>
     </div>
+    <div class="field-row" style="max-width:560px; margin-top:14px;">
+      <div class="field">
+        <label>Value Rata-rata Minimum (Rp, 20 hari)</label>
+        <input type="number" id="minAvgValueFilter" value="1000000000" min="0" step="100000000">
+      </div>
+      <div class="field">
+        <label>Frequency Rata-rata Minimum (x, 20 hari)</label>
+        <input type="number" id="minAvgFreqFilter" value="100" min="0" step="10">
+      </div>
+    </div>
+    <div style="font-size:10.5px; color:var(--text-faint); margin-top:-6px; margin-bottom:6px; line-height:1.5;">Batas keras likuiditas — saham dengan rata-rata Value/Frequency di bawah ini dibuang total, walau sinyal kategori lain kuat. Ini beda dari Liquidity Score (yang cuma perbandingan relatif antar kandidat).</div>
     <button class="btn btn-ghost" id="btnRecompute4" style="margin-top:6px;">🔄 Hitung Ulang Sekarang (tanpa upload baru)</button>
     <div class="progress-wrap" id="progressWrap4">
       <div class="progress-bar-outer"><div class="progress-bar-inner" id="progressBar4"></div></div>
@@ -813,7 +824,7 @@
       historyResults.forEach(h => { if(h) historyMap[h.ticker] = h.days; });
 
     // 5. hitung metrik mentah per ticker
-    const raw = candidates.map(row => {
+    let raw = candidates.map(row => {
       const days = historyMap[row.ticker] || [row];
       const daysAvailable = days.length;
 
@@ -904,6 +915,14 @@
         row,
       };
     });
+
+    // 5b. HARD FILTER likuiditas — beda dari Liquidity Score (yang cuma perbandingan relatif).
+    // Ini batas mutlak: saham di bawah ini dibuang total, tidak peduli sinyal kategori lain sekuat apapun.
+    const minAvgValue = parseFloat(document.getElementById('minAvgValueFilter').value) || 0;
+    const minAvgFreq = parseFloat(document.getElementById('minAvgFreqFilter').value) || 0;
+    const belowLiquidity = raw.filter(r => r.avgValue20d < minAvgValue || r.avgFreq20d < minAvgFreq).length;
+    const rawBeforeLiquidityFilter = raw.length;
+    raw = raw.filter(r => r.avgValue20d >= minAvgValue && r.avgFreq20d >= minAvgFreq);
 
     // 6. Big Accumulation: percentile rank Foreign Net Value 3D relatif ke seluruh kandidat
     const rankableForeign = raw.filter(r => r.foreignNet3d !== null);
@@ -1017,11 +1036,11 @@
     let html = warnings.map(w => `<div class="msg-box warning">${w}</div>`).join('');
     html += `<div class="stat-row">
       <div class="stat-box ok"><div class="label">Tanggal Diproses</div><div class="value">${latestDate}</div></div>
-      <div class="stat-box"><div class="label">Kandidat Aktif (≥Rp${minPrice})</div><div class="value">${candidates.length}</div></div>
+      <div class="stat-box"><div class="label">Kandidat Final (Lolos Semua Filter)</div><div class="value">${raw.length}</div></div>
       <div class="stat-box ${withHistory3>=candidates.length*0.5?'ok':'warn'}"><div class="label">Histori \u22653 Hari</div><div class="value">${withHistory3}</div></div>
       <div class="stat-box"><div class="label">Match \u22653 Kategori</div><div class="value">${matched3plus.length}</div></div>
     </div>
-    <div class="msg-box info">ℹ ${belowMinPrice} saham dibuang karena harga di bawah Rp${minPrice}/lembar (rawan likuiditas semu).${staleDocs.length ? ` ${staleDocs.length} data lama (sudah tidak lolos filter) dibersihkan dari database.` : ''}</div>`;
+    <div class="msg-box info">ℹ ${belowMinPrice} saham dibuang karena harga di bawah Rp${minPrice}/lembar. ${belowLiquidity} saham dibuang karena Value/Frequency rata-rata di bawah batas minimal (dari ${rawBeforeLiquidityFilter} kandidat harga OK, tersisa ${raw.length}).${staleDocs.length ? ` ${staleDocs.length} data lama (sudah tidak lolos filter) dibersihkan dari database.` : ''}</div>`;
 
     if(withHistory3 < candidates.length){
       html += `<div class="msg-box warning">⚠ ${candidates.length - withHistory3} saham belum punya histori 3 hari — kategori Foreign Uptrend/Big Accum/Bandar Accum untuk saham itu belum bisa dievaluasi (butuh upload beberapa hari lagi, termasuk backfill kalau ada).</div>`;
