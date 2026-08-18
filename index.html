@@ -1426,7 +1426,6 @@
       //     (Liquidity 25% + Foreign 30% + Technical 20%, redistribusi otomatis
       //     kalau ada pilar yang belum tersedia — Fundamental sudah ditiadakan permanen)
       let merged = 0;
-      const { getDoc } = firestoreFns;
       const mergeRes = await runWithConcurrency(computed, 15, async (r) => {
         const rsRef = doc(db, 'tickerRollingStats', r.ticker);
         const rsSnap = await getDoc(rsRef);
