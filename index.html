@@ -3,171 +3,216 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Stock Radar — Import Data Harian</title>
+<title>Stock Radar — Dashboard</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Big+Shoulders+Display:wght@600;700;800&family=Inter:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
-<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <style>
   :root{
     --bg:#0A0E14; --panel:#11161F; --panel-alt:#151B26; --border:#232B3A; --border-soft:#1B2230;
     --text:#E6E9EF; --text-dim:#8992A6; --text-faint:#5C6577;
     --gold:#D4A857; --gold-dim:#8B7239; --cyan:#4FD1C5;
-    --positive:#3ECF8E; --negative:#F2545B; --amber-flag:#E8A33D; --radius:3px;
+    --positive:#3ECF8E; --negative:#F2545B; --amber-flag:#E8A33D; --risk-orange:#E8763D; --radius:3px;
   }
   *{box-sizing:border-box; margin:0; padding:0;}
   body{ background:var(--bg); color:var(--text); font-family:'Inter', sans-serif; font-size:14px; line-height:1.5; }
   .mono{ font-family:'IBM Plex Mono', monospace; }
 
+  /* ===== HEADER ===== */
   header{
-    display:flex; align-items:center; justify-content:space-between; padding:18px 28px;
-    border-bottom:1px solid var(--border); background:linear-gradient(180deg, #0D1219 0%, #0A0E14 100%);
+    position:relative; display:flex; align-items:center; justify-content:space-between;
+    padding:18px 28px; border-bottom:1px solid var(--border);
+    background:linear-gradient(180deg, #0D1219 0%, #0A0E14 100%); overflow:hidden;
   }
-  .brand{ display:flex; align-items:center; gap:14px; }
-  .radar-icon{ width:34px; height:34px; position:relative; border-radius:50%; border:1px solid var(--gold-dim);
-    background:radial-gradient(circle at center, rgba(212,168,87,0.08) 0%, transparent 70%); }
+  .brand{ display:flex; align-items:center; gap:14px; position:relative; z-index:2; }
+  .radar-icon{ width:34px; height:34px; position:relative; flex-shrink:0; border-radius:50%;
+    border:1px solid var(--gold-dim); background:radial-gradient(circle at center, rgba(212,168,87,0.08) 0%, transparent 70%); }
   .radar-icon::before, .radar-icon::after{ content:''; position:absolute; border-radius:50%; border:1px solid var(--border-soft); }
   .radar-icon::before{ inset:7px; } .radar-icon::after{ inset:14px; border-color: rgba(212,168,87,0.25); }
-  .brand-text .title{ font-family:'Big Shoulders Display', sans-serif; font-weight:700; font-size:22px; line-height:1; }
+  .radar-sweep{ position:absolute; inset:0; border-radius:50%; overflow:hidden; animation: sweep 4s linear infinite; }
+  .radar-sweep::before{ content:''; position:absolute; top:0; left:50%; width:50%; height:50%;
+    background:conic-gradient(from 0deg, rgba(212,168,87,0.55), transparent 70deg); transform-origin:0% 100%; }
+  @keyframes sweep{ from{transform:rotate(0deg);} to{transform:rotate(360deg);} }
+  .brand-text .title{ font-family:'Big Shoulders Display', sans-serif; font-weight:700; font-size:22px; letter-spacing:0.5px; line-height:1; }
   .brand-text .sub{ font-size:11px; color:var(--text-dim); letter-spacing:1.5px; text-transform:uppercase; margin-top:3px; }
+  .header-nav{ display:flex; align-items:center; }
   .header-nav a{ color:var(--text-dim); text-decoration:none; font-size:12.5px; margin-left:22px; }
   .header-nav a.active{ color:var(--gold); }
   .user-email{ color:var(--text-faint); font-size:12px; margin-left:26px; font-family:'IBM Plex Mono'; }
 
-  .login-overlay{
-    position:fixed; inset:0; background:rgba(10,14,20,0.96); z-index:100;
-    display:flex; align-items:center; justify-content:center;
-  }
-  .login-box{
-    background:var(--panel); border:1px solid var(--border); border-radius:8px;
-    padding:32px 30px; width:340px;
-  }
+  .login-overlay{ position:fixed; inset:0; background:rgba(10,14,20,0.96); z-index:100; display:flex; align-items:center; justify-content:center; }
+  .login-box{ background:var(--panel); border:1px solid var(--border); border-radius:8px; padding:32px 30px; width:340px; }
   .login-box .field{ margin-bottom:14px; }
   .login-box .field label{ display:block; font-size:12px; color:var(--text-dim); margin-bottom:6px; }
-  .login-box input{
-    width:100%; background:var(--panel-alt); border:1px solid var(--border); color:var(--text);
-    padding:10px 12px; border-radius:var(--radius); font-family:'Inter'; font-size:13px;
-  }
+  .login-box input{ width:100%; background:var(--panel-alt); border:1px solid var(--border); color:var(--text);
+    padding:10px 12px; border-radius:var(--radius); font-family:'Inter'; font-size:13px; }
   .login-box input:focus{ outline:none; border-color:var(--gold-dim); }
 
-  main{ max-width:920px; margin:0 auto; padding:32px 24px 60px; }
-  .page-title{ font-family:'Big Shoulders Display', sans-serif; font-size:26px; font-weight:700; margin-bottom:4px; }
-  .page-desc{ font-size:12.5px; color:var(--text-dim); margin-bottom:28px; }
-
-  .step-card{ background:var(--panel); border:1px solid var(--border); border-radius:6px; padding:22px; margin-bottom:16px; }
-  .step-card.disabled{ opacity:0.45; pointer-events:none; }
-  .step-head{ display:flex; align-items:center; gap:10px; margin-bottom:16px; }
-  .step-num{ width:22px; height:22px; border-radius:50%; background:var(--panel-alt); border:1px solid var(--border);
-    display:flex; align-items:center; justify-content:center; font-family:'IBM Plex Mono'; font-size:11px; color:var(--text-dim); flex-shrink:0; }
-  .step-num.done{ background:rgba(62,207,142,0.15); border-color:var(--positive); color:var(--positive); }
-  .step-title{ font-size:14px; font-weight:600; }
-
-  .dropzone{
-    border:1.5px dashed var(--border); border-radius:6px; padding:36px 20px; text-align:center; cursor:pointer;
-    transition:.15s; background:var(--panel-alt);
+  /* ===== FRESHNESS BAR ===== */
+  .freshness-bar{
+    display:flex; align-items:center; gap:22px; padding:10px 28px; background:var(--panel-alt);
+    border-bottom:1px solid var(--border); font-size:11.5px; color:var(--text-dim); flex-wrap:wrap;
   }
-  .dropzone:hover, .dropzone.dragover{ border-color:var(--gold-dim); background:rgba(212,168,87,0.04); }
-  .dropzone .dz-icon{ font-size:26px; margin-bottom:8px; color:var(--text-faint); }
-  .dropzone .dz-text{ font-size:13px; color:var(--text-dim); }
-  .dropzone .dz-text b{ color:var(--gold); }
-  .dropzone .dz-hint{ font-size:11px; color:var(--text-faint); margin-top:6px; }
-  #fileInput{ display:none; }
+  .freshness-item{ display:flex; align-items:center; gap:6px; }
+  .dot{ width:6px; height:6px; border-radius:50%; flex-shrink:0; }
+  .dot.fresh{ background:var(--positive); box-shadow:0 0 5px var(--positive); }
+  .dot.stale{ background:var(--amber-flag); box-shadow:0 0 5px var(--amber-flag); }
+  .freshness-item b{ color:var(--text); font-family:'IBM Plex Mono'; font-weight:500; }
 
-  .file-chip{
-    display:flex; align-items:center; justify-content:space-between; background:var(--panel-alt);
-    border:1px solid var(--border); border-radius:var(--radius); padding:10px 14px; margin-top:12px; font-size:12.5px;
-  }
-  .file-chip .fname{ font-family:'IBM Plex Mono'; color:var(--text); }
-  .file-chip .remove{ color:var(--negative); cursor:pointer; font-size:12px; }
+  /* ===== LAYOUT ===== */
+  .tab-bar{ display:flex; gap:2px; padding:0 28px; background:var(--bg); border-bottom:1px solid var(--border); }
+  .tab-btn{ background:transparent; border:none; border-bottom:2px solid transparent; color:var(--text-dim);
+    padding:12px 16px; font-size:13px; font-family:'Inter'; cursor:pointer; }
+  .tab-btn.active{ color:var(--gold); border-bottom-color:var(--gold); }
+  .tab-btn span{ font-family:'IBM Plex Mono'; font-size:11px; color:var(--text-faint); }
+  .layout{ display:grid; grid-template-columns:270px 1fr; min-height:calc(100vh - 106px); }
+  .layout.watchlist-mode{ grid-template-columns:1fr; }
+  .layout.watchlist-mode aside{ display:none; }
 
-  .stat-row{ display:grid; grid-template-columns:repeat(4,1fr); gap:10px; margin:14px 0; }
-  .stat-box{ background:var(--panel-alt); border:1px solid var(--border); border-radius:var(--radius); padding:12px; }
-  .stat-box .label{ font-size:9.5px; text-transform:uppercase; letter-spacing:0.6px; color:var(--text-faint); }
-  .stat-box .value{ font-family:'IBM Plex Mono'; font-size:16px; margin-top:4px; color:var(--text); }
-  .stat-box.warn .value{ color:var(--amber-flag); }
-  .stat-box.ok .value{ color:var(--positive); }
+  .watchlist-btn{ background:transparent; border:1px solid var(--border); color:var(--text-dim); border-radius:var(--radius);
+    padding:5px 10px; font-size:11px; cursor:pointer; font-family:'Inter'; display:flex; align-items:center; gap:5px; }
+  .watchlist-btn:hover{ border-color:var(--gold-dim); color:var(--gold); }
+  .watchlist-btn.saved{ background:rgba(212,168,87,0.12); border-color:var(--gold-dim); color:var(--gold); }
+  .snapshot-panel{ background:var(--panel-alt); border:1px solid var(--border-soft); border-radius:var(--radius);
+    padding:10px 12px; margin-top:12px; font-size:11px; }
+  .snapshot-panel .sp-title{ color:var(--text-faint); text-transform:uppercase; letter-spacing:0.5px; font-size:9.5px; margin-bottom:6px; }
+  .snapshot-row{ display:flex; justify-content:space-between; margin-top:4px; }
+  .snapshot-row .sp-label{ color:var(--text-dim); }
+  .snapshot-row .sp-val{ font-family:'IBM Plex Mono'; }
+  .btn-remove-watchlist{ background:transparent; border:1px solid rgba(242,84,91,0.35); color:var(--negative); border-radius:var(--radius);
+    padding:6px 12px; font-size:11px; cursor:pointer; font-family:'Inter'; }
+  .btn-remove-watchlist:hover{ background:rgba(242,84,91,0.1); }
+  aside{ border-right:1px solid var(--border); background:var(--panel); padding:22px 18px; overflow-y:auto; }
+  .side-section{ margin-bottom:24px; }
+  .side-section-title{ font-size:11px; text-transform:uppercase; letter-spacing:1.2px; color:var(--gold);
+    margin-bottom:12px; display:flex; align-items:center; gap:8px; }
+  .side-section-title::after{ content:''; flex:1; height:1px; background:var(--border); }
 
-  .msg-box{ display:flex; gap:9px; padding:10px 12px; border-radius:var(--radius); font-size:12px; margin-top:10px; align-items:flex-start; }
-  .msg-box.error{ background:rgba(242,84,91,0.1); border:1px solid rgba(242,84,91,0.35); color:#FF8B92; }
-  .msg-box.warning{ background:rgba(232,163,61,0.1); border:1px solid rgba(232,163,61,0.35); color:var(--amber-flag); }
-  .msg-box.info{ background:rgba(79,209,197,0.08); border:1px solid rgba(79,209,197,0.3); color:var(--cyan); }
-  .msg-box.success{ background:rgba(62,207,142,0.08); border:1px solid rgba(62,207,142,0.3); color:var(--positive); }
+  .match-btns{ display:flex; gap:6px; }
+  .match-btn{ flex:1; padding:9px 0; text-align:center; border:1px solid var(--border); border-radius:var(--radius);
+    font-family:'IBM Plex Mono'; font-size:13px; color:var(--text-dim); cursor:pointer; background:var(--panel-alt); }
+  .match-btn.active{ background:rgba(212,168,87,0.12); border-color:var(--gold-dim); color:var(--gold); font-weight:600; }
+  .match-hint{ font-size:10.5px; color:var(--text-faint); margin-top:8px; line-height:1.5; }
 
-  .preview-table-wrap{ overflow-x:auto; margin-top:14px; border:1px solid var(--border); border-radius:6px; }
-  table{ width:100%; border-collapse:collapse; }
-  thead th{ text-align:left; font-size:10px; text-transform:uppercase; letter-spacing:0.4px; color:var(--text-faint);
-    padding:9px 10px; border-bottom:1px solid var(--border); background:var(--panel-alt); white-space:nowrap; }
-  tbody td{ padding:8px 10px; border-bottom:1px solid var(--border-soft); font-family:'IBM Plex Mono'; font-size:12px; white-space:nowrap; }
+  .weight-row{ margin-bottom:16px; }
+  .weight-label{ display:flex; justify-content:space-between; font-size:12px; margin-bottom:6px; }
+  .weight-label .w-name{ color:var(--text); }
+  .weight-label .w-val{ font-family:'IBM Plex Mono', monospace; color:var(--gold); }
+  input[type="range"]{ -webkit-appearance:none; width:100%; height:3px; background:var(--border); border-radius:2px; outline:none; }
+  input[type="range"]::-webkit-slider-thumb{ -webkit-appearance:none; width:13px; height:13px; border-radius:50%;
+    background:var(--gold); cursor:pointer; border:2px solid #0A0E14; box-shadow:0 0 0 1px var(--gold-dim); }
+  .weight-total{ margin-top:6px; padding:8px 10px; background:var(--panel-alt); border-radius:var(--radius);
+    font-size:11px; color:var(--text-dim); text-align:center; font-family:'IBM Plex Mono', monospace; }
+  .weight-total.ok{ color:var(--positive); }
+
+  .btn-apply{ width:100%; background:var(--gold); color:#12131A; border:none; padding:11px; border-radius:var(--radius);
+    font-size:13px; font-weight:600; cursor:pointer; margin-top:6px; font-family:'Inter'; transition:opacity .15s, box-shadow .15s; }
+  .btn-apply:hover{ opacity:.9; }
+  .btn-apply.pending{ box-shadow:0 0 0 3px rgba(212,168,87,0.25); animation: pulse 1.4s ease-in-out infinite; }
+  @keyframes pulse{ 0%,100%{opacity:1;} 50%{opacity:.75;} }
+  .apply-hint{ font-size:10.5px; color:var(--text-faint); margin-top:8px; line-height:1.5; }
+  .apply-hint b{ color:var(--text-dim); }
+  .btn-reset{ width:100%; background:transparent; border:1px solid var(--border); color:var(--text-dim);
+    padding:9px; border-radius:var(--radius); font-size:12px; cursor:pointer; margin-top:8px; }
+  .btn-reset:hover{ border-color:var(--text-faint); color:var(--text); }
+
+  /* ===== MAIN ===== */
+  main{ padding:24px 28px; }
+  .main-header{ display:flex; align-items:baseline; justify-content:space-between; margin-bottom:18px; flex-wrap:wrap; gap:10px; }
+  .main-title{ font-family:'Big Shoulders Display', sans-serif; font-size:26px; font-weight:700; }
+  .main-title .count{ color:var(--gold); }
+  .main-desc{ font-size:12px; color:var(--text-dim); margin-top:3px; }
+  .view-toggle{ display:flex; gap:2px; background:var(--panel-alt); border:1px solid var(--border); border-radius:var(--radius); padding:2px; }
+  .view-toggle button{ background:transparent; border:none; color:var(--text-dim); padding:6px 14px; font-size:12px;
+    border-radius:2px; cursor:pointer; font-family:'Inter'; }
+  .view-toggle button.active{ background:var(--panel); color:var(--gold); }
+
+  .empty-state{ text-align:center; padding:70px 20px; color:var(--text-dim); }
+  .empty-state .big{ font-size:40px; margin-bottom:14px; }
+  .empty-state .msg{ font-size:14px; margin-bottom:6px; }
+  .empty-state .sub{ font-size:12px; color:var(--text-faint); }
+
+  .card-grid{ display:grid; grid-template-columns:repeat(auto-fill, minmax(340px, 1fr)); gap:14px; margin-bottom:32px; }
+  .stock-card{ background:var(--panel); border:1px solid var(--border); border-radius:6px; padding:18px; position:relative; transition:border-color .15s; }
+  .stock-card:hover{ border-color:var(--gold-dim); }
+  .stock-card .rank-badge{ position:absolute; top:-9px; left:16px; background:var(--gold); color:#12131A;
+    font-family:'IBM Plex Mono', monospace; font-weight:600; font-size:11px; padding:2px 8px; border-radius:10px; }
+  .card-top{ display:flex; justify-content:space-between; align-items:flex-start; margin-bottom:4px; }
+  .ticker-block .ticker{ font-family:'Big Shoulders Display', sans-serif; font-size:24px; font-weight:700; letter-spacing:0.5px; }
+  .ticker-block .company{ font-size:11.5px; color:var(--text-dim); margin-top:1px; max-width:200px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .score-badge{ text-align:center; }
+  .score-badge .num{ font-family:'IBM Plex Mono', monospace; font-size:26px; font-weight:600; color:var(--gold); line-height:1; }
+  .score-badge .lbl{ font-size:9px; color:var(--text-faint); text-transform:uppercase; letter-spacing:1px; margin-top:2px; }
+
+  .cat-badges{ display:flex; flex-wrap:wrap; gap:5px; margin:10px 0; }
+  .cat-badge{ font-size:9.5px; padding:3px 8px; border-radius:10px; background:rgba(79,209,197,0.1); color:var(--cyan); border:1px solid rgba(79,209,197,0.25); }
+  .distribution-badge{ font-size:9.5px; padding:3px 8px; border-radius:10px; background:rgba(242,84,91,0.12); color:var(--negative); border:1px solid rgba(242,84,91,0.3); font-weight:600; }
+  .phase-badge{ font-size:9.5px; padding:3px 8px; border-radius:10px; font-weight:600; }
+  .phase-badge.early{ background:rgba(62,207,142,0.12); color:var(--positive); border:1px solid rgba(62,207,142,0.3); }
+  .phase-badge.risk{ background:rgba(232,118,61,0.14); color:var(--risk-orange); border:1px solid rgba(232,118,61,0.35); }
+  .phase-badge.reversal{ background:rgba(79,209,197,0.12); color:var(--cyan); border:1px solid rgba(79,209,197,0.3); }
+  .phase-badge.reclaim{ background:rgba(62,207,142,0.14); color:var(--positive); border:1px solid rgba(62,207,142,0.35); }
+  .phase-badge.candle{ background:rgba(212,168,87,0.14); color:var(--gold); border:1px solid rgba(212,168,87,0.35); }
+  .risk-banner{ display:flex; align-items:center; gap:8px; background:rgba(232,118,61,0.08); border:1px solid rgba(232,118,61,0.3);
+    color:#F4A578; font-size:11.5px; padding:8px 12px; border-radius:var(--radius); margin:10px 0; }
+  .reversal-banner{ display:flex; align-items:center; gap:8px; background:rgba(79,209,197,0.08); border:1px solid rgba(79,209,197,0.3);
+    color:var(--cyan); font-size:11.5px; padding:8px 12px; border-radius:var(--radius); margin:10px 0; }
+  .context10-panel{ display:flex; justify-content:space-between; align-items:center; background:var(--panel-alt); border:1px solid var(--border-soft);
+    border-radius:var(--radius); padding:9px 12px; margin-top:12px; font-size:11px; }
+  .context10-panel .c10-label{ color:var(--text-faint); text-transform:uppercase; letter-spacing:0.5px; font-size:9.5px; }
+  .context10-panel .c10-val{ font-family:'IBM Plex Mono'; margin-top:2px; }
+  .distribution-banner{ display:flex; align-items:center; gap:8px; background:rgba(242,84,91,0.08); border:1px solid rgba(242,84,91,0.3);
+    color:#FF8B92; font-size:11.5px; padding:8px 12px; border-radius:var(--radius); margin:10px 0; }
+
+  .card-body{ display:flex; gap:16px; margin-top:10px; align-items:center; }
+  .spider-wrap{ flex-shrink:0; }
+  .stat-grid{ flex:1; display:grid; grid-template-columns:1fr 1fr; gap:8px 14px; }
+  .stat-item .s-label{ font-size:9.5px; color:var(--text-faint); text-transform:uppercase; letter-spacing:0.5px; }
+  .stat-item .s-val{ font-family:'IBM Plex Mono', monospace; font-size:13px; margin-top:1px; }
+  .stat-item .s-sub{ font-family:'IBM Plex Mono', monospace; font-size:9.5px; color:var(--text-faint); margin-top:1px; }
+  .s-val.pos{ color:var(--positive); } .s-val.neg{ color:var(--negative); } .s-val.gold{ color:var(--gold); }
+
+  .card-foot{ display:flex; justify-content:space-between; align-items:center; margin-top:14px; padding-top:12px; border-top:1px solid var(--border-soft); }
+  .pillar-mini{ display:flex; gap:10px; }
+  .pillar-mini .p{ font-size:10px; color:var(--text-faint); }
+  .pillar-mini .p b{ color:var(--text-dim); font-family:'IBM Plex Mono', monospace; }
+  .link-chart{ font-size:11.5px; color:var(--gold); text-decoration:none; display:flex; align-items:center; gap:4px; }
+  .link-chart:hover{ text-decoration:underline; }
+
+  .table-section-title{ font-size:11px; text-transform:uppercase; letter-spacing:1.2px; color:var(--text-dim); margin:8px 0 12px; }
+  table{ width:100%; border-collapse:collapse; background:var(--panel); border:1px solid var(--border); border-radius:6px; overflow:hidden; }
+  thead th{ text-align:left; font-size:10px; text-transform:uppercase; letter-spacing:0.5px; color:var(--text-faint);
+    padding:10px 12px; border-bottom:1px solid var(--border); background:var(--panel-alt); font-weight:500; cursor:pointer; white-space:nowrap; }
+  thead th:hover{ color:var(--gold); }
+  tbody td{ padding:10px 12px; border-bottom:1px solid var(--border-soft); font-family:'IBM Plex Mono', monospace; font-size:12.5px; white-space:nowrap; }
   tbody tr:last-child td{ border-bottom:none; }
+  tbody tr:hover{ background:var(--panel-alt); }
+  td.ticker-cell{ font-family:'Inter'; font-weight:600; }
+  td.ticker-cell .co-name{ display:block; font-family:'IBM Plex Mono'; font-weight:400; font-size:10.5px; color:var(--text-faint); }
   .pos{ color:var(--positive); } .neg{ color:var(--negative); }
-  .preview-note{ font-size:11px; color:var(--text-faint); margin-top:8px; }
+  .score-pill{ display:inline-block; padding:2px 8px; border-radius:10px; background:rgba(212,168,87,0.12); color:var(--gold); font-weight:600; }
+  .link-table{ color:var(--gold); text-decoration:none; }
+  .link-table:hover{ text-decoration:underline; }
 
-  .overwrite-box{
-    display:flex; align-items:flex-start; gap:10px; background:rgba(232,163,61,0.08); border:1px solid rgba(232,163,61,0.3);
-    border-radius:var(--radius); padding:12px 14px; margin-top:12px;
-  }
-  .overwrite-box input[type="checkbox"]{ margin-top:3px; accent-color:var(--amber-flag); }
-  .overwrite-box label{ font-size:12px; color:var(--text); cursor:pointer; }
-  .overwrite-box .sub{ font-size:11px; color:var(--text-dim); margin-top:2px; }
+  .loading-msg{ text-align:center; padding:60px 20px; color:var(--text-dim); font-family:'IBM Plex Mono'; font-size:13px; }
 
-  .btn{
-    padding:11px 20px; border-radius:var(--radius); font-size:13px; font-weight:600; cursor:pointer; border:none;
-    font-family:'Inter'; transition:opacity .15s;
-  }
-  .btn:disabled{ opacity:0.35; cursor:not-allowed; }
-  .btn-primary{ background:var(--gold); color:#12131A; }
-  .btn-primary:hover:not(:disabled){ opacity:0.88; }
-  .btn-ghost{ background:transparent; border:1px solid var(--border); color:var(--text-dim); }
+  footer{ text-align:center; padding:20px; font-size:11px; color:var(--text-faint); }
 
-  .progress-wrap{ margin-top:16px; display:none; }
-  .progress-bar-outer{ height:6px; background:var(--panel-alt); border-radius:4px; overflow:hidden; }
-  .progress-bar-inner{ height:100%; background:var(--gold); width:0%; transition:width .2s; }
-  .progress-label{ font-size:11px; color:var(--text-dim); margin-top:6px; font-family:'IBM Plex Mono'; }
-
-  .config-note{
-    background:var(--panel-alt); border:1px solid var(--border); border-radius:var(--radius);
-    padding:12px 14px; font-size:11.5px; color:var(--text-dim); margin-bottom:20px; line-height:1.6;
-  }
-  .config-note code{ background:#0A0E14; padding:1px 5px; border-radius:2px; color:var(--gold); }
-  code{ background:#0A0E14; padding:1px 5px; border-radius:2px; color:var(--gold); font-family:'IBM Plex Mono'; font-size:0.92em; }
-
-  .history-section{ margin-top:36px; }
-
-  .form-table-wrap{ overflow-x:auto; border:1px solid var(--border); border-radius:6px; }
-  .form-table{ width:100%; border-collapse:collapse; }
-  .form-table thead th{
-    text-align:left; font-size:10px; text-transform:uppercase; letter-spacing:0.4px; color:var(--text-faint);
-    padding:9px 8px; border-bottom:1px solid var(--border); background:var(--panel-alt); white-space:nowrap;
-  }
-  .form-table tbody td{ padding:6px 8px; border-bottom:1px solid var(--border-soft); vertical-align:middle; }
-  .form-table tbody tr:last-child td{ border-bottom:none; }
-  .form-table .ticker-label{ font-family:'IBM Plex Mono'; font-weight:600; white-space:nowrap; }
-  .form-table .co-name-small{ display:block; font-size:10px; color:var(--text-faint); font-weight:400; max-width:140px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-  .form-table input{
-    width:88px; background:var(--panel-alt); border:1px solid var(--border); color:var(--text);
-    padding:6px 8px; border-radius:var(--radius); font-family:'IBM Plex Mono'; font-size:12px;
-  }
-  .form-table input.sector-input{ width:120px; font-family:'Inter'; }
-  .form-table input:focus{ outline:none; border-color:var(--gold-dim); }
-  .freshness-badge{ font-size:9.5px; padding:2px 6px; border-radius:8px; white-space:nowrap; }
-  .freshness-badge.fresh{ background:rgba(62,207,142,0.12); color:var(--positive); }
-  .freshness-badge.stale{ background:rgba(232,163,61,0.12); color:var(--amber-flag); }
-  .freshness-badge.empty{ background:rgba(92,101,119,0.12); color:var(--text-faint); }
-  .history-title{ font-size:11px; text-transform:uppercase; letter-spacing:1.2px; color:var(--text-dim); margin-bottom:12px; }
+  @media (max-width: 860px){ .layout{ grid-template-columns:1fr; } aside{ border-right:none; border-bottom:1px solid var(--border); } }
 </style>
 </head>
 <body>
 
 <header>
   <div class="brand">
-    <div class="radar-icon"></div>
+    <div class="radar-icon"><div class="radar-sweep"></div></div>
     <div class="brand-text">
       <div class="title">STOCK RADAR</div>
       <div class="sub">IDX Daily Scanner</div>
     </div>
   </div>
   <nav class="header-nav">
-    <a href="#" class="active">Import Data</a>
-    <a href="dashboard.html">Dashboard Radar</a>
+    <a href="index.html">Import Data</a>
+    <a href="#" class="active">Dashboard Radar</a>
     <span id="userEmailLabel" class="user-email"></span>
     <a href="#" id="btnLogout" style="color:var(--negative);">Logout</a>
   </nav>
@@ -183,140 +228,96 @@
       </div>
     </div>
     <form id="loginForm">
-      <div class="field">
-        <label>Email</label>
-        <input type="text" id="loginEmail" placeholder="email@anda.com" autocomplete="username" required>
-      </div>
-      <div class="field">
-        <label>Password</label>
-        <input type="password" id="loginPassword" placeholder="••••••••" autocomplete="current-password" required>
-      </div>
-      <div class="msg-box error" id="loginError" style="display:none;"></div>
-      <button type="submit" class="btn btn-primary" style="width:100%; margin-top:6px;">Masuk</button>
+      <div class="field"><label>Email</label><input type="text" id="loginEmail" placeholder="email@anda.com" autocomplete="username" required></div>
+      <div class="field"><label>Password</label><input type="password" id="loginPassword" placeholder="••••••••" autocomplete="current-password" required></div>
+      <div id="loginError" style="display:none; color:var(--negative); font-size:12px; margin-bottom:10px;"></div>
+      <button type="submit" class="btn-apply" style="width:100%;">Masuk</button>
     </form>
   </div>
 </div>
 
-<main>
-  <div class="page-title">Import Data Harian</div>
-  <div class="page-desc">Upload file RS (Ringkasan Saham) dari BEI dalam format .xlsx — sistem akan validasi, tampilkan preview, baru disimpan ke database setelah Anda konfirmasi.</div>
+<div class="freshness-bar" id="freshnessBar">
+  <div class="freshness-item"><span class="dot fresh"></span>Memuat status data...</div>
+</div>
 
-  <div class="config-note" id="configNote">
-    ⚙ <b>Setup diperlukan:</b> buka file ini di editor, cari variabel <code>firebaseConfig</code> di bagian bawah (dalam tag <code>&lt;script&gt;</code>), lalu isi dengan konfigurasi project Firebase Anda sebelum di-deploy ke GitHub Pages. Saat ini halaman berjalan dalam <b>mode preview</b> tanpa koneksi database sungguhan.
-  </div>
+<div class="tab-bar">
+  <button class="tab-btn active" id="tabRadarBtn">📡 Radar</button>
+  <button class="tab-btn" id="tabWatchlistBtn">⭐ Watchlist <span id="watchlistCountBadge"></span></button>
+</div>
 
-  <!-- STEP 1: UPLOAD -->
-  <div class="step-card">
-    <div class="step-head">
-      <div class="step-num" id="stepNum1">1</div>
-      <div class="step-title">Pilih File Excel</div>
-    </div>
-    <div class="dropzone" id="dropzone">
-      <div class="dz-icon">📄</div>
-      <div class="dz-text">Seret file ke sini, atau <b>klik untuk pilih file</b></div>
-      <div class="dz-hint">Format .xlsx — struktur kolom RS Harian BEI</div>
-      <input type="file" id="fileInput" accept=".xlsx,.xls">
-    </div>
-    <div id="fileChipWrap"></div>
-  </div>
-
-  <!-- STEP 2: VALIDATE & PREVIEW -->
-  <div class="step-card disabled" id="stepCard2">
-    <div class="step-head">
-      <div class="step-num" id="stepNum2">2</div>
-      <div class="step-title">Validasi &amp; Preview</div>
-    </div>
-    <div id="validationOutput"></div>
-  </div>
-
-  <!-- STEP 3: CONFIRM & SAVE -->
-  <div class="step-card disabled" id="stepCard3">
-    <div class="step-head">
-      <div class="step-num" id="stepNum3">3</div>
-      <div class="step-title">Konfirmasi &amp; Simpan ke Database</div>
-    </div>
-    <div id="overwriteWrap"></div>
-    <div style="display:flex; gap:10px; margin-top:14px;">
-      <button class="btn btn-primary" id="btnSave" disabled>Simpan ke Database</button>
-      <button class="btn btn-ghost" id="btnCancel">Batal</button>
-    </div>
-    <div class="progress-wrap" id="progressWrap">
-      <div class="progress-bar-outer"><div class="progress-bar-inner" id="progressBar"></div></div>
-      <div class="progress-label" id="progressLabel">Menyimpan 0 / 0 saham...</div>
-    </div>
-    <div id="saveResult"></div>
-  </div>
-
-  <!-- STEP 4: ROLLING STATS + KATEGORI -->
-  <div class="step-card" id="stepCard4">
-    <div class="step-head">
-      <div class="step-num" id="stepNum4">4</div>
-      <div class="step-title">Hitung Liquidity + Foreign Score + Kategori</div>
-    </div>
-    <div class="msg-box info">ℹ Berjalan otomatis setelah data tersimpan — menghitung ulang untuk <b>tanggal terbaru di database</b> (bukan cuma tanggal yang baru diupload), supaya kalau Anda upload data lampau (backfill), hasilnya tetap akurat.</div>
-    <div class="field" style="max-width:280px; margin-top:12px;">
-      <label>Harga Minimum per Lembar (Rp)</label>
-      <input type="number" id="minPriceFilter" value="100" min="0" step="10">
-      <div style="font-size:10.5px; color:var(--text-faint); margin-top:6px; line-height:1.5;">Saham di bawah harga ini (biasanya rawan digoreng/likuiditas semu) dibuang sebelum masuk perhitungan kategori.</div>
-    </div>
-    <div class="field-row" style="max-width:560px; margin-top:14px;">
-      <div class="field">
-        <label>Value Rata-rata Minimum (Rp, 20 hari)</label>
-        <input type="number" id="minAvgValueFilter" value="1000000000" min="0" step="100000000">
+<div class="layout" id="mainLayout">
+  <aside>
+    <div class="side-section">
+      <div class="side-section-title">Match Kategori Min.</div>
+      <div class="match-btns">
+        <div class="match-btn" data-val="1">1</div>
+        <div class="match-btn" data-val="2">2</div>
+        <div class="match-btn active" data-val="3">3</div>
+        <div class="match-btn" data-val="4">4</div>
       </div>
-      <div class="field">
-        <label>Frequency Rata-rata Minimum (x, 20 hari)</label>
-        <input type="number" id="minAvgFreqFilter" value="100" min="0" step="10">
+      <div class="match-hint">Hanya tampilkan saham yang memenuhi minimal sekian dari 4 kategori (Volume Breakout, Foreign Uptrend, Big Accum, Bandar Accum).</div>
+    </div>
+
+    <div class="side-section">
+      <div class="side-section-title">Bobot Skor</div>
+      <div class="weight-row">
+        <div class="weight-label"><span class="w-name">Liquidity</span><span class="w-val" id="wv-liq">33%</span></div>
+        <input type="range" min="0" max="100" value="33" class="w-slider" id="w-liq" data-name="liq">
       </div>
+      <div class="weight-row">
+        <div class="weight-label"><span class="w-name">Foreign Accum</span><span class="w-val" id="wv-for">40%</span></div>
+        <input type="range" min="0" max="100" value="40" class="w-slider" id="w-for" data-name="for">
+      </div>
+      <div class="weight-row">
+        <div class="weight-label"><span class="w-name">Technical</span><span class="w-val" id="wv-tec">27%</span></div>
+        <input type="range" min="0" max="100" value="27" class="w-slider" id="w-tec" data-name="tec">
+      </div>
+      <div class="weight-total ok" id="weightTotal">TOTAL 100% — SEIMBANG</div>
     </div>
-    <div style="font-size:10.5px; color:var(--text-faint); margin-top:-6px; margin-bottom:6px; line-height:1.5;">Batas keras likuiditas — saham dengan rata-rata Value/Frequency di bawah ini dibuang total, walau sinyal kategori lain kuat. Ini beda dari Liquidity Score (yang cuma perbandingan relatif antar kandidat).</div>
-    <button class="btn btn-ghost" id="btnRecompute4" style="margin-top:6px;">🔄 Hitung Ulang Sekarang (tanpa upload baru)</button>
-    <div class="progress-wrap" id="progressWrap4">
-      <div class="progress-bar-outer"><div class="progress-bar-inner" id="progressBar4"></div></div>
-      <div class="progress-label" id="progressLabel4">Memproses 0 / 0 saham...</div>
-    </div>
-    <div id="rollingResult"></div>
-  </div>
 
-  <!-- STEP 5: TECHNICAL INDICATOR -->
-  <div class="step-card" id="stepCard5">
-    <div class="step-head">
-      <div class="step-num" id="stepNum5">5</div>
-      <div class="step-title">Update Indikator Teknikal (EMA/MACD/RSI) — dari Yahoo Finance</div>
-    </div>
-    <div class="msg-box info">ℹ Histori harga (untuk hitung EMA/MACD/RSI) ditarik <b>langsung dari Yahoo Finance</b>, bukan dari data upload harian Anda — karena Yahoo sudah punya histori bertahun-tahun, jadi indikator langsung valid tanpa perlu menunggu berbulan-bulan upload. Hanya diambil untuk <b>emiten yang sudah match kategori di Tahap 4</b> (bukan 836 saham), supaya cepat dan hemat.</div>
-    <div class="field" style="max-width:260px; margin-top:12px;">
-      <label>Ambil untuk saham dengan match kategori minimal</label>
-      <input type="number" id="minMatchThreshold" value="2" min="1" max="4" step="1">
-    </div>
-    <button class="btn btn-ghost" id="btnUpdateIndicators" style="margin-top:4px;">🔄 Update Indikator Sekarang</button>
-    <div class="progress-wrap" id="progressWrap5">
-      <div class="progress-bar-outer"><div class="progress-bar-inner" id="progressBar5"></div></div>
-      <div class="progress-label" id="progressLabel5">Memproses 0 / 0 saham...</div>
-    </div>
-    <div id="indicatorResult"></div>
-  </div>
+    <button class="btn-apply" id="btnApply">Terapkan Filter</button>
+    <button class="btn-reset" id="btnReset">Reset ke Default</button>
+    <div class="apply-hint" id="applyHint">Ubah match minimal / bobot di atas, lalu klik <b>Terapkan Filter</b> untuk hitung ulang ranking.</div>
+  </aside>
 
-  <!-- HISTORY -->
-  <div class="history-section">
-    <div class="history-title">Riwayat Upload Terakhir</div>
-    <div class="preview-table-wrap">
-      <table>
-        <thead>
-          <tr><th>Tanggal Data</th><th>Diupload Pukul</th><th>Jumlah Saham</th><th>Status</th></tr>
-        </thead>
-        <tbody id="historyBody">
-          <tr><td colspan="4" style="color:var(--text-faint); font-style:italic;">Belum terhubung ke database — riwayat akan muncul di sini setelah konfigurasi Firebase diisi.</td></tr>
-        </tbody>
-      </table>
+  <main>
+    <div id="radarSection">
+      <div class="main-header">
+        <div>
+          <div class="main-title">On Radar <span class="count" id="radarCount">·</span></div>
+          <div class="main-desc" id="mainDesc">Ranking berdasar jumlah kategori terpenuhi, lalu Total Score sebagai tie-breaker — likuiditas, akumulasi asing, dan momentum teknikal digabung jadi satu.</div>
+          <div id="phaseSummary" style="margin-top:8px; font-size:12px;"></div>
+        </div>
+        <div style="display:flex; flex-direction:column; align-items:flex-end; gap:8px;">
+          <div class="view-toggle">
+            <button class="active" id="sortMatchBtn">Kategori Dulu</button>
+            <button id="sortScoreBtn">Score Dulu</button>
+          </div>
+          <div class="view-toggle">
+            <button class="active" id="viewCardsBtn">Kartu</button>
+            <button id="viewTableBtn">Tabel</button>
+          </div>
+        </div>
+      </div>
+
+      <div id="dashboardContent"><div class="loading-msg">Memuat data...</div></div>
     </div>
-  </div>
-</main>
+
+    <div id="watchlistSection" style="display:none;">
+      <div class="main-header">
+        <div>
+          <div class="main-title">Watchlist <span class="count" id="watchlistCount">·</span></div>
+          <div class="main-desc">Saham yang Anda tandai untuk dipantau — bandingkan kondisi saat ditambahkan vs sekarang, buat uji apakah sinyal radar terbukti akurat.</div>
+        </div>
+      </div>
+      <div id="watchlistContent"><div class="loading-msg">Memuat watchlist...</div></div>
+    </div>
+
+    <footer>Data dari Firestore Anda sendiri — perbarui lewat halaman Import Data.</footer>
+  </main>
+</div>
 
 <script type="module">
-  // ============================================================
-  // KONFIGURASI FIREBASE — GANTI DENGAN PROJECT ANDA SENDIRI
-  // ============================================================
   const firebaseConfig = {
     apiKey: "AIzaSyAlTrAo6MMXjuiiFxdIW58UeaEl4ErMtiI",
     authDomain: "radar-idx-hasira.firebaseapp.com",
@@ -327,17 +328,9 @@
     measurementId: "G-Q45RVTZBBC"
   };
 
-  let db = null;
-  let auth = null;
-  let firestoreFns = null;
-  let authFns = null;
-  let firebaseReady = false;
+  let db = null, auth = null, firestoreFns = null, authFns = null, firebaseReady = false;
 
   async function initFirebase(){
-    if (firebaseConfig.apiKey.startsWith("GANTI")) {
-      console.warn("Firebase belum dikonfigurasi — jalan dalam mode preview tanpa database.");
-      return;
-    }
     try{
       const { initializeApp } = await import("https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js");
       const fs = await import("https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js");
@@ -347,1189 +340,635 @@
       auth = af.getAuth(app);
       firestoreFns = fs;
       authFns = af;
-      document.getElementById('configNote').style.display = 'none';
 
       af.onAuthStateChanged(auth, (user) => {
         if(user){
           firebaseReady = true;
           document.getElementById('loginOverlay').style.display = 'none';
           document.getElementById('userEmailLabel').textContent = user.email;
-          loadUploadHistory();
+          loadDashboard();
         }else{
           firebaseReady = false;
           document.getElementById('loginOverlay').style.display = 'flex';
         }
       });
     }catch(err){
-      console.error("Gagal init Firebase:", err);
-      document.getElementById('loginError').textContent = "Gagal inisialisasi Firebase: " + err.message;
+      console.error('Gagal init Firebase:', err);
+      document.getElementById('loginError').textContent = 'Gagal inisialisasi Firebase: ' + err.message;
+      document.getElementById('loginError').style.display = 'block';
     }
   }
   initFirebase();
 
-  // ============================================================
-  // LOGIN
-  // ============================================================
   document.getElementById('loginForm').addEventListener('submit', async (e) => {
     e.preventDefault();
     const email = document.getElementById('loginEmail').value.trim();
     const password = document.getElementById('loginPassword').value;
     const errEl = document.getElementById('loginError');
-    errEl.textContent = '';
     errEl.style.display = 'none';
-    if(!authFns || !auth){ errEl.textContent = 'Firebase belum siap, coba lagi sesaat.'; errEl.style.display = 'flex'; return; }
     try{
       await authFns.signInWithEmailAndPassword(auth, email, password);
     }catch(err){
       errEl.textContent = 'Login gagal: email atau password salah.';
-      errEl.style.display = 'flex';
-      console.error(err);
+      errEl.style.display = 'block';
     }
   });
+  document.getElementById('btnLogout').addEventListener('click', async () => { if(auth) await authFns.signOut(auth); });
 
-  document.getElementById('btnLogout').addEventListener('click', async () => {
-    if(auth) await authFns.signOut(auth);
+  // ============================================================
+  // STATE
+  // ============================================================
+  let matchThreshold = 3;
+  let weights = { liq: 33, for: 40, tec: 27 };
+  let currentView = 'cards';
+  let sortMode = 'match'; // 'match' = kategori dulu (default), 'score' = score dulu
+  let lastRenderedData = [];
+  let watchlistTickers = new Set(); // ticker yang sudah masuk watchlist, buat status tombol di kartu
+  let currentTab = 'radar';
+
+  document.getElementById('sortMatchBtn').addEventListener('click', () => {
+    sortMode = 'match';
+    document.getElementById('sortMatchBtn').classList.add('active');
+    document.getElementById('sortScoreBtn').classList.remove('active');
+    document.getElementById('mainDesc').textContent = 'Ranking berdasar jumlah kategori terpenuhi, lalu Total Score sebagai tie-breaker — makin banyak sinyal independen setuju, makin diprioritaskan.';
+    renderDashboard(lastRenderedData);
+  });
+  document.getElementById('sortScoreBtn').addEventListener('click', () => {
+    sortMode = 'score';
+    document.getElementById('sortScoreBtn').classList.add('active');
+    document.getElementById('sortMatchBtn').classList.remove('active');
+    document.getElementById('mainDesc').textContent = 'Ranking murni berdasar Total Score (Liquidity+Foreign+Technical digabung) — tidak peduli jumlah kategori, asal masih lolos batas minimal di kiri.';
+    renderDashboard(lastRenderedData);
   });
 
-  // ============================================================
-  // KOLOM WAJIB SESUAI FILE RS HARIAN BEI (jangan diubah urutannya
-  // di sini kecuali struktur file BEI berubah — ini hasil analisa nyata)
-  // ============================================================
-  const REQUIRED_COLUMNS = [
-    "Kode Saham","Nama Perusahaan","Remarks","Sebelumnya","Open Price",
-    "Tanggal Perdagangan Terakhir","First Trade","Tertinggi","Terendah","Penutupan",
-    "Selisih","Volume","Nilai","Frekuensi","Index Individual","Offer","Offer Volume",
-    "Bid","Bid Volume","Listed Shares","Tradeble Shares","Weight For Index",
-    "Foreign Sell","Foreign Buy","Non Regular Volume","Non Regular Value","Non Regular Frequency"
-  ];
-
-  const MONTH_MAP = { Jan:"01", Feb:"02", Mar:"03", Apr:"04", Mei:"05", Jun:"06",
-    Jul:"07", Agt:"08", Sep:"09", Okt:"10", Nov:"11", Des:"12" };
-
-  function parseIndoDate(str){
-    // format contoh: "12 Agt 2026"
-    if(!str) return null;
-    const parts = String(str).trim().split(/\s+/);
-    if(parts.length !== 3) return null;
-    const [d, mon, y] = parts;
-    const mm = MONTH_MAP[mon];
-    if(!mm) return null;
-    return `${y}-${mm}-${d.padStart(2,'0')}`;
-  }
-
-  function num(v){
-    const n = typeof v === 'number' ? v : parseFloat(v);
-    return isNaN(n) ? 0 : n;
-  }
-
-  let parsedRows = [];
-  let detectedDate = null;
-  let dateAlreadyExists = false;
-  let overwriteConfirmed = false;
-
-  // ============================================================
-  // STEP 1: FILE HANDLING
-  // ============================================================
-  const dropzone = document.getElementById('dropzone');
-  const fileInput = document.getElementById('fileInput');
-
-  dropzone.addEventListener('click', () => fileInput.click());
-  dropzone.addEventListener('dragover', e => { e.preventDefault(); dropzone.classList.add('dragover'); });
-  dropzone.addEventListener('dragleave', () => dropzone.classList.remove('dragover'));
-  dropzone.addEventListener('drop', e => {
-    e.preventDefault(); dropzone.classList.remove('dragover');
-    if(e.dataTransfer.files.length) handleFile(e.dataTransfer.files[0]);
-  });
-  fileInput.addEventListener('change', e => { if(e.target.files.length) handleFile(e.target.files[0]); });
-
-  function handleFile(file){
-    document.getElementById('fileChipWrap').innerHTML = `
-      <div class="file-chip">
-        <span class="fname">${file.name}</span>
-        <span class="remove" id="removeFile">✕ Hapus</span>
-      </div>`;
-    document.getElementById('removeFile').addEventListener('click', resetAll);
-    document.getElementById('stepNum1').classList.add('done');
-
-    const reader = new FileReader();
-    reader.onload = (e) => {
-      try{
-        const data = new Uint8Array(e.target.result);
-        const wb = XLSX.read(data, { type: 'array' });
-        const sheetName = wb.SheetNames[0];
-        const ws = wb.Sheets[sheetName];
-        const rows = XLSX.utils.sheet_to_json(ws, { defval: null });
-        validateAndPreview(rows);
-      }catch(err){
-        showValidationError("Gagal membaca file: " + err.message);
-      }
-    };
-    reader.readAsArrayBuffer(file);
-  }
-
-  function resetAll(){
-    parsedRows = []; detectedDate = null; dateAlreadyExists = false; overwriteConfirmed = false;
-    document.getElementById('fileChipWrap').innerHTML = '';
-    document.getElementById('stepNum1').classList.remove('done');
-    document.getElementById('stepNum2').classList.remove('done');
-    document.getElementById('stepCard2').classList.add('disabled');
-    document.getElementById('stepCard3').classList.add('disabled');
-    document.getElementById('validationOutput').innerHTML = '';
-    document.getElementById('overwriteWrap').innerHTML = '';
-    document.getElementById('saveResult').innerHTML = '';
-    document.getElementById('btnSave').disabled = true;
-    fileInput.value = '';
-  }
-  document.getElementById('btnCancel').addEventListener('click', resetAll);
-
-  // ============================================================
-  // STEP 2: VALIDATION & PREVIEW
-  // ============================================================
-  function validateAndPreview(rows){
-    const out = document.getElementById('validationOutput');
-    out.innerHTML = '';
-
-    if(!rows.length){
-      showValidationError("File terbaca tapi tidak ada baris data.");
-      return;
-    }
-
-    // cek kolom wajib ada semua — tidak mengarang kolom
-    const actualCols = Object.keys(rows[0]);
-    const missing = REQUIRED_COLUMNS.filter(c => !actualCols.includes(c));
-    if(missing.length){
-      showValidationError("Kolom berikut tidak ditemukan di file — cek apakah struktur file berubah:<br>" +
-        missing.map(m => `<code>${m}</code>`).join(", "));
-      return;
-    }
-
-    // parse & hitung derived fields
-    parsedRows = rows.map(r => {
-      const sebelumnya = num(r["Sebelumnya"]);
-      const volume = num(r["Volume"]);
-      const nilai = num(r["Nilai"]);
-      const foreignBuy = num(r["Foreign Buy"]);
-      const foreignSell = num(r["Foreign Sell"]);
-      const nonRegValue = num(r["Non Regular Value"]);
-      const listedShares = num(r["Listed Shares"]);
-      const penutupan = num(r["Penutupan"]);
-
-      return {
-        ticker: String(r["Kode Saham"] || "").trim(),
-        companyName: String(r["Nama Perusahaan"] || "").trim(),
-        remarks: r["Remarks"] || "",
-        prevClose: sebelumnya,
-        open: num(r["Open Price"]),
-        tradingDateRaw: r["Tanggal Perdagangan Terakhir"],
-        firstTrade: num(r["First Trade"]),
-        high: num(r["Tertinggi"]),
-        low: num(r["Terendah"]),
-        close: penutupan,
-        change: num(r["Selisih"]),
-        changePct: sebelumnya !== 0 ? (num(r["Selisih"]) / sebelumnya) * 100 : 0,
-        volume: volume,
-        value: nilai,
-        frequency: num(r["Frekuensi"]),
-        indexIndividual: num(r["Index Individual"]),
-        offer: num(r["Offer"]),
-        offerVolume: num(r["Offer Volume"]),
-        bid: num(r["Bid"]),
-        bidVolume: num(r["Bid Volume"]),
-        listedShares: listedShares,
-        tradeableShares: num(r["Tradeble Shares"]),
-        weightForIndex: num(r["Weight For Index"]),
-        foreignBuy: foreignBuy,
-        foreignSell: foreignSell,
-        foreignNet: foreignBuy - foreignSell,
-        nonRegVolume: num(r["Non Regular Volume"]),
-        nonRegValue: nonRegValue,
-        nonRegFrequency: num(r["Non Regular Frequency"]),
-        nonRegRatio: nilai !== 0 ? (nonRegValue / nilai) * 100 : 0,
-        marketCapProxy: listedShares * penutupan,
-        isActive: volume > 0,
-      };
-    }).filter(r => r.ticker); // buang baris kosong kalau ada
-
-    // deteksi tanggal (harus konsisten 1 tanggal per file)
-    const uniqueDates = [...new Set(parsedRows.map(r => parseIndoDate(r.tradingDateRaw)))].filter(Boolean);
-    const warnings = [];
-    const errors = [];
-
-    if(uniqueDates.length === 0){
-      errors.push("Tidak bisa membaca tanggal dari kolom 'Tanggal Perdagangan Terakhir'. Cek format tanggal di file.");
-    } else if(uniqueDates.length > 1){
-      warnings.push(`Ditemukan ${uniqueDates.length} tanggal berbeda dalam 1 file (${uniqueDates.join(', ')}). Biasanya file RS harian hanya berisi 1 tanggal — pastikan file ini benar.`);
-    }
-    detectedDate = uniqueDates[0] || null;
-
-    if(parsedRows.length < 800 || parsedRows.length > 1100){
-      warnings.push(`Jumlah baris (${parsedRows.length}) di luar rentang wajar (800-1100 saham). Cek apakah file lengkap.`);
-    }
-
-    const zeroVolumeCount = parsedRows.filter(r => r.volume === 0).length;
-    const zeroOpenCount = parsedRows.filter(r => r.open === 0).length;
-
-    if(errors.length){
-      showValidationError(errors.join("<br>"));
-      return;
-    }
-
-    // render summary stats
-    let html = `<div class="stat-row">
-      <div class="stat-box ok"><div class="label">Jumlah Saham</div><div class="value">${parsedRows.length}</div></div>
-      <div class="stat-box ${uniqueDates.length===1?'ok':'warn'}"><div class="label">Tanggal Terdeteksi</div><div class="value">${detectedDate || '—'}</div></div>
-      <div class="stat-box"><div class="label">Volume = 0 (Suspend?)</div><div class="value">${zeroVolumeCount}</div></div>
-      <div class="stat-box"><div class="label">Open = 0</div><div class="value">${zeroOpenCount}</div></div>
-    </div>`;
-
-    warnings.forEach(w => { html += `<div class="msg-box warning">⚠ ${w}</div>`; });
-    if(!warnings.length) html += `<div class="msg-box success">✓ Data lolos validasi dasar, siap di-preview.</div>`;
-
-    // preview table — top 10 by value
-    const preview = [...parsedRows].sort((a,b) => b.value - a.value).slice(0, 10);
-    html += `<div class="preview-table-wrap"><table><thead><tr>
-      <th>Ticker</th><th>Nama</th><th>Close</th><th>Change%</th><th>Value</th><th>Volume</th><th>Foreign Net</th>
-    </tr></thead><tbody>`;
-    preview.forEach(r => {
-      html += `<tr>
-        <td>${r.ticker}</td>
-        <td style="font-family:'Inter'; font-size:11.5px; color:var(--text-dim);">${r.companyName}</td>
-        <td>${r.close.toLocaleString('id-ID')}</td>
-        <td class="${r.changePct>=0?'pos':'neg'}">${r.changePct>=0?'+':''}${r.changePct.toFixed(2)}%</td>
-        <td>${r.value.toLocaleString('id-ID')}</td>
-        <td>${r.volume.toLocaleString('id-ID')}</td>
-        <td class="${r.foreignNet>=0?'pos':'neg'}">${r.foreignNet.toLocaleString('id-ID')}</td>
-      </tr>`;
+  // match kategori buttons
+  document.querySelectorAll('.match-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      document.querySelectorAll('.match-btn').forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+      matchThreshold = parseInt(btn.dataset.val, 10);
+      markPending();
     });
-    html += `</tbody></table></div>
-    <div class="preview-note">Menampilkan 10 saham teratas berdasarkan Value sebagai contoh — seluruh ${parsedRows.length} saham akan disimpan.</div>`;
+  });
 
-    out.innerHTML = html;
-    document.getElementById('stepNum2').classList.add('done');
-    document.getElementById('stepCard2').classList.remove('disabled');
-    document.getElementById('stepCard3').classList.remove('disabled');
+  // weight sliders
+  const sliders = document.querySelectorAll('.w-slider');
+  const totalEl = document.getElementById('weightTotal');
+  const applyBtn = document.getElementById('btnApply');
+  const applyHint = document.getElementById('applyHint');
 
-    checkExistingDateAndPrepareStep3();
+  function refreshWeights(){
+    let total = 0;
+    sliders.forEach(s => {
+      const val = parseInt(s.value, 10);
+      total += val;
+      document.getElementById('wv-' + s.dataset.name).textContent = val + '%';
+      weights[s.dataset.name] = val;
+    });
+    totalEl.textContent = 'TOTAL ' + total + '%' + (total === 100 ? ' — SEIMBANG' : total > 100 ? ' — TERLALU TINGGI' : ' — KURANG DARI 100');
+    totalEl.classList.toggle('ok', total === 100);
+    markPending();
+  }
+  function markPending(){
+    applyBtn.classList.add('pending');
+    applyHint.innerHTML = 'Ada perubahan belum diterapkan. Klik <b>Terapkan Filter</b> untuk hitung ulang ranking.';
+  }
+  sliders.forEach(s => s.addEventListener('input', refreshWeights));
+
+  document.getElementById('btnApply').addEventListener('click', () => {
+    applyBtn.classList.remove('pending');
+    applyHint.innerHTML = 'Filter diterapkan.';
+    renderDashboard(lastRenderedData);
+  });
+
+  document.getElementById('btnReset').addEventListener('click', () => {
+    matchThreshold = 3;
+    weights = { liq: 33, for: 40, tec: 27 };
+    document.querySelectorAll('.match-btn').forEach(b => b.classList.toggle('active', b.dataset.val === '3'));
+    document.getElementById('w-liq').value = 33; document.getElementById('wv-liq').textContent = '33%';
+    document.getElementById('w-for').value = 40; document.getElementById('wv-for').textContent = '40%';
+    document.getElementById('w-tec').value = 27; document.getElementById('wv-tec').textContent = '27%';
+    totalEl.textContent = 'TOTAL 100% — SEIMBANG'; totalEl.classList.add('ok');
+    applyBtn.classList.remove('pending');
+    applyHint.innerHTML = 'Ubah match minimal / bobot di atas, lalu klik <b>Terapkan Filter</b> untuk hitung ulang ranking.';
+    loadDashboard();
+  });
+
+  document.getElementById('viewCardsBtn').addEventListener('click', () => { currentView = 'cards'; toggleViewBtns(); renderDashboard(lastRenderedData); });
+  document.getElementById('viewTableBtn').addEventListener('click', () => { currentView = 'table'; toggleViewBtns(); renderDashboard(lastRenderedData); });
+  function toggleViewBtns(){
+    document.getElementById('viewCardsBtn').classList.toggle('active', currentView === 'cards');
+    document.getElementById('viewTableBtn').classList.toggle('active', currentView === 'table');
   }
 
-  function showValidationError(msg){
-    document.getElementById('validationOutput').innerHTML = `<div class="msg-box error">✕ ${msg}</div>`;
-    document.getElementById('stepCard2').classList.remove('disabled');
-    document.getElementById('stepCard3').classList.add('disabled');
-  }
-
-  // ============================================================
-  // STEP 3: CHECK DUPLICATE DATE & SAVE
-  // ============================================================
-  async function checkExistingDateAndPrepareStep3(){
-    const wrap = document.getElementById('overwriteWrap');
-    const btnSave = document.getElementById('btnSave');
-
-    if(!firebaseReady){
-      wrap.innerHTML = `<div class="msg-box info">ℹ Mode preview — belum terhubung ke Firestore, tombol simpan dinonaktifkan sampai <code>firebaseConfig</code> diisi.</div>`;
-      btnSave.disabled = true;
-      return;
-    }
-
-    const { doc, getDoc } = firestoreFns;
-    const metaRef = doc(db, 'dailySummary', detectedDate);
-    const metaSnap = await getDoc(metaRef);
-    dateAlreadyExists = metaSnap.exists();
-
-    if(dateAlreadyExists){
-      wrap.innerHTML = `<div class="overwrite-box">
-        <input type="checkbox" id="confirmOverwrite">
-        <div>
-          <label for="confirmOverwrite">Tanggal <b>${detectedDate}</b> sudah ada di database (${metaSnap.data().stockCount || '?'} saham). Timpa data ini?</label>
-          <div class="sub">Data lama untuk tanggal ini akan digantikan dengan data dari file yang baru diupload.</div>
-        </div>
-      </div>`;
-      document.getElementById('confirmOverwrite').addEventListener('change', e => {
-        overwriteConfirmed = e.target.checked;
-        btnSave.disabled = !overwriteConfirmed;
-      });
-      btnSave.disabled = true;
-    }else{
-      wrap.innerHTML = `<div class="msg-box success">✓ Tanggal ${detectedDate} belum ada di database — siap disimpan sebagai data baru.</div>`;
-      btnSave.disabled = false;
-    }
-  }
-
-  document.getElementById('btnSave').addEventListener('click', saveToFirestore);
-
-  async function saveToFirestore(){
-    if(!firebaseReady || !parsedRows.length || !detectedDate) return;
-    const btnSave = document.getElementById('btnSave');
-    btnSave.disabled = true;
-    document.getElementById('progressWrap').style.display = 'block';
-
-    const { doc, writeBatch, setDoc, collection, serverTimestamp } = firestoreFns;
-    const CHUNK_SIZE = 200; // ~200 stocks x 2 writes = 400 ops per batch, aman di bawah limit 500
-    const total = parsedRows.length;
-    let done = 0;
-
-    try{
-      for(let i = 0; i < total; i += CHUNK_SIZE){
-        const chunk = parsedRows.slice(i, i + CHUNK_SIZE);
-        const batch = writeBatch(db);
-        chunk.forEach(r => {
-          const rowWithDate = { ...r, date: detectedDate };
-          const dailyRef = doc(db, 'dailySummary', detectedDate, 'stocks', r.ticker);
-          batch.set(dailyRef, rowWithDate);
-          const histRef = doc(db, 'tickerHistory', r.ticker, 'days', detectedDate);
-          batch.set(histRef, rowWithDate);
-        });
-        await batch.commit();
-        done += chunk.length;
-        updateProgress(done, total);
-      }
-
-      // meta doc
-      await setDoc(doc(db, 'dailySummary', detectedDate), {
-        tradingDate: detectedDate,
-        uploadedAt: serverTimestamp(),
-        stockCount: total,
-      });
-
-      // log riwayat
-      await setDoc(doc(collection(db, 'uploadHistory')), {
-        tradingDate: detectedDate,
-        uploadedAt: serverTimestamp(),
-        stockCount: total,
-        overwritten: dateAlreadyExists,
-      });
-
-      document.getElementById('saveResult').innerHTML =
-        `<div class="msg-box success">✓ Berhasil menyimpan ${total} saham untuk tanggal ${detectedDate}.</div>`;
-      loadUploadHistory();
-
-      // Tahap 4: hitung ulang Liquidity + Foreign + Kategori untuk tanggal terbaru di database
-      computeRollingStats();
-    }catch(err){
-      document.getElementById('saveResult').innerHTML =
-        `<div class="msg-box error">✕ Gagal menyimpan: ${err.message}</div>`;
-      btnSave.disabled = false;
-    }
-  }
-
-  function updateProgress(done, total){
-    const pct = Math.round((done/total)*100);
-    document.getElementById('progressBar').style.width = pct + '%';
-    document.getElementById('progressLabel').textContent = `Menyimpan ${done} / ${total} saham... (${pct}%)`;
-  }
-
-  // ============================================================
-  // TAHAP 4: LIQUIDITY SCORE + FOREIGN SCORE + 4 KATEGORI
-  // Dihitung untuk TANGGAL TERBARU di database (bukan tanggal yang
-  // baru diupload) — supaya backfill data lampau tetap akurat.
-  // ============================================================
-
-  function updateProgress4(done, total, label){
-    const pct = total ? Math.round((done/total)*100) : 0;
-    document.getElementById('progressBar4').style.width = pct + '%';
-    document.getElementById('progressLabel4').textContent = `${label || 'Memproses'} ${done} / ${total} saham... (${pct}%)`;
-  }
-
-  function fmtValue(v){
-    if(v==null) return '-';
-    const sign = v < 0 ? '-' : '';
-    const abs = Math.abs(v);
-    if(abs >= 1e12) return sign + 'Rp ' + (abs/1e12).toFixed(1) + ' T';
-    if(abs >= 1e9) return sign + 'Rp ' + (abs/1e9).toFixed(1) + ' M';
-    if(abs >= 1e6) return sign + 'Rp ' + (abs/1e6).toFixed(1) + ' Jt';
-    return sign + 'Rp ' + abs.toLocaleString('id-ID');
-  }
-
-  function percentileRank(arr, value){
-    if(!arr.length || arr.length <= 1) return 50; // netral kalau peer terlalu sedikit
-    const countLE = arr.filter(v => v <= value).length;
-    return (countLE / arr.length) * 100;
-  }
-
-  // batasi jumlah request paralel ke Firestore supaya browser & kuota aman
   async function runWithConcurrency(items, limit, worker){
     const results = new Array(items.length);
-    let idx = 0;
-    let errorCount = 0;
-    let firstError = null;
+    let idx = 0, errorCount = 0, firstError = null;
     async function next(){
       while(idx < items.length){
         const cur = idx++;
-        try{
-          results[cur] = await worker(items[cur], cur);
-        }catch(err){
-          errorCount++;
-          if(!firstError) firstError = err;
-          console.error('Gagal proses item', items[cur], err);
-          results[cur] = null;
-        }
+        try{ results[cur] = await worker(items[cur], cur); }
+        catch(err){ errorCount++; if(!firstError) firstError = err; results[cur] = null; }
       }
     }
-    const runners = Array.from({ length: Math.min(limit, items.length) }, next);
-    await Promise.all(runners);
+    await Promise.all(Array.from({ length: Math.min(limit, items.length) }, next));
     return { results, errorCount, firstError };
   }
 
-  document.getElementById('btnRecompute4').addEventListener('click', computeRollingStats);
-
-  async function computeRollingStats(){
+  // ============================================================
+  // LOAD DATA
+  // ============================================================
+  async function loadDashboard(){
     if(!firebaseReady) return;
-    const { collection, query, orderBy, limit, getDocs, getDoc, doc, setDoc, deleteDoc } = firestoreFns;
-    const out = document.getElementById('rollingResult');
-    out.innerHTML = '';
-    document.getElementById('progressWrap4').style.display = 'block';
-    document.getElementById('btnRecompute4').disabled = true;
+    const content = document.getElementById('dashboardContent');
+    content.innerHTML = `<div class="loading-msg">Memuat kandidat radar...</div>`;
+
+    const { collection, query, where, getDocs, doc, getDoc } = firestoreFns;
 
     try{
-      // 1. cari tanggal terbaru yang ada di database (bukan tanggal upload terakhir)
-      const metaQ = query(collection(db, 'dailySummary'), orderBy('tradingDate', 'desc'), limit(1));
-      const metaSnap = await getDocs(metaQ);
-      if(metaSnap.empty){
-        out.innerHTML = `<div class="msg-box error">✕ Tidak ada data di dailySummary.</div>`;
-        return;
-      }
-      const latestDate = metaSnap.docs[0].data().tradingDate;
-      const warnings = [];
+      // 0. ambil daftar ticker yang sudah di watchlist (buat status tombol di tiap kartu)
+      const wlSnap = await getDocs(collection(db, 'watchlist'));
+      watchlistTickers = new Set(wlSnap.docs.map(d => d.id));
+      updateWatchlistCountBadge(wlSnap.size);
 
-      // 2. ambil seluruh saham untuk tanggal terbaru itu
-      const stocksSnap = await getDocs(collection(db, 'dailySummary', latestDate, 'stocks'));
-      const latestRows = stocksSnap.docs.map(d => d.data());
-
-      // 3. universe kandidat = saham aktif (volume>0) DAN harga >= minimum (buang saham gocap/likuiditas semu)
-      const minPrice = parseFloat(document.getElementById('minPriceFilter').value) || 0;
-      const belowMinPrice = latestRows.filter(r => r.isActive && r.close < minPrice).length;
-      const candidates = latestRows.filter(r => r.isActive && r.close >= minPrice);
-      updateProgress4(0, candidates.length, 'Mengambil histori');
-
-      // 4. ambil s.d. 20 hari histori terakhir per ticker kandidat (paralel dibatasi)
-      let fetched = 0;
-      const { results: historyResults, errorCount: fetchErrors, firstError: fetchFirstError } =
-        await runWithConcurrency(candidates, 15, async (row) => {
-          const q = query(
-            collection(db, 'tickerHistory', row.ticker, 'days'),
-            orderBy('date', 'desc'),
-            limit(20)
-          );
-          const snap = await getDocs(q);
-          fetched++;
-          updateProgress4(fetched, candidates.length, 'Mengambil histori');
-          return { ticker: row.ticker, days: snap.docs.map(d => d.data()) }; // days[0] = paling baru
-        });
-
-      if(fetchErrors > 0){
-        warnings.push(`⚠ ${fetchErrors} saham gagal diambil histori-nya (dilewati, tidak menghentikan proses). Contoh error: ${fetchFirstError ? fetchFirstError.message : '-'}`);
-      }
-
-      const historyMap = {};
-      historyResults.forEach(h => { if(h) historyMap[h.ticker] = h.days; });
-
-    // 5. hitung metrik mentah per ticker
-    let raw = candidates.map(row => {
-      const days = historyMap[row.ticker] || [row];
-      const daysAvailable = days.length;
-
-      // --- Liquidity (s.d. 20 hari) ---
-      const values = days.map(d => d.value || 0);
-      const freqs = days.map(d => d.frequency || 0);
-      const avgValue20d = values.reduce((a,b)=>a+b,0) / daysAvailable;
-      const avgFreq20d = freqs.reduce((a,b)=>a+b,0) / daysAvailable;
-      const meanV = avgValue20d;
-      const stddevV = Math.sqrt(values.reduce((s,v)=>s+Math.pow(v-meanV,2),0) / daysAvailable);
-      const covValue = meanV !== 0 ? stddevV / meanV : 0;
-      const spreadPct = row.bid > 0 ? ((row.offer - row.bid) / row.bid) * 100 : null;
-
-      // --- window 10 hari: KONTEKS PEMBANDING SAJA, tidak dipakai untuk kategori/filter ---
-      // Tujuannya: bedakan "beneran distribusi/kehabisan tenaga" vs "cuma kalah di window 3 hari
-      // yang cepat, padahal masih ada tren naik lebih panjang".
-      const w10 = days.slice(0, Math.min(10, days.length));
-      let foreignNet10d = null, foreignNetValue10d = null, priceChange10d = null;
-      const daysUsed10d = w10.length;
-      if(w10.length >= 2){
-        foreignNet10d = w10.reduce((a,d) => a + ((d.foreignBuy||0) - (d.foreignSell||0)), 0);
-        foreignNetValue10d = foreignNet10d * (row.close || 0);
-        const oldestClose10 = w10[w10.length - 1].close;
-        priceChange10d = oldestClose10 ? ((row.close - oldestClose10) / oldestClose10) * 100 : null;
-      }
-
-      // --- window 3 hari (foreign + bandar + distribusi), null kalau kurang dari 3 hari ---
-      const w3 = days.slice(0, 3); // [terbaru, kemarin, 2 hari lalu]
-      const has3 = w3.length === 3;
-      let foreignNet3d = null, foreignRatio3d = null, consecutiveNetBuy = null, accel = null;
-      let volumeBreakout = null, foreignUptrend = null, bandarAccum = null, distributionWarning = null;
-
-      if(has3){
-        const nets = w3.map(d => (d.foreignBuy||0) - (d.foreignSell||0)); // [terbaru..lama]
-        const vols = w3.map(d => d.volume || 0);
-        foreignNet3d = nets.reduce((a,b)=>a+b,0);
-        const totalVol3d = vols.reduce((a,b)=>a+b,0);
-        foreignRatio3d = totalVol3d !== 0 ? (foreignNet3d / totalVol3d) * 100 : 0;
-
-        // consecutive net buy days (dari yang terbaru mundur)
-        consecutiveNetBuy = 0;
-        for(const n of nets){ if(n > 0) consecutiveNetBuy++; else break; }
-
-        // acceleration: net hari terbaru - net 2 hari lalu (urutan nets = [terbaru, tengah, lama])
-        accel = nets[0] - nets[2];
-
-        // Foreign Flow Uptrend: naik berurutan dari lama->baru, kumulatif positif
-        const ascNets = [...nets].reverse(); // [lama, tengah, terbaru]
-        const monotonicUp = ascNets[1] >= ascNets[0] && ascNets[2] >= ascNets[1];
-        const ratioOldest = vols[2] !== 0 ? (nets[2]/vols[2])*100 : 0;
-        const ratioNewest = vols[0] !== 0 ? (nets[0]/vols[0])*100 : 0;
-        foreignUptrend = monotonicUp && foreignNet3d > 0 && ratioNewest > ratioOldest;
-
-        // Bandar Accumulation: sideways + volume naik + bid dominan + closing kuat
-        const highs = w3.map(d => d.high || 0);
-        const lows = w3.map(d => d.low || 0);
-        const rangePct = row.close !== 0 ? ((Math.max(...highs) - Math.min(...lows)) / row.close) * 100 : 999;
-        const volIncreasing = vols[0] > ((vols[1] + vols[2]) / 2);
-        const bidDominantDays = w3.filter(d => (d.bidVolume||0) > (d.offerVolume||0)).length;
-        const offerDominantDays = w3.filter(d => (d.offerVolume||0) > (d.bidVolume||0)).length;
-        const closingStrengths = w3.map(d => {
-          const range = (d.high||0) - (d.low||0);
-          return range > 0 ? ((d.close||0) - (d.low||0)) / range : 0.5;
-        });
-        const avgClosingStrength = closingStrengths.reduce((a,b)=>a+b,0) / closingStrengths.length;
-        bandarAccum = rangePct <= 8 && volIncreasing && bidDominantDays >= 2 && avgClosingStrength >= 0.6;
-
-        // Distribution Warning: kebalikan dari Bandar Accum — offer dominan, closing lemah, volume tetap ramai
-        distributionWarning = offerDominantDays >= 2 && avgClosingStrength <= 0.4 && volIncreasing;
-      }
-
-      // --- Volume Breakout (butuh histori selain hari ini) ---
-      if(daysAvailable >= 2){
-        const priorDays = days.slice(1); // exclude hari terbaru
-        const avgVolPrior = priorDays.reduce((a,d)=>a+(d.volume||0),0) / priorDays.length;
-        const volumeRatio = avgVolPrior !== 0 ? row.volume / avgVolPrior : 0;
-        const range = (row.high||0) - (row.low||0);
-        const closePos = range > 0 ? ((row.close||0) - (row.low||0)) / range : 0.5;
-        volumeBreakout = volumeRatio >= 2.0 && row.changePct >= 3 && closePos >= 0.7;
-      }
-
-      return {
-        ticker: row.ticker, companyName: row.companyName, daysAvailable,
-        avgValue20d, avgFreq20d, spreadPct, covValue,
-        foreignNet3d, foreignRatio3d, consecutiveNetBuy, accel,
-        volumeBreakout, foreignUptrend, bandarAccum, distributionWarning,
-        foreignNet10d, foreignNetValue10d, priceChange10d, daysUsed10d,
-        row,
-      };
-    });
-
-    // 5b. HARD FILTER likuiditas — beda dari Liquidity Score (yang cuma perbandingan relatif).
-    // Ini batas mutlak: saham di bawah ini dibuang total, tidak peduli sinyal kategori lain sekuat apapun.
-    const minAvgValue = parseFloat(document.getElementById('minAvgValueFilter').value) || 0;
-    const minAvgFreq = parseFloat(document.getElementById('minAvgFreqFilter').value) || 0;
-    const belowLiquidity = raw.filter(r => r.avgValue20d < minAvgValue || r.avgFreq20d < minAvgFreq).length;
-    const rawBeforeLiquidityFilter = raw.length;
-    raw = raw.filter(r => r.avgValue20d >= minAvgValue && r.avgFreq20d >= minAvgFreq);
-
-    // 6. Big Accumulation: percentile rank Foreign Net Value 3D relatif ke seluruh kandidat
-    const rankableForeign = raw.filter(r => r.foreignNet3d !== null);
-    const foreignValueList = rankableForeign.map(r => r.foreignNet3d * (r.row.close||0));
-    raw.forEach(r => {
-      if(r.foreignNet3d === null){ r.bigAccum = null; r.foreignNetValue3d = null; return; }
-      const val = r.foreignNet3d * (r.row.close||0);
-      const pct = percentileRank(foreignValueList, val);
-      r.bigAccum = pct >= 80; // top ~20%
-      r.bigAccumPercentile = pct;
-      r.foreignNetValue3d = val; // estimasi nilai Rupiah net beli asing 3 hari (net lembar x harga close terbaru)
-    });
-
-    // 7. Liquidity & Foreign Score (percentile rank antar kandidat)
-    const valueList = raw.map(r => r.avgValue20d);
-    const freqList = raw.map(r => r.avgFreq20d);
-    const spreadList = raw.filter(r=>r.spreadPct!==null).map(r => -r.spreadPct);
-    const covList = raw.map(r => -r.covValue);
-    const ratioList = rankableForeign.map(r => r.foreignRatio3d);
-    const accelList = rankableForeign.map(r => r.accel);
-
-    raw.forEach(r => {
-      const liqScore =
-        0.40 * percentileRank(valueList, r.avgValue20d) +
-        0.25 * percentileRank(freqList, r.avgFreq20d) +
-        0.20 * (r.spreadPct!==null ? percentileRank(spreadList, -r.spreadPct) : 50) +
-        0.15 * percentileRank(covList, -r.covValue);
-      r.liquidityScore = Math.round(liqScore);
-
-      if(r.foreignNet3d !== null){
-        const forScore =
-          0.50 * percentileRank(ratioList, r.foreignRatio3d) +
-          0.30 * ((Math.min(r.consecutiveNetBuy,3)/3) * 100) +
-          0.20 * percentileRank(accelList, r.accel);
-        r.foreignScore = Math.round(forScore);
-      } else {
-        r.foreignScore = null;
-      }
-
-      // Total Score sementara (baru Liquidity+Foreign, Technical & Fundamental menyusul di tahap lain)
-      const pillars = [{w:25, s:r.liquidityScore}, {w:30, s:r.foreignScore}].filter(p => p.s !== null);
-      const totalW = pillars.reduce((a,p)=>a+p.w,0);
-      r.totalScorePartial = totalW ? Math.round(pillars.reduce((a,p)=>a+p.w*p.s,0)/totalW) : null;
-
-      // match count kategori (distributionWarning TIDAK dihitung — itu warning, bukan sinyal masuk)
-      const cats = [r.volumeBreakout, r.foreignUptrend, r.bigAccum, r.bandarAccum];
-      r.matchCount = cats.filter(c => c === true).length;
-      r.categoryFlags = {
-        volumeBreakout: r.volumeBreakout, foreignUptrend: r.foreignUptrend,
-        bigAccum: r.bigAccum, bandarAccum: r.bandarAccum,
-      };
-    });
-
-    // 8. simpan ke tickerRollingStats/{ticker}
-    let saved = 0;
-    const { errorCount: saveErrors, firstError: saveFirstError } = await runWithConcurrency(raw, 15, async (r) => {
-      await setDoc(doc(db, 'tickerRollingStats', r.ticker), {
-        ticker: r.ticker,
-        companyName: r.companyName,
-        date: latestDate,
-        daysAvailable: r.daysAvailable,
-        avgValue20d: r.avgValue20d,
-        avgFreq20d: r.avgFreq20d,
-        spreadPct: r.spreadPct,
-        liquidityScore: r.liquidityScore,
-        foreignNet3d: r.foreignNet3d,
-        foreignNetValue3d: r.foreignNetValue3d,
-        foreignRatio3d: r.foreignRatio3d,
-        consecutiveNetBuy: r.consecutiveNetBuy,
-        foreignScore: r.foreignScore,
-        totalScorePartial: r.totalScorePartial,
-        categories: r.categoryFlags,
-        matchCount: r.matchCount,
-        distributionWarning: r.distributionWarning,
-        foreignNet10d: r.foreignNet10d,
-        foreignNetValue10d: r.foreignNetValue10d,
-        priceChange10d: r.priceChange10d,
-        daysUsed10d: r.daysUsed10d,
-        updatedAt: new Date().toISOString(),
-      });
-      saved++;
-      updateProgress4(saved, raw.length, 'Menyimpan hasil');
-    });
-    if(saveErrors > 0){
-      warnings.push(`⚠ ${saveErrors} saham gagal disimpan hasilnya. Contoh error: ${saveFirstError ? saveFirstError.message : '-'}`);
-    }
-
-    // 8b. bersihkan data lama: ticker yang dulu pernah jadi kandidat tapi sekarang
-    // sudah tidak lolos filter (harga di bawah minimum, atau jadi tidak aktif) —
-    // supaya tidak nyangkut selamanya di tickerRollingStats dan tetap muncul di Dashboard
-    updateProgress4(0, 1, 'Membersihkan data lama');
-    const currentTickerSet = new Set(raw.map(r => r.ticker));
-    const allRollingStatsSnap = await getDocs(collection(db, 'tickerRollingStats'));
-    const staleDocs = allRollingStatsSnap.docs.filter(d => !currentTickerSet.has(d.id));
-    let removed = 0;
-    if(staleDocs.length){
-      const { errorCount: removeErrors } = await runWithConcurrency(staleDocs, 15, async (d) => {
-        await deleteDoc(doc(db, 'tickerRollingStats', d.id));
-        removed++;
-        updateProgress4(removed, staleDocs.length, 'Membersihkan data lama');
-      });
-      if(removeErrors > 0){
-        warnings.push(`⚠ Sebagian data lama gagal dibersihkan (tidak fatal, coba jalankan ulang).`);
-      }
-    }
-
-    // 8c. auto-tambah ke Watchlist — kandidat dengan match \u22653 kategori ATAU sudah dapat
-    // fase "Tahap Awal" (Bandar Accum aktif, belum breakout). Tujuannya: supaya sinyal kuat
-    // tetap terekam untuk dipantau meski besok hilang dari radar utama (celah transisi kategori).
-    const autoWatchlistCandidates = raw.filter(r => {
-      const earlyStage = r.bandarAccum === true && r.volumeBreakout === false;
-      return r.matchCount >= 3 || earlyStage;
-    });
-    let autoAdded = 0;
-    if(autoWatchlistCandidates.length){
-      const { errorCount: watchlistErrors } = await runWithConcurrency(autoWatchlistCandidates, 15, async (r) => {
-        const wlRef = doc(db, 'watchlist', r.ticker);
-        const existing = await getDoc(wlRef);
-        if(existing.exists()) return; // sudah dipantau (manual atau auto sebelumnya), jangan timpa snapshot lamanya
-        const tags = [];
-        if(r.volumeBreakout) tags.push('Volume Breakout');
-        if(r.foreignUptrend) tags.push('Foreign Uptrend');
-        if(r.bigAccum) tags.push('Big Accum');
-        if(r.bandarAccum) tags.push('Bandar Accum');
-        const phase = [];
-        if(r.bandarAccum && !r.volumeBreakout) phase.push('🟢 Tahap Awal');
-        if(r.volumeBreakout && !r.bandarAccum && r.foreignUptrend && r.bigAccum) phase.push('🟠 Sudah Naik — Rawan Guyur');
-        await setDoc(wlRef, {
-          ticker: r.ticker,
-          companyName: r.companyName || '',
-          addedDate: latestDate,
-          addedAt: new Date().toISOString(),
-          autoAdded: true,
-          snapshot: {
-            close: r.row.close ?? null,
-            score: r.totalScorePartial ?? null,
-            matchCount: r.matchCount ?? null,
-            categories: tags,
-            phase,
-            distributionWarning: !!r.distributionWarning,
-            foreignNetValue3d: r.foreignNetValue3d ?? null,
-            rsi14: null, // belum ada di titik ini — terisi begitu Step 5 dijalankan & dibaca live saat buka Watchlist
-            trendLabel: null,
-          },
-        });
-        autoAdded++;
-      });
-      if(watchlistErrors > 0){
-        warnings.push(`⚠ Sebagian gagal auto-masuk watchlist (tidak fatal).`);
-      }
-    }
-
-    // 9. ringkasan hasil di UI
-    const withHistory3 = raw.filter(r => r.foreignNet3d !== null).length;
-    const matched3plus = raw.filter(r => r.matchCount >= 3).sort((a,b)=>b.matchCount-a.matchCount || b.totalScorePartial-a.totalScorePartial).slice(0,10);
-
-    let html = warnings.map(w => `<div class="msg-box warning">${w}</div>`).join('');
-    html += `<div class="stat-row">
-      <div class="stat-box ok"><div class="label">Tanggal Diproses</div><div class="value">${latestDate}</div></div>
-      <div class="stat-box"><div class="label">Kandidat Final (Lolos Semua Filter)</div><div class="value">${raw.length}</div></div>
-      <div class="stat-box ${withHistory3>=candidates.length*0.5?'ok':'warn'}"><div class="label">Histori \u22653 Hari</div><div class="value">${withHistory3}</div></div>
-      <div class="stat-box"><div class="label">Match \u22653 Kategori</div><div class="value">${matched3plus.length}</div></div>
-    </div>
-    <div class="msg-box info">ℹ ${belowMinPrice} saham dibuang karena harga di bawah Rp${minPrice}/lembar. ${belowLiquidity} saham dibuang karena Value/Frequency rata-rata di bawah batas minimal (dari ${rawBeforeLiquidityFilter} kandidat harga OK, tersisa ${raw.length}).${staleDocs.length ? ` ${staleDocs.length} data lama (sudah tidak lolos filter) dibersihkan dari database.` : ''}${autoAdded ? ` ⭐ ${autoAdded} saham baru otomatis masuk Watchlist (match \u22653 atau Tahap Awal).` : ''}</div>`;
-
-    if(withHistory3 < candidates.length){
-      html += `<div class="msg-box warning">⚠ ${candidates.length - withHistory3} saham belum punya histori 3 hari — kategori Foreign Uptrend/Big Accum/Bandar Accum untuk saham itu belum bisa dievaluasi (butuh upload beberapa hari lagi, termasuk backfill kalau ada).</div>`;
-    }
-
-    if(matched3plus.length){
-      html += `<div class="preview-table-wrap"><table><thead><tr>
-        <th>Ticker</th><th>Match</th><th>Kategori</th><th>Score Sementara</th><th>Foreign Net Value (3D)</th><th>Warning</th><th>Cek</th>
-      </tr></thead><tbody>`;
-      matched3plus.forEach(r => {
-        const tags = [];
-        if(r.volumeBreakout) tags.push('Volume Breakout');
-        if(r.foreignUptrend) tags.push('Foreign Uptrend');
-        if(r.bigAccum) tags.push('Big Accum');
-        if(r.bandarAccum) tags.push('Bandar Accum');
-        html += `<tr>
-          <td>${r.ticker}</td>
-          <td>${r.matchCount}/4</td>
-          <td style="font-family:'Inter'; font-size:11.5px; color:var(--cyan);">${tags.join(', ')}</td>
-          <td class="pos">${r.totalScorePartial ?? '-'}</td>
-          <td class="${r.foreignNetValue3d>=0?'pos':'neg'}">${fmtValue(r.foreignNetValue3d)}</td>
-          <td>${r.distributionWarning ? '<span style="color:var(--amber-flag); font-size:11px;">⚠ Distribusi</span>' : ''}</td>
-          <td><a href="https://stockbit.com/symbol/${r.ticker}" target="_blank" rel="noopener" style="color:var(--gold); text-decoration:none; font-size:11.5px;">Stockbit ↗</a></td>
-        </tr>`;
-      });
-      html += `</tbody></table></div>`;
-    } else {
-      html += `<div class="msg-box info">ℹ Belum ada saham yang memenuhi ≥3 kategori — wajar kalau histori masih sedikit. Hasil lengkap tersimpan di collection <code>tickerRollingStats</code> untuk semua ${raw.length} kandidat.</div>`;
-    }
-
-    document.getElementById('stepNum4').classList.add('done');
-    out.innerHTML = html;
-
-    }catch(err){
-      console.error('computeRollingStats gagal:', err);
-      out.innerHTML = `<div class="msg-box error">✕ Proses gagal: ${err.message}<br><span style="font-size:10.5px; opacity:0.8;">Cek Console browser (F12) untuk detail teknis lengkap.</span></div>`;
-    }finally{
-      document.getElementById('btnRecompute4').disabled = false;
-    }
-  }
-
-  // ============================================================
-  // TAHAP 5: TECHNICAL INDICATOR (EMA20, EMA50, MACD, RSI, Volume Trend, ATR)
-  // Trigger MANUAL — tombol terpisah, tidak otomatis setelah upload.
-  // ============================================================
-
-  function calcEMASeries(closes, period){
-    // return array sepanjang closes, undefined sebelum index cukup data (seed = SMA period pertama)
-    const out = new Array(closes.length).fill(undefined);
-    if(closes.length < period) return out;
-    const k = 2 / (period + 1);
-    let seed = 0;
-    for(let i = 0; i < period; i++) seed += closes[i];
-    seed = seed / period;
-    out[period - 1] = seed;
-    for(let i = period; i < closes.length; i++){
-      out[i] = closes[i] * k + out[i-1] * (1 - k);
-    }
-    return out;
-  }
-
-  function calcRSI(closes, period = 14){
-    if(closes.length < period + 1) return null;
-    let gains = 0, losses = 0;
-    for(let i = 1; i <= period; i++){
-      const diff = closes[i] - closes[i-1];
-      if(diff >= 0) gains += diff; else losses -= diff;
-    }
-    let avgGain = gains / period, avgLoss = losses / period;
-    for(let i = period + 1; i < closes.length; i++){
-      const diff = closes[i] - closes[i-1];
-      const gain = diff > 0 ? diff : 0;
-      const loss = diff < 0 ? -diff : 0;
-      avgGain = (avgGain * (period - 1) + gain) / period;
-      avgLoss = (avgLoss * (period - 1) + loss) / period;
-    }
-    if(avgLoss === 0) return 100;
-    const rs = avgGain / avgLoss;
-    return 100 - (100 / (1 + rs));
-  }
-
-  function calcMACD(closes){
-    // butuh minimal 26 hari untuk MACD line, +9 hari lagi (total ~34) untuk signal line
-    if(closes.length < 26) return { macdLine: null, macdSignal: null };
-    const ema12 = calcEMASeries(closes, 12);
-    const ema26 = calcEMASeries(closes, 26);
-    const macdSeries = closes.map((_, i) =>
-      (ema12[i] !== undefined && ema26[i] !== undefined) ? ema12[i] - ema26[i] : undefined
-    );
-    const macdValid = macdSeries.filter(v => v !== undefined);
-    const macdLine = macdValid.length ? macdValid[macdValid.length - 1] : null;
-    if(macdValid.length < 9) return { macdLine, macdSignal: null };
-    const signalSeries = calcEMASeries(macdValid, 9);
-    const macdSignal = signalSeries[signalSeries.length - 1];
-    return { macdLine, macdSignal };
-  }
-
-  function classifyTrend(close, ema20, ema50){
-    if(ema20 === undefined || ema50 === undefined || ema20 === null || ema50 === null) return null;
-    const diffPct = Math.abs(ema20 - ema50) / ema50 * 100;
-    if(diffPct < 2) return 'Sideways';
-    if(close > ema20 && ema20 > ema50) return 'Uptrend';
-    if(close < ema20 && ema20 < ema50) return 'Downtrend';
-    return 'Sideways';
-  }
-
-  function updateProgress5(done, total, label){
-    const pct = total ? Math.round((done/total)*100) : 0;
-    document.getElementById('progressBar5').style.width = pct + '%';
-    document.getElementById('progressLabel5').textContent = `${label || 'Memproses'} ${done} / ${total} saham... (${pct}%)`;
-  }
-
-  document.getElementById('btnUpdateIndicators').addEventListener('click', updateTechnicalIndicators);
-
-  async function fetchYahooHistory(ticker){
-    const symbol = ticker + '.JK';
-    const yahooUrl = `https://query1.finance.yahoo.com/v8/finance/chart/${symbol}?interval=1d&range=6mo`;
-    const proxies = [
-      `https://api.allorigins.win/raw?url=${encodeURIComponent(yahooUrl)}`,
-      `https://corsproxy.io/?${encodeURIComponent(yahooUrl)}`,
-    ];
-    let lastErr = null;
-    for(const proxyUrl of proxies){
-      try{
-        const res = await fetch(proxyUrl);
-        if(!res.ok) throw new Error('HTTP ' + res.status);
-        const json = await res.json();
-        const result = json?.chart?.result?.[0];
-        const yErr = json?.chart?.error;
-        if(yErr) throw new Error(yErr.description || 'Yahoo Finance error');
-        if(!result) throw new Error('Data kosong dari Yahoo (ticker mungkin tidak terdaftar)');
-        const timestamps = result.timestamp || [];
-        const quote = result.indicators?.quote?.[0] || {};
-        const closesRaw = quote.close || [], highsRaw = quote.high || [];
-        const lowsRaw = quote.low || [], volumesRaw = quote.volume || [];
-        const closes = [], highs = [], lows = [], volumes = [];
-        for(let i = 0; i < timestamps.length; i++){
-          if(closesRaw[i] != null && highsRaw[i] != null && lowsRaw[i] != null){
-            closes.push(closesRaw[i]);
-            highs.push(highsRaw[i]);
-            lows.push(lowsRaw[i]);
-            volumes.push(volumesRaw[i] ?? 0);
-          }
-        }
-        if(!closes.length) throw new Error('Tidak ada data harga valid dari Yahoo');
-        const lastTs = timestamps[timestamps.length - 1];
-        const lastDate = lastTs ? new Date(lastTs * 1000).toISOString().slice(0,10) : null;
-        return { closes, highs, lows, volumes, lastDate };
-      }catch(err){
-        lastErr = err;
-        continue; // coba proxy berikutnya
-      }
-    }
-    throw lastErr || new Error('Semua proxy gagal diakses');
-  }
-
-  async function updateTechnicalIndicators(){
-    if(!firebaseReady) return;
-    const { collection, query, orderBy, limit, where, getDocs, doc, getDoc, setDoc } = firestoreFns;
-    const out = document.getElementById('indicatorResult');
-    out.innerHTML = '';
-    document.getElementById('progressWrap5').style.display = 'block';
-    document.getElementById('btnUpdateIndicators').disabled = true;
-
-    try{
-      const threshold = parseInt(document.getElementById('minMatchThreshold').value, 10) || 2;
-
-      // 1. ambil emiten yang sudah match kategori >= threshold dari Tahap 4
-      const q = query(collection(db, 'tickerRollingStats'), where('matchCount', '>=', threshold));
+      // 1. ambil kandidat dengan match >= 1 sekaligus (filter ketat diterapkan saat render, biar ganti threshold tidak perlu query ulang)
+      const q = query(collection(db, 'tickerRollingStats'), where('matchCount', '>=', 1));
       const snap = await getDocs(q);
-      const candidates = snap.docs.map(d => d.data());
+      const rollingStats = snap.docs.map(d => d.data());
 
-      if(!candidates.length){
-        out.innerHTML = `<div class="msg-box warning">⚠ Tidak ada saham dengan match kategori ≥ ${threshold}. Coba turunkan angka minimal, atau pastikan Tahap 4 (Step 4) sudah dijalankan lebih dulu.</div>`;
+      if(!rollingStats.length){
+        content.innerHTML = `<div class="empty-state">
+          <div class="big">📡</div>
+          <div class="msg">Belum ada kandidat di radar.</div>
+          <div class="sub">Jalankan Step 4 (Hitung Kategori) di halaman Import Data dulu.</div>
+        </div>`;
+        document.getElementById('freshnessBar').innerHTML = `<div class="freshness-item"><span class="dot stale"></span>Belum ada data</div>`;
         return;
       }
 
-      // 1b. cari tanggal terbaru data resmi kita (dari upload Excel), buat validasi silang vs Yahoo
-      const metaQ = query(collection(db, 'dailySummary'), orderBy('tradingDate', 'desc'), limit(1));
-      const metaSnap = await getDocs(metaQ);
-      const officialLatestDate = metaSnap.empty ? null : metaSnap.docs[0].data().tradingDate;
+      const latestDate = rollingStats[0].date;
 
-      updateProgress5(0, candidates.length, 'Mengambil histori Yahoo Finance');
-
-      // 2. tarik histori harga dari Yahoo Finance (dual-proxy) + data resmi hari ini (buat validasi silang)
-      let fetched = 0;
-      const { results, errorCount, firstError } = await runWithConcurrency(candidates, 5, async (row) => {
-        const [hist, officialSnap] = await Promise.all([
-          fetchYahooHistory(row.ticker),
-          officialLatestDate ? getDoc(doc(db, 'dailySummary', officialLatestDate, 'stocks', row.ticker)) : Promise.resolve(null),
+      // 2. lengkapi tiap kandidat dengan data harga (dailySummary) + indikator (tickerIndicators)
+      const { results } = await runWithConcurrency(rollingStats, 15, async (rs) => {
+        const [priceSnap, indSnap] = await Promise.all([
+          getDoc(doc(db, 'dailySummary', latestDate, 'stocks', rs.ticker)),
+          getDoc(doc(db, 'tickerIndicators', rs.ticker)),
         ]);
-        fetched++;
-        updateProgress5(fetched, candidates.length, 'Mengambil histori Yahoo Finance');
-
-        let dataStale = false;
-        if(officialSnap && officialSnap.exists() && officialLatestDate){
-          const official = officialSnap.data();
-          if(hist.lastDate !== officialLatestDate && official.close > 0){
-            dataStale = true;
-            if(!hist.lastDate || hist.lastDate < officialLatestDate){
-              // Yahoo belum sampai tanggal resmi kita — tambahkan titik baru pakai data resmi
-              hist.closes.push(official.close);
-              hist.highs.push(official.high || official.close);
-              hist.lows.push(official.low || official.close);
-              hist.volumes.push(official.volume || 0);
-            }
-          }
-        }
-
-        return { ticker: row.ticker, companyName: row.companyName, dataStale, ...hist };
+        const price = priceSnap.exists() ? priceSnap.data() : {};
+        const ind = indSnap.exists() ? indSnap.data() : {};
+        return { ...rs, price, ind };
       });
 
-      const warnings = [];
-      if(errorCount > 0){
-        warnings.push(`⚠ ${errorCount} saham gagal diambil dari Yahoo Finance (dilewati). Contoh error: ${firstError ? firstError.message : '-'}`);
-      }
-      const staleCount = results.filter(r => r && r.dataStale).length;
-      if(staleCount > 0){
-        warnings.push(`ℹ️ ${staleCount} saham: data Yahoo masih tertinggal dari tanggal resmi (${officialLatestDate}) — sistem otomatis menambahkan harga resmi hari ini sebagai titik terbaru sebelum menghitung indikator, supaya Trend/EMA tidak basi.`);
-      }
+      lastRenderedData = results.filter(Boolean);
 
-      // 3. hitung indikator per ticker dari histori Yahoo (sudah dilengkapi data resmi hari ini kalau perlu)
-      const computed = results.filter(Boolean).map(({ ticker, companyName, closes, highs, lows, volumes, dataStale }) => {
-        const daysAccumulated = closes.length;
-        const latestClose = closes[closes.length - 1];
+      // 3. status freshness
+      const metaSnap = await getDoc(doc(db, 'systemMeta', 'technicalIndicators'));
+      const indMeta = metaSnap.exists() ? metaSnap.data() : null;
+      renderFreshnessBar(latestDate, indMeta);
 
-        const ema20Series = calcEMASeries(closes, 20);
-        const ema50Series = calcEMASeries(closes, 50);
-        const ema20 = ema20Series[ema20Series.length - 1] ?? null;
-        const ema50 = ema50Series[ema50Series.length - 1] ?? null;
-        const rsi14 = calcRSI(closes, 14);
-        const { macdLine, macdSignal } = calcMACD(closes);
-        const trendLabel = classifyTrend(latestClose, ema20 ?? undefined, ema50 ?? undefined);
-
-        const volWindow = volumes.slice(-20);
-        const avgVol20 = volWindow.length ? volWindow.reduce((a,b)=>a+b,0) / volWindow.length : 0;
-        const volumeTrendRatio = avgVol20 !== 0 ? volumes[volumes.length-1] / avgVol20 : null;
-
-        const rangeSeries = highs.map((h, i) => h - lows[i]);
-        const atrWindow = rangeSeries.slice(-14);
-        const atr14 = atrWindow.length ? atrWindow.reduce((a,b)=>a+b,0) / atrWindow.length : null;
-
-        // --- Deteksi pola: Support Hold + Volume Naik + Reclaim MA20 & Bertahan ---
-        let reclaimPattern = false;
-        if(daysAccumulated >= 25){
-          // 1. Support Hold: harga pernah dekat level low 15 hari terakhir (5 hari terakhir),
-          //    dan sekarang belum jebol jauh di bawah level itu
-          const supportWindow = lows.slice(-15);
-          const supportLevel = Math.min(...supportWindow);
-          const recentLows = lows.slice(-5);
-          const touchedSupport = recentLows.some(l => l <= supportLevel * 1.03);
-          const stillHolding = latestClose >= supportLevel * 0.97;
-          const supportHold = touchedSupport && stillHolding;
-
-          // 2. Volume Naik: rata-rata 3 hari terakhir > rata-rata 3 hari sebelumnya (naik \u226510%)
-          const vol3Recent = volumes.slice(-3);
-          const vol3Prior = volumes.slice(-6, -3);
-          const avgVol3Recent = vol3Recent.reduce((a,b)=>a+b,0) / (vol3Recent.length||1);
-          const avgVol3Prior = vol3Prior.reduce((a,b)=>a+b,0) / (vol3Prior.length||1);
-          const volumeIncreasing = avgVol3Prior > 0 && avgVol3Recent > avgVol3Prior * 1.1;
-
-          // 3. Reclaim MA20 & Bertahan: pernah di bawah EMA20 (10 hari lalu), sekarang di atas 3 hari berturut-turut
-          const emaTail = ema20Series.slice(-13); // 10 hari lalu s.d. sekarang (13 titik)
-          const closeTail = closes.slice(-13);
-          const wasBelow = emaTail.slice(0, 10).some((e, i) => e !== undefined && closeTail[i] < e);
-          const last3AboveEma = [0,1,2].every(i => {
-            const idx = emaTail.length - 1 - i;
-            return emaTail[idx] !== undefined && closeTail[idx] > emaTail[idx];
-          });
-          const maReclaim = wasBelow && last3AboveEma;
-
-          reclaimPattern = supportHold && volumeIncreasing && maReclaim;
-        }
-
-        return {
-          ticker, companyName, daysAccumulated,
-          ema20, ema50, rsi14, macdLine, macdSignal, trendLabel,
-          volumeTrendRatio, atr14, reclaimPattern, dataStale,
-        };
-      });
-
-      // 3b. hitung Technical Score (0-100) per ticker — formula 4 komponen sesuai desain Tahap 6
-      const macdMagList = computed.filter(r => r.macdLine!==null && r.macdSignal!==null).map(r => Math.abs(r.macdLine - r.macdSignal));
-      const volRatioList = computed.filter(r => r.volumeTrendRatio!==null).map(r => r.volumeTrendRatio);
-
-      computed.forEach(r => {
-        const parts = [];
-        if(r.trendLabel !== null){
-          const trendScore = r.trendLabel === 'Uptrend' ? 100 : r.trendLabel === 'Downtrend' ? 0 : 50;
-          parts.push({ w: 30, s: trendScore });
-        }
-        if(r.rsi14 !== null){
-          const rsiScore = Math.max(0, 100 - Math.abs(r.rsi14 - 60) * 2.2); // puncak di RSI 60, turun ke arah ekstrem
-          parts.push({ w: 25, s: rsiScore });
-        }
-        if(r.macdLine !== null && r.macdSignal !== null){
-          const bullish = r.macdLine > r.macdSignal;
-          const magnitude = Math.abs(r.macdLine - r.macdSignal);
-          const macdScore = bullish ? percentileRank(macdMagList, magnitude) : 0;
-          parts.push({ w: 25, s: macdScore });
-        }
-        if(r.volumeTrendRatio !== null){
-          parts.push({ w: 20, s: percentileRank(volRatioList, r.volumeTrendRatio) });
-        }
-        const totalW = parts.reduce((a,p)=>a+p.w, 0);
-        r.technicalScore = totalW ? Math.round(parts.reduce((a,p)=>a+p.w*p.s, 0) / totalW) : null;
-      });
-
-      // 4. simpan ke tickerIndicators/{ticker}
-      let saved = 0;
-      const saveRes = await runWithConcurrency(computed, 15, async (r) => {
-        await setDoc(doc(db, 'tickerIndicators', r.ticker), {
-          ticker: r.ticker,
-          companyName: r.companyName,
-          source: 'yahoo_finance',
-          daysAccumulated: r.daysAccumulated,
-          ema20: r.ema20,
-          ema50: r.ema50,
-          rsi14: r.rsi14,
-          macdLine: r.macdLine,
-          macdSignal: r.macdSignal,
-          trendLabel: r.trendLabel,
-          volumeTrendRatio: r.volumeTrendRatio,
-          atr14: r.atr14,
-          technicalScore: r.technicalScore,
-          reclaimPattern: r.reclaimPattern,
-          updatedAt: new Date().toISOString(),
-        });
-        saved++;
-        updateProgress5(saved, computed.length, 'Menyimpan indikator');
-      });
-      if(saveRes.errorCount > 0){
-        warnings.push(`⚠ ${saveRes.errorCount} saham gagal disimpan indikatornya. Contoh error: ${saveRes.firstError ? saveRes.firstError.message : '-'}`);
-      }
-
-      // 4b. gabungkan Technical Score ke Total Score di tickerRollingStats
-      //     (Liquidity 25% + Foreign 30% + Technical 20%, redistribusi otomatis
-      //     kalau ada pilar yang belum tersedia — Fundamental sudah ditiadakan permanen)
-      let merged = 0;
-      const mergeRes = await runWithConcurrency(computed, 15, async (r) => {
-        const rsRef = doc(db, 'tickerRollingStats', r.ticker);
-        const rsSnap = await getDoc(rsRef);
-        if(!rsSnap.exists()) return; // belum ada data Tahap 4 untuk ticker ini, lewati
-        const rs = rsSnap.data();
-        const pillars = [
-          { w: 25, s: rs.liquidityScore ?? null },
-          { w: 30, s: rs.foreignScore ?? null },
-          { w: 20, s: r.technicalScore ?? null },
-        ].filter(p => p.s !== null);
-        const totalW = pillars.reduce((a,p)=>a+p.w, 0);
-        const totalScore = totalW ? Math.round(pillars.reduce((a,p)=>a+p.w*p.s, 0) / totalW) : null;
-        await setDoc(rsRef, {
-          technicalScore: r.technicalScore,
-          totalScore,
-          reclaimPattern: r.reclaimPattern,
-        }, { merge: true });
-        merged++;
-        updateProgress5(merged, computed.length, 'Menggabungkan skor');
-      });
-      if(mergeRes.errorCount > 0){
-        warnings.push(`⚠ ${mergeRes.errorCount} saham gagal digabung skornya ke tickerRollingStats. Contoh error: ${mergeRes.firstError ? mergeRes.firstError.message : '-'}`);
-      }
-
-      // 5. simpan meta status
-      await setDoc(doc(db, 'systemMeta', 'technicalIndicators'), {
-        matchThresholdUsed: threshold,
-        updatedAt: new Date().toISOString(),
-        stockCount: computed.length,
-      });
-
-      // 6. ringkasan UI
-      const withEMA50 = computed.filter(r => r.ema50 !== null).length;
-      const withMACD = computed.filter(r => r.macdSignal !== null).length;
-      const withRSI = computed.filter(r => r.rsi14 !== null).length;
-      const withTechScore = computed.filter(r => r.technicalScore !== null).length;
-
-      let html = warnings.map(w => `<div class="msg-box warning">${w}</div>`).join('');
-      html += `<div class="stat-row">
-        <div class="stat-box ok"><div class="label">Kandidat Diproses</div><div class="value">${candidates.length}</div></div>
-        <div class="stat-box ok"><div class="label">RSI14 Siap</div><div class="value">${withRSI}/${computed.length}</div></div>
-        <div class="stat-box ok"><div class="label">EMA50 Siap</div><div class="value">${withEMA50}/${computed.length}</div></div>
-        <div class="stat-box ok"><div class="label">Technical Score Siap</div><div class="value">${withTechScore}/${computed.length}</div></div>
-      </div>
-      <div class="msg-box success">✓ Technical Score sudah digabung ke Total Score di <code>tickerRollingStats</code> (Liquidity 25% + Foreign 30% + Technical 20%, bobot redistribusi otomatis kalau ada pilar kosong).</div>`;
-
-      if(computed.length){
-        const reclaimCount = computed.filter(r => r.reclaimPattern).length;
-        if(reclaimCount){
-          html += `<div class="msg-box success">✓ ${reclaimCount} saham menunjukkan pola Support Hold + Volume Naik + Reclaim MA20 — lihat kolom "Pola" di tabel bawah.</div>`;
-        }
-        html += `<div class="preview-table-wrap"><table><thead><tr>
-          <th>Ticker</th><th>RSI14</th><th>Trend</th><th>Tech Score</th><th>EMA20</th><th>EMA50</th><th>Pola</th><th>Cek</th>
-        </tr></thead><tbody>`;
-        computed.sort((a,b) => (b.technicalScore||0) - (a.technicalScore||0)).forEach(r => {
-          html += `<tr>
-            <td>${r.ticker}${r.dataStale ? ' <span title="Data Yahoo tertinggal, sudah disesuaikan pakai harga resmi hari ini" style="color:var(--amber-flag); font-size:10px;">🔄</span>' : ''}</td>
-            <td>${r.rsi14!==null ? r.rsi14.toFixed(1) : '-'}</td>
-            <td>${r.trendLabel ?? '-'}</td>
-            <td class="pos">${r.technicalScore ?? '-'}</td>
-            <td>${r.ema20!==null ? r.ema20.toLocaleString('id-ID',{maximumFractionDigits:0}) : '-'}</td>
-            <td>${r.ema50!==null ? r.ema50.toLocaleString('id-ID',{maximumFractionDigits:0}) : '-'}</td>
-            <td>${r.reclaimPattern ? '<span style="color:var(--positive); font-size:11px;">🎯 Reclaim MA20</span>' : ''}</td>
-            <td><a href="https://stockbit.com/symbol/${r.ticker}" target="_blank" rel="noopener" style="color:var(--gold); text-decoration:none; font-size:11.5px;">Stockbit ↗</a></td>
-          </tr>`;
-        });
-        html += `</tbody></table></div>`;
-      }
-
-      document.getElementById('stepNum5').classList.add('done');
-      out.innerHTML = html;
+      renderDashboard(lastRenderedData);
     }catch(err){
-      console.error('updateTechnicalIndicators gagal:', err);
-      out.innerHTML = `<div class="msg-box error">✕ Proses gagal: ${err.message}<br><span style="font-size:10.5px; opacity:0.8;">Cek Console browser (F12) untuk detail teknis lengkap.</span></div>`;
-    }finally{
-      document.getElementById('btnUpdateIndicators').disabled = false;
+      console.error('loadDashboard gagal:', err);
+      content.innerHTML = `<div class="empty-state"><div class="big">⚠</div><div class="msg">Gagal memuat data.</div><div class="sub">${err.message}</div></div>`;
     }
   }
 
+  function renderFreshnessBar(latestDate, indMeta){
+    const bar = document.getElementById('freshnessBar');
+    const today = new Date().toISOString().slice(0,10);
+    const priceFresh = latestDate === today;
+    let html = `<div class="freshness-item"><span class="dot ${priceFresh?'fresh':'stale'}"></span>Data harga: <b>${latestDate}</b></div>`;
+    if(indMeta){
+      const updatedDate = indMeta.updatedAt ? new Date(indMeta.updatedAt) : null;
+      const daysAgo = updatedDate ? Math.floor((Date.now()-updatedDate.getTime())/(864e5)) : null;
+      const fresh = daysAgo !== null && daysAgo < 1;
+      html += `<div class="freshness-item"><span class="dot ${fresh?'fresh':'stale'}"></span>Indikator teknikal: <b>${daysAgo!==null ? (daysAgo===0?'hari ini':daysAgo+' hari lalu') : '-'}</b> (${indMeta.stockCount} saham)</div>`;
+    }else{
+      html += `<div class="freshness-item"><span class="dot stale"></span>Indikator teknikal: <b>belum pernah diupdate</b></div>`;
+    }
+    bar.innerHTML = html;
+  }
+
   // ============================================================
-  // UPLOAD HISTORY
+  // TAB SWITCHING (Radar / Watchlist)
   // ============================================================
-  async function loadUploadHistory(){
+  document.getElementById('tabRadarBtn').addEventListener('click', () => switchTab('radar'));
+  document.getElementById('tabWatchlistBtn').addEventListener('click', () => switchTab('watchlist'));
+
+  function switchTab(tab){
+    currentTab = tab;
+    document.getElementById('tabRadarBtn').classList.toggle('active', tab === 'radar');
+    document.getElementById('tabWatchlistBtn').classList.toggle('active', tab === 'watchlist');
+    document.getElementById('radarSection').style.display = tab === 'radar' ? 'block' : 'none';
+    document.getElementById('watchlistSection').style.display = tab === 'watchlist' ? 'block' : 'none';
+    document.getElementById('mainLayout').classList.toggle('watchlist-mode', tab === 'watchlist');
+    if(tab === 'watchlist') loadWatchlist();
+  }
+
+  function updateWatchlistCountBadge(n){
+    document.getElementById('watchlistCountBadge').textContent = n > 0 ? `(${n})` : '';
+  }
+
+  // klik tombol "Watchlist" / "Tersimpan" di kartu radar (event delegation)
+  document.getElementById('dashboardContent').addEventListener('click', async (e) => {
+    const btn = e.target.closest('.watchlist-btn');
+    if(!btn) return;
+    const ticker = btn.dataset.ticker;
+    const row = lastRenderedData.find(r => r.ticker === ticker);
+    if(!row) return;
+    btn.disabled = true;
+    if(watchlistTickers.has(ticker)){
+      await removeFromWatchlist(ticker);
+      btn.classList.remove('saved');
+      btn.textContent = '☆ Watchlist';
+    }else{
+      await addToWatchlist(row);
+      btn.classList.add('saved');
+      btn.textContent = '★ Tersimpan';
+    }
+    btn.disabled = false;
+    updateWatchlistCountBadge(watchlistTickers.size);
+  });
+
+  async function addToWatchlist(r){
+    const { doc, setDoc } = firestoreFns;
+    const tags = categoryTags(r);
+    const phaseTags = computeSignalPhase(r);
+    await setDoc(doc(db, 'watchlist', r.ticker), {
+      ticker: r.ticker,
+      companyName: r.companyName || '',
+      addedDate: r.date || new Date().toISOString().slice(0,10),
+      addedAt: new Date().toISOString(),
+      snapshot: {
+        close: r.price?.close ?? null,
+        score: r.liveScore ?? null,
+        matchCount: r.matchCount ?? null,
+        categories: tags,
+        phase: phaseTags.map(p => p.label),
+        distributionWarning: !!r.distributionWarning,
+        foreignNetValue3d: r.foreignNetValue3d ?? null,
+        rsi14: r.ind?.rsi14 ?? null,
+        trendLabel: r.ind?.trendLabel ?? null,
+      },
+    });
+    watchlistTickers.add(r.ticker);
+  }
+
+  async function removeFromWatchlist(ticker){
+    const { doc, deleteDoc } = firestoreFns;
+    await deleteDoc(doc(db, 'watchlist', ticker));
+    watchlistTickers.delete(ticker);
+  }
+
+  // ============================================================
+  // RENDER WATCHLIST (bandingkan snapshot saat ditambahkan vs kondisi sekarang)
+  // ============================================================
+  async function loadWatchlist(){
     if(!firebaseReady) return;
-    const { collection, query, orderBy, limit, getDocs } = firestoreFns;
-    const q = query(collection(db, 'uploadHistory'), orderBy('uploadedAt', 'desc'), limit(10));
-    const snap = await getDocs(q);
-    const tbody = document.getElementById('historyBody');
-    if(snap.empty){
-      tbody.innerHTML = `<tr><td colspan="4" style="color:var(--text-faint); font-style:italic;">Belum ada riwayat upload.</td></tr>`;
+    const content = document.getElementById('watchlistContent');
+    content.innerHTML = `<div class="loading-msg">Memuat watchlist...</div>`;
+    const { collection, getDocs, doc, getDoc } = firestoreFns;
+
+    try{
+      const wlSnap = await getDocs(collection(db, 'watchlist'));
+      const items = wlSnap.docs.map(d => d.data());
+      document.getElementById('watchlistCount').textContent = '· ' + items.length;
+
+      if(!items.length){
+        content.innerHTML = `<div class="empty-state">
+          <div class="big">⭐</div>
+          <div class="msg">Watchlist masih kosong.</div>
+          <div class="sub">Klik "☆ Watchlist" di kartu radar untuk mulai memantau saham yang menarik.</div>
+        </div>`;
+        return;
+      }
+
+      // ambil kondisi TERKINI tiap ticker (sama seperti radar), untuk dibandingkan dengan snapshot
+      const metaSnap = await getDocs(collection(db, 'dailySummary'));
+      // ambil tanggal terbaru dari salah satu tickerRollingStats (lebih murah daripada scan semua dailySummary)
+      const anyRsSnap = await getDocs(collection(db, 'tickerRollingStats'));
+      const latestDate = anyRsSnap.docs[0]?.data()?.date;
+
+      const { results } = await runWithConcurrency(items, 15, async (item) => {
+        const [rsSnap, priceSnap, indSnap] = await Promise.all([
+          getDoc(doc(db, 'tickerRollingStats', item.ticker)),
+          latestDate ? getDoc(doc(db, 'dailySummary', latestDate, 'stocks', item.ticker)) : Promise.resolve(null),
+          getDoc(doc(db, 'tickerIndicators', item.ticker)),
+        ]);
+        const rs = rsSnap.exists() ? rsSnap.data() : {};
+        const price = priceSnap && priceSnap.exists() ? priceSnap.data() : {};
+        const ind = indSnap.exists() ? indSnap.data() : {};
+        return { ...item, current: { ...rs, price, ind } };
+      });
+
+      renderWatchlistCards(results.filter(Boolean));
+    }catch(err){
+      console.error('loadWatchlist gagal:', err);
+      content.innerHTML = `<div class="empty-state"><div class="big">⚠</div><div class="msg">Gagal memuat watchlist.</div><div class="sub">${err.message}</div></div>`;
+    }
+  }
+
+  function renderWatchlistCards(items){
+    const content = document.getElementById('watchlistContent');
+    items.sort((a,b) => new Date(b.addedAt) - new Date(a.addedAt));
+
+    let html = `<div class="card-grid">`;
+    items.forEach(item => {
+      const s = item.snapshot || {};
+      const cur = item.current || {};
+      const curClose = cur.price?.close;
+      const priceDiffPct = (s.close && curClose) ? ((curClose - s.close) / s.close) * 100 : null;
+      const curScore = cur.technicalScore != null || cur.foreignScore != null || cur.liquidityScore != null
+        ? Math.round(((cur.liquidityScore??0)*33 + (cur.foreignScore??0)*40 + ((cur.technicalScore??cur.ind?.technicalScore)??0)*27) / 100)
+        : null;
+      const scoreDiff = (s.score!=null && curScore!=null) ? curScore - s.score : null;
+      const daysHeld = s ? Math.floor((Date.now() - new Date(item.addedAt).getTime()) / 864e5) : null;
+      const curTags = categoryTags(cur);
+      const curPhase = computeSignalPhase(cur);
+
+      html += `<div class="stock-card">
+        <div class="card-top">
+          <div class="ticker-block">
+            <div class="ticker">${item.ticker}</div>
+            <div class="company">${item.companyName || ''}</div>
+            <div style="font-size:10px; color:var(--text-faint); margin-top:4px;">Ditambahkan ${item.addedDate} (${daysHeld}${daysHeld===1?' hari':' hari'} lalu)</div>
+          </div>
+          <button class="btn-remove-watchlist" data-ticker="${item.ticker}">🗑 Hapus</button>
+        </div>
+
+        <div class="snapshot-panel">
+          <div class="sp-title">Saat Ditambahkan (${item.addedDate})</div>
+          <div class="snapshot-row"><span class="sp-label">Close</span><span class="sp-val">${fmtNum(s.close)}</span></div>
+          <div class="snapshot-row"><span class="sp-label">Score</span><span class="sp-val gold">${s.score ?? '-'}</span></div>
+          <div class="snapshot-row"><span class="sp-label">Kategori</span><span class="sp-val" style="color:var(--cyan); font-size:10px;">${(s.categories||[]).join(', ') || '-'}</span></div>
+          ${s.phase && s.phase.length ? `<div class="snapshot-row"><span class="sp-label">Fase</span><span class="sp-val" style="font-size:10px;">${s.phase.join(', ')}</span></div>` : ''}
+        </div>
+
+        <div class="snapshot-panel" style="background:rgba(212,168,87,0.05); border-color:rgba(212,168,87,0.2);">
+          <div class="sp-title">Sekarang</div>
+          <div class="snapshot-row"><span class="sp-label">Close</span><span class="sp-val ${priceDiffPct>=0?'pos':'neg'}">${fmtNum(curClose)} ${priceDiffPct!=null ? `(${priceDiffPct>=0?'+':''}${priceDiffPct.toFixed(2)}%)` : ''}</span></div>
+          <div class="snapshot-row"><span class="sp-label">Score</span><span class="sp-val gold">${curScore ?? '-'} ${scoreDiff!=null ? `(${scoreDiff>=0?'+':''}${scoreDiff})` : ''}</span></div>
+          <div class="snapshot-row"><span class="sp-label">Match Kategori</span><span class="sp-val">${cur.matchCount ?? '-'}/4</span></div>
+          ${cur.distributionWarning ? `<div class="snapshot-row"><span class="sp-label">⚠</span><span class="sp-val" style="color:var(--negative);">Tanda Distribusi</span></div>` : ''}
+          ${curPhase.length ? `<div class="snapshot-row"><span class="sp-label">Fase</span><span class="sp-val" style="font-size:10px;">${curPhase.map(p=>p.label).join(', ')}</span></div>` : ''}
+        </div>
+
+        <div class="card-foot">
+          <div class="pillar-mini">
+            <div class="p">RSI <b>${cur.ind?.rsi14!=null ? cur.ind.rsi14.toFixed(1) : '-'}</b></div>
+            <div class="p">Trend <b>${cur.ind?.trendLabel ?? '-'}</b></div>
+          </div>
+          <a class="link-chart" href="https://stockbit.com/symbol/${item.ticker}" target="_blank" rel="noopener">Cek Stockbit ↗</a>
+        </div>
+      </div>`;
+    });
+    html += `</div>`;
+    content.innerHTML = html;
+  }
+
+  document.getElementById('watchlistContent').addEventListener('click', async (e) => {
+    const btn = e.target.closest('.btn-remove-watchlist');
+    if(!btn) return;
+    if(!confirm(`Hapus ${btn.dataset.ticker} dari watchlist?`)) return;
+    await removeFromWatchlist(btn.dataset.ticker);
+    updateWatchlistCountBadge(watchlistTickers.size);
+    loadWatchlist();
+  });
+
+  // ============================================================
+  // COMPUTE LIVE TOTAL SCORE + RENDER
+  // ============================================================
+  function computeLiveScore(r){
+    const pillars = [
+      { w: weights.liq, s: r.liquidityScore ?? null },
+      { w: weights.for, s: r.foreignScore ?? null },
+      { w: weights.tec, s: (r.technicalScore ?? r.ind?.technicalScore) ?? null },
+    ].filter(p => p.s !== null && p.w > 0);
+    const totalW = pillars.reduce((a,p)=>a+p.w, 0);
+    return totalW ? Math.round(pillars.reduce((a,p)=>a+p.w*p.s, 0) / totalW) : null;
+  }
+
+  function categoryTags(r){
+    const c = r.categories || {};
+    const tags = [];
+    if(c.volumeBreakout) tags.push('Volume Breakout');
+    if(c.foreignUptrend) tags.push('Foreign Uptrend');
+    if(c.bigAccum) tags.push('Big Accum');
+    if(c.bandarAccum) tags.push('Bandar Accum');
+    return tags;
+  }
+
+  function computeSignalPhase(r){
+    const c = r.categories || {};
+    const tags = [];
+    // Tahap Awal: masih ditahan diam-diam (Bandar Accum), belum breakout harga
+    if(c.bandarAccum && !c.volumeBreakout){
+      tags.push({ label: '🟢 Tahap Awal', cls: 'early',
+        note: 'Masih dalam fase ditahan/dikumpulkan — belum breakout harga.' });
+    }
+    // Sudah Naik — Rawan Guyur: breakout sudah kejadian + sinyal asing masih ada,
+    // tapi harga sudah lepas dari fase "ditahan" (Bandar Accum tidak lagi terpenuhi)
+    if(c.volumeBreakout && !c.bandarAccum && c.foreignUptrend && c.bigAccum){
+      tags.push({ label: '🟠 Sudah Naik — Rawan Guyur', cls: 'risk',
+        note: 'Harga sudah breakout dari fase sideways — risiko masuk di puncak / kena profit taking.' });
+    }
+    // Divergensi 3D vs 10D: bagian dari 10 hari yang lebih tua vs 3 hari terbaru arahnya berlawanan
+    if(r.foreignNet3d != null && r.foreignNet10d != null){
+      if(r.foreignNet3d > 0 && r.foreignNet10d < 0){
+        tags.push({ label: '🔄 Potensi Reversal', cls: 'reversal',
+          note: 'Asing sempat net jual lebih besar sebelumnya, tapi 3 hari terakhir mulai berbalik beli dan menguat. Baru tahap awal — pantau apakah berlanjut sebelum yakin ini pembalikan beneran.' });
+      } else if(r.foreignNet3d < 0 && r.foreignNet10d > 0){
+        tags.push({ label: '🔄 Momentum Melemah', cls: 'reversal',
+          note: 'Sebelumnya asing net beli, tapi 3 hari terakhir mulai berbalik jual. Waspada — bisa jadi awal dari pembalikan arah ke bawah.' });
+      }
+    }
+    // Reclaim MA20: support hold + volume naik + harga tembus & bertahan di atas MA20
+    if(r.reclaimPattern || r.ind?.reclaimPattern){
+      tags.push({ label: '🎯 Reclaim MA20', cls: 'reclaim',
+        note: 'Harga sempat dekat area support, volume mulai naik, dan berhasil menembus + bertahan di atas MA20 — pola teknikal yang sering diikuti kelanjutan kenaikan (bukan jaminan, tetap cek chart manual).' });
+    }
+    // Candle konfirmasi hari terakhir (Pin Bar / Bullish Engulfing / Marubozu)
+    const candles = r.candlePatterns || r.ind?.candlePatterns || [];
+    candles.forEach(p => {
+      tags.push({ label: `🕯️ ${p}`, cls: 'candle',
+        note: `Candle ${p} terdeteksi di hari terakhir — sinyal konfirmasi entry jangka pendek, biasanya lebih kuat kalau muncul di area support atau bareng sinyal lain.` });
+    });
+    return tags;
+  }
+
+  function buildSpiderSVG(scores){
+    // scores = [liquidity, foreign, technical], masing2 0-100 atau null
+    const cx = 54, cy = 50, maxR = 30;
+    const angles = [-90, 30, 150].map(d => d * Math.PI / 180); // 3 sumbu, 120 derajat: atas, kanan-bawah, kiri-bawah
+    const labels = ['Liq', 'For', 'Tec'];
+    const pts = (r) => angles.map(a => [cx + r*Math.cos(a), cy + r*Math.sin(a)]);
+    const outer = pts(maxR).map(p => p.join(',')).join(' ');
+    const mid = pts(maxR*0.5).map(p => p.join(',')).join(' ');
+
+    const dataPts = scores.map((s, i) => {
+      const r = ((s ?? 0) / 100) * maxR;
+      return [cx + r*Math.cos(angles[i]), cy + r*Math.sin(angles[i])];
+    });
+    const dataPoly = dataPts.map(p => p.join(',')).join(' ');
+    const dots = dataPts.map(([x,y]) => `<circle cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="2.5" fill="#D4A857"/>`).join('');
+
+    // 3 garis sumbu penuh dari titik tengah ke tiap ujung
+    const spokes = angles.map(a => {
+      const x2 = cx + maxR*Math.cos(a), y2 = cy + maxR*Math.sin(a);
+      return `<line x1="${cx}" y1="${cy}" x2="${x2.toFixed(1)}" y2="${y2.toFixed(1)}" stroke="#1B2230" stroke-width="1"/>`;
+    }).join('');
+
+    // label di tiap ujung sumbu — posisi & alignment disesuaikan per sudut
+    const labelPos = angles.map((a, i) => {
+      const lr = maxR + 11;
+      const x = cx + lr*Math.cos(a), y = cy + lr*Math.sin(a);
+      const anchor = i === 0 ? 'middle' : (Math.cos(a) > 0 ? 'start' : 'end');
+      return `<text x="${x.toFixed(1)}" y="${(y+3).toFixed(1)}" text-anchor="${anchor}" font-size="9" font-family="Inter" fill="#5C6577">${labels[i]}</text>`;
+    }).join('');
+
+    return `<div style="text-align:center;">
+      <svg width="108" height="98" viewBox="0 0 108 98">
+        <polygon points="${outer}" fill="none" stroke="#232B3A" stroke-width="1"/>
+        <polygon points="${mid}" fill="none" stroke="#1B2230" stroke-width="1"/>
+        ${spokes}
+        <circle cx="${cx}" cy="${cy}" r="1.8" fill="#5C6577"/>
+        <polygon points="${dataPoly}" fill="rgba(212,168,87,0.18)" stroke="#D4A857" stroke-width="1.5"/>
+        ${dots}
+        ${labelPos}
+      </svg>
+      <div style="font-size:9px; color:var(--text-faint); margin-top:-4px;">Titik tengah = 0 · Ujung = 100</div>
+    </div>`;
+  }
+
+  function fmtNum(n, digits=0){ return n!=null ? n.toLocaleString('id-ID', {maximumFractionDigits:digits}) : '-'; }
+  function fmtValue(v){
+    if(v==null) return '-';
+    if(v >= 1e12) return 'Rp ' + (v/1e12).toFixed(1) + ' T';
+    if(v >= 1e9) return 'Rp ' + (v/1e9).toFixed(1) + ' M';
+    if(v >= 1e6) return 'Rp ' + (v/1e6).toFixed(1) + ' Jt';
+    return 'Rp ' + fmtNum(v);
+  }
+
+  function renderDashboard(data){
+    const content = document.getElementById('dashboardContent');
+    const sortFn = sortMode === 'match'
+      ? (a,b) => (b.matchCount - a.matchCount) || ((b.liveScore||0) - (a.liveScore||0))
+      : (a,b) => ((b.liveScore||0) - (a.liveScore||0)) || (b.matchCount - a.matchCount);
+    const filtered = data
+      .filter(r => r.matchCount >= matchThreshold)
+      .map(r => ({ ...r, liveScore: computeLiveScore(r) }))
+      .sort(sortFn);
+
+    document.getElementById('radarCount').textContent = '· ' + filtered.length;
+
+    const earlyCount = filtered.filter(r => computeSignalPhase(r).some(p => p.cls === 'early')).length;
+    const riskCount = filtered.filter(r => computeSignalPhase(r).some(p => p.cls === 'risk')).length;
+    const reversalCount = filtered.filter(r => computeSignalPhase(r).some(p => p.cls === 'reversal')).length;
+    const reclaimCount = filtered.filter(r => computeSignalPhase(r).some(p => p.cls === 'reclaim')).length;
+    const distCount = filtered.filter(r => r.distributionWarning).length;
+    const phaseParts = [];
+    if(earlyCount) phaseParts.push(`<span style="color:var(--positive);">🟢 ${earlyCount} Tahap Awal</span>`);
+    if(riskCount) phaseParts.push(`<span style="color:var(--risk-orange);">🟠 ${riskCount} Rawan Guyur</span>`);
+    if(reversalCount) phaseParts.push(`<span style="color:var(--cyan);">🔄 ${reversalCount} Reversal/Melemah</span>`);
+    if(reclaimCount) phaseParts.push(`<span style="color:var(--positive);">🎯 ${reclaimCount} Reclaim MA20</span>`);
+    if(distCount) phaseParts.push(`<span style="color:var(--negative);">⚠ ${distCount} Tanda Distribusi</span>`);
+    document.getElementById('phaseSummary').innerHTML = phaseParts.length ? phaseParts.join(' &nbsp;·&nbsp; ') : '';
+
+    if(!filtered.length){
+      content.innerHTML = `<div class="empty-state">
+        <div class="big">📡</div>
+        <div class="msg">Tidak ada saham yang memenuhi ≥${matchThreshold} kategori.</div>
+        <div class="sub">Coba turunkan Match Kategori Minimal di panel kiri.</div>
+      </div>`;
       return;
     }
-    let html = '';
-    snap.forEach(d => {
-      const v = d.data();
-      const uploadedAt = v.uploadedAt ? v.uploadedAt.toDate().toLocaleString('id-ID') : '—';
-      html += `<tr>
-        <td>${v.tradingDate}</td>
-        <td>${uploadedAt}</td>
-        <td>${v.stockCount}</td>
-        <td>${v.overwritten ? '<span style="color:var(--amber-flag)">Ditimpa</span>' : '<span style="color:var(--positive)">Baru</span>'}</td>
-      </tr>`;
-    });
-    tbody.innerHTML = html;
+
+    if(currentView === 'cards'){
+      let html = `<div class="card-grid">`;
+      filtered.forEach((r, i) => {
+        const tags = categoryTags(r);
+        const phaseTags = computeSignalPhase(r);
+        const changePct = r.price?.changePct;
+        const tech = r.technicalScore ?? r.ind?.technicalScore;
+        html += `<div class="stock-card">
+          <div class="rank-badge">#${i+1}</div>
+          <div class="card-top">
+            <div class="ticker-block">
+              <div class="ticker">${r.ticker}</div>
+              <div class="company">${r.companyName || ''}</div>
+            </div>
+            <div style="text-align:right;">
+              <div class="score-badge"><div class="num">${r.liveScore ?? '-'}</div><div class="lbl">Score</div></div>
+              <button class="watchlist-btn ${watchlistTickers.has(r.ticker)?'saved':''}" data-ticker="${r.ticker}" style="margin-top:6px;">${watchlistTickers.has(r.ticker) ? '★ Tersimpan' : '☆ Watchlist'}</button>
+            </div>
+          </div>
+          <div class="cat-badges">${tags.map(t => `<span class="cat-badge">${t}</span>`).join('')}${phaseTags.map(p => `<span class="phase-badge ${p.cls}">${p.label}</span>`).join('')}${r.distributionWarning ? `<span class="distribution-badge">⚠ Distribusi</span>` : ''}</div>
+          ${phaseTags.filter(p=>p.cls==='risk').map(p => `<div class="risk-banner">🟠 ${p.note}</div>`).join('')}
+          ${phaseTags.filter(p=>p.cls==='reversal').map(p => `<div class="reversal-banner">🔄 ${p.note}</div>`).join('')}
+          ${r.distributionWarning ? `<div class="distribution-banner">⚠ Tanda distribusi terdeteksi — tekanan jual mendominasi, closing melemah. Cek ulang sebelum entry.</div>` : ''}
+          <div class="card-body">
+            <div class="spider-wrap">${buildSpiderSVG([r.liquidityScore, r.foreignScore, tech])}</div>
+            <div class="stat-grid">
+              <div class="stat-item"><div class="s-label">Close</div><div class="s-val">${fmtNum(r.price?.close)}</div></div>
+              <div class="stat-item"><div class="s-label">Change</div><div class="s-val ${changePct>=0?'pos':'neg'}">${changePct!=null ? (changePct>=0?'+':'')+changePct.toFixed(2)+'%' : '-'}</div></div>
+              <div class="stat-item"><div class="s-label">Value Hari Ini</div><div class="s-val">${fmtValue(r.price?.value)}</div></div>
+              <div class="stat-item"><div class="s-label">Foreign Net Value (3D)</div><div class="s-val ${r.foreignNet3d>=0?'pos':'neg'}">${fmtValue(r.foreignNetValue3d)}</div><div class="s-sub">${fmtNum(r.foreignNet3d)} lembar</div></div>
+              <div class="stat-item"><div class="s-label">RSI14</div><div class="s-val gold">${r.ind?.rsi14!=null ? r.ind.rsi14.toFixed(1) : '-'}</div></div>
+              <div class="stat-item"><div class="s-label">Trend</div><div class="s-val gold">${r.ind?.trendLabel ?? '-'}</div></div>
+            </div>
+          </div>
+          <div class="context10-panel">
+            <div>
+              <div class="c10-label">Foreign Net Value (10D)</div>
+              <div class="c10-val ${r.foreignNet10d>=0?'pos':'neg'}">${r.foreignNetValue10d!=null ? fmtValue(r.foreignNetValue10d) : `Data <${r.daysUsed10d??0} hari`}</div>
+            </div>
+            <div style="text-align:right;">
+              <div class="c10-label">Harga vs 10D Lalu</div>
+              <div class="c10-val ${r.priceChange10d>=0?'pos':'neg'}">${r.priceChange10d!=null ? (r.priceChange10d>=0?'+':'')+r.priceChange10d.toFixed(2)+'%' : '-'}</div>
+            </div>
+          </div>
+          <div class="card-foot">
+            <div class="pillar-mini">
+              <div class="p">Liq <b>${r.liquidityScore ?? '-'}</b></div>
+              <div class="p">For <b>${r.foreignScore ?? '-'}</b></div>
+              <div class="p">Tec <b>${tech ?? '-'}</b></div>
+            </div>
+            <a class="link-chart" href="https://stockbit.com/symbol/${r.ticker}" target="_blank" rel="noopener">Cek Stockbit ↗</a>
+          </div>
+        </div>`;
+      });
+      html += `</div>`;
+      content.innerHTML = html;
+    }else{
+      let html = `<table><thead><tr>
+        <th>Ticker</th><th>Match</th><th>Score</th><th>Close</th><th>Change%</th><th>Foreign Net Value (3D)</th><th>Harga vs 10D</th><th>RSI14</th><th>Trend</th><th>Kategori</th><th>Warning</th><th>Cek</th>
+      </tr></thead><tbody>`;
+      filtered.forEach(r => {
+        const changePct = r.price?.changePct;
+        const tags = categoryTags(r);
+        const phaseTags = computeSignalPhase(r);
+        const warningCell = [
+          ...phaseTags.map(p => `<span class="phase-badge ${p.cls}">${p.label}</span>`),
+          r.distributionWarning ? '<span class="distribution-badge">⚠ Distribusi</span>' : ''
+        ].filter(Boolean).join(' ');
+        html += `<tr>
+          <td class="ticker-cell">${r.ticker}<span class="co-name">${r.companyName || ''}</span></td>
+          <td>${r.matchCount}/4</td>
+          <td><span class="score-pill">${r.liveScore ?? '-'}</span></td>
+          <td>${fmtNum(r.price?.close)}</td>
+          <td class="${changePct>=0?'pos':'neg'}">${changePct!=null ? (changePct>=0?'+':'')+changePct.toFixed(2)+'%' : '-'}</td>
+          <td class="${r.foreignNet3d>=0?'pos':'neg'}">${fmtValue(r.foreignNetValue3d)}</td>
+          <td class="${r.priceChange10d>=0?'pos':'neg'}">${r.priceChange10d!=null ? (r.priceChange10d>=0?'+':'')+r.priceChange10d.toFixed(2)+'%' : '-'}</td>
+          <td>${r.ind?.rsi14!=null ? r.ind.rsi14.toFixed(1) : '-'}</td>
+          <td>${r.ind?.trendLabel ?? '-'}</td>
+          <td style="font-family:'Inter'; font-size:11px; color:var(--cyan);">${tags.join(', ')}</td>
+          <td>${warningCell}</td>
+          <td><a class="link-table" href="https://stockbit.com/symbol/${r.ticker}" target="_blank" rel="noopener">Stockbit ↗</a></td>
+        </tr>`;
+      });
+      html += `</tbody></table>`;
+      content.innerHTML = html;
+    }
   }
 </script>
 </body>
