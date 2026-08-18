@@ -254,12 +254,12 @@
       <div class="step-title">Hitung Liquidity + Foreign Score + Kategori</div>
     </div>
     <div class="msg-box info">ℹ Berjalan otomatis setelah data tersimpan — menghitung ulang untuk <b>tanggal terbaru di database</b> (bukan cuma tanggal yang baru diupload), supaya kalau Anda upload data lampau (backfill), hasilnya tetap akurat.</div>
-    <div class="field" style="max-width:220px; margin-top:12px;">
+    <div class="field" style="max-width:280px; margin-top:12px;">
       <label>Harga Minimum per Lembar (Rp)</label>
       <input type="number" id="minPriceFilter" value="100" min="0" step="10">
+      <div style="font-size:10.5px; color:var(--text-faint); margin-top:6px; line-height:1.5;">Saham di bawah harga ini (biasanya rawan digoreng/likuiditas semu) dibuang sebelum masuk perhitungan kategori.</div>
     </div>
-    <div style="font-size:10.5px; color:var(--text-faint); margin-top:-6px; margin-bottom:10px;">Saham di bawah harga ini (biasanya rawan digoreng/likuiditas semu) dibuang sebelum masuk perhitungan kategori.</div>
-    <button class="btn btn-ghost" id="btnRecompute4">🔄 Hitung Ulang Sekarang (tanpa upload baru)</button>
+    <button class="btn btn-ghost" id="btnRecompute4" style="margin-top:6px;">🔄 Hitung Ulang Sekarang (tanpa upload baru)</button>
     <div class="progress-wrap" id="progressWrap4">
       <div class="progress-bar-outer"><div class="progress-bar-inner" id="progressBar4"></div></div>
       <div class="progress-label" id="progressLabel4">Memproses 0 / 0 saham...</div>
