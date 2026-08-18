@@ -1232,7 +1232,9 @@
           }
         }
         if(!closes.length) throw new Error('Tidak ada data harga valid dari Yahoo');
-        return { closes, highs, lows, volumes };
+        const lastTs = timestamps[timestamps.length - 1];
+        const lastDate = lastTs ? new Date(lastTs * 1000).toISOString().slice(0,10) : null;
+        return { closes, highs, lows, volumes, lastDate };
       }catch(err){
         lastErr = err;
         continue; // coba proxy berikutnya
@@ -1243,7 +1245,7 @@
 
   async function updateTechnicalIndicators(){
     if(!firebaseReady) return;
-    const { collection, query, where, getDocs, doc, setDoc } = firestoreFns;
+    const { collection, query, orderBy, limit, where, getDocs, doc, getDoc, setDoc } = firestoreFns;
     const out = document.getElementById('indicatorResult');
     out.innerHTML = '';
     document.getElementById('progressWrap5').style.display = 'block';
@@ -1261,25 +1263,53 @@
         out.innerHTML = `<div class="msg-box warning">⚠ Tidak ada saham dengan match kategori ≥ ${threshold}. Coba turunkan angka minimal, atau pastikan Tahap 4 (Step 4) sudah dijalankan lebih dulu.</div>`;
         return;
       }
+
+      // 1b. cari tanggal terbaru data resmi kita (dari upload Excel), buat validasi silang vs Yahoo
+      const metaQ = query(collection(db, 'dailySummary'), orderBy('tradingDate', 'desc'), limit(1));
+      const metaSnap = await getDocs(metaQ);
+      const officialLatestDate = metaSnap.empty ? null : metaSnap.docs[0].data().tradingDate;
+
       updateProgress5(0, candidates.length, 'Mengambil histori Yahoo Finance');
 
-      // 2. tarik histori harga dari Yahoo Finance (dual-proxy), konkurensi dibatasi lebih kecil
-      //    karena ini API eksternal (lebih rentan rate-limit dibanding Firestore sendiri)
+      // 2. tarik histori harga dari Yahoo Finance (dual-proxy) + data resmi hari ini (buat validasi silang)
       let fetched = 0;
       const { results, errorCount, firstError } = await runWithConcurrency(candidates, 5, async (row) => {
-        const hist = await fetchYahooHistory(row.ticker);
+        const [hist, officialSnap] = await Promise.all([
+          fetchYahooHistory(row.ticker),
+          officialLatestDate ? getDoc(doc(db, 'dailySummary', officialLatestDate, 'stocks', row.ticker)) : Promise.resolve(null),
+        ]);
         fetched++;
         updateProgress5(fetched, candidates.length, 'Mengambil histori Yahoo Finance');
-        return { ticker: row.ticker, companyName: row.companyName, ...hist };
+
+        let dataStale = false;
+        if(officialSnap && officialSnap.exists() && officialLatestDate){
+          const official = officialSnap.data();
+          if(hist.lastDate !== officialLatestDate && official.close > 0){
+            dataStale = true;
+            if(!hist.lastDate || hist.lastDate < officialLatestDate){
+              // Yahoo belum sampai tanggal resmi kita — tambahkan titik baru pakai data resmi
+              hist.closes.push(official.close);
+              hist.highs.push(official.high || official.close);
+              hist.lows.push(official.low || official.close);
+              hist.volumes.push(official.volume || 0);
+            }
+          }
+        }
+
+        return { ticker: row.ticker, companyName: row.companyName, dataStale, ...hist };
       });
 
       const warnings = [];
       if(errorCount > 0){
         warnings.push(`⚠ ${errorCount} saham gagal diambil dari Yahoo Finance (dilewati). Contoh error: ${firstError ? firstError.message : '-'}`);
       }
+      const staleCount = results.filter(r => r && r.dataStale).length;
+      if(staleCount > 0){
+        warnings.push(`ℹ️ ${staleCount} saham: data Yahoo masih tertinggal dari tanggal resmi (${officialLatestDate}) — sistem otomatis menambahkan harga resmi hari ini sebagai titik terbaru sebelum menghitung indikator, supaya Trend/EMA tidak basi.`);
+      }
 
-      // 3. hitung indikator per ticker dari histori Yahoo
-      const computed = results.filter(Boolean).map(({ ticker, companyName, closes, highs, lows, volumes }) => {
+      // 3. hitung indikator per ticker dari histori Yahoo (sudah dilengkapi data resmi hari ini kalau perlu)
+      const computed = results.filter(Boolean).map(({ ticker, companyName, closes, highs, lows, volumes, dataStale }) => {
         const daysAccumulated = closes.length;
         const latestClose = closes[closes.length - 1];
 
@@ -1334,7 +1364,7 @@
         return {
           ticker, companyName, daysAccumulated,
           ema20, ema50, rsi14, macdLine, macdSignal, trendLabel,
-          volumeTrendRatio, atr14, reclaimPattern,
+          volumeTrendRatio, atr14, reclaimPattern, dataStale,
         };
       });
 
@@ -1453,7 +1483,7 @@
         </tr></thead><tbody>`;
         computed.sort((a,b) => (b.technicalScore||0) - (a.technicalScore||0)).forEach(r => {
           html += `<tr>
-            <td>${r.ticker}</td>
+            <td>${r.ticker}${r.dataStale ? ' <span title="Data Yahoo tertinggal, sudah disesuaikan pakai harga resmi hari ini" style="color:var(--amber-flag); font-size:10px;">🔄</span>' : ''}</td>
             <td>${r.rsi14!==null ? r.rsi14.toFixed(1) : '-'}</td>
             <td>${r.trendLabel ?? '-'}</td>
             <td class="pos">${r.technicalScore ?? '-'}</td>
