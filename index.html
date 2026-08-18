@@ -774,7 +774,7 @@
 
   async function computeRollingStats(){
     if(!firebaseReady) return;
-    const { collection, query, orderBy, limit, getDocs, doc, setDoc, deleteDoc } = firestoreFns;
+    const { collection, query, orderBy, limit, getDocs, getDoc, doc, setDoc, deleteDoc } = firestoreFns;
     const out = document.getElementById('rollingResult');
     out.innerHTML = '';
     document.getElementById('progressWrap4').style.display = 'block';
@@ -1029,6 +1029,52 @@
       }
     }
 
+    // 8c. auto-tambah ke Watchlist — kandidat dengan match \u22653 kategori ATAU sudah dapat
+    // fase "Tahap Awal" (Bandar Accum aktif, belum breakout). Tujuannya: supaya sinyal kuat
+    // tetap terekam untuk dipantau meski besok hilang dari radar utama (celah transisi kategori).
+    const autoWatchlistCandidates = raw.filter(r => {
+      const earlyStage = r.bandarAccum === true && r.volumeBreakout === false;
+      return r.matchCount >= 3 || earlyStage;
+    });
+    let autoAdded = 0;
+    if(autoWatchlistCandidates.length){
+      const { errorCount: watchlistErrors } = await runWithConcurrency(autoWatchlistCandidates, 15, async (r) => {
+        const wlRef = doc(db, 'watchlist', r.ticker);
+        const existing = await getDoc(wlRef);
+        if(existing.exists()) return; // sudah dipantau (manual atau auto sebelumnya), jangan timpa snapshot lamanya
+        const tags = [];
+        if(r.volumeBreakout) tags.push('Volume Breakout');
+        if(r.foreignUptrend) tags.push('Foreign Uptrend');
+        if(r.bigAccum) tags.push('Big Accum');
+        if(r.bandarAccum) tags.push('Bandar Accum');
+        const phase = [];
+        if(r.bandarAccum && !r.volumeBreakout) phase.push('🟢 Tahap Awal');
+        if(r.volumeBreakout && !r.bandarAccum && r.foreignUptrend && r.bigAccum) phase.push('🟠 Sudah Naik — Rawan Guyur');
+        await setDoc(wlRef, {
+          ticker: r.ticker,
+          companyName: r.companyName || '',
+          addedDate: latestDate,
+          addedAt: new Date().toISOString(),
+          autoAdded: true,
+          snapshot: {
+            close: r.row.close ?? null,
+            score: r.totalScorePartial ?? null,
+            matchCount: r.matchCount ?? null,
+            categories: tags,
+            phase,
+            distributionWarning: !!r.distributionWarning,
+            foreignNetValue3d: r.foreignNetValue3d ?? null,
+            rsi14: null, // belum ada di titik ini — terisi begitu Step 5 dijalankan & dibaca live saat buka Watchlist
+            trendLabel: null,
+          },
+        });
+        autoAdded++;
+      });
+      if(watchlistErrors > 0){
+        warnings.push(`⚠ Sebagian gagal auto-masuk watchlist (tidak fatal).`);
+      }
+    }
+
     // 9. ringkasan hasil di UI
     const withHistory3 = raw.filter(r => r.foreignNet3d !== null).length;
     const matched3plus = raw.filter(r => r.matchCount >= 3).sort((a,b)=>b.matchCount-a.matchCount || b.totalScorePartial-a.totalScorePartial).slice(0,10);
@@ -1040,7 +1086,7 @@
       <div class="stat-box ${withHistory3>=candidates.length*0.5?'ok':'warn'}"><div class="label">Histori \u22653 Hari</div><div class="value">${withHistory3}</div></div>
       <div class="stat-box"><div class="label">Match \u22653 Kategori</div><div class="value">${matched3plus.length}</div></div>
     </div>
-    <div class="msg-box info">ℹ ${belowMinPrice} saham dibuang karena harga di bawah Rp${minPrice}/lembar. ${belowLiquidity} saham dibuang karena Value/Frequency rata-rata di bawah batas minimal (dari ${rawBeforeLiquidityFilter} kandidat harga OK, tersisa ${raw.length}).${staleDocs.length ? ` ${staleDocs.length} data lama (sudah tidak lolos filter) dibersihkan dari database.` : ''}</div>`;
+    <div class="msg-box info">ℹ ${belowMinPrice} saham dibuang karena harga di bawah Rp${minPrice}/lembar. ${belowLiquidity} saham dibuang karena Value/Frequency rata-rata di bawah batas minimal (dari ${rawBeforeLiquidityFilter} kandidat harga OK, tersisa ${raw.length}).${staleDocs.length ? ` ${staleDocs.length} data lama (sudah tidak lolos filter) dibersihkan dari database.` : ''}${autoAdded ? ` ⭐ ${autoAdded} saham baru otomatis masuk Watchlist (match \u22653 atau Tahap Awal).` : ''}</div>`;
 
     if(withHistory3 < candidates.length){
       html += `<div class="msg-box warning">⚠ ${candidates.length - withHistory3} saham belum punya histori 3 hari — kategori Foreign Uptrend/Big Accum/Bandar Accum untuk saham itu belum bisa dievaluasi (butuh upload beberapa hari lagi, termasuk backfill kalau ada).</div>`;
