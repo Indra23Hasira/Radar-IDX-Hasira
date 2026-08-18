@@ -150,6 +150,7 @@
   .phase-badge.early{ background:rgba(62,207,142,0.12); color:var(--positive); border:1px solid rgba(62,207,142,0.3); }
   .phase-badge.risk{ background:rgba(232,118,61,0.14); color:var(--risk-orange); border:1px solid rgba(232,118,61,0.35); }
   .phase-badge.reversal{ background:rgba(79,209,197,0.12); color:var(--cyan); border:1px solid rgba(79,209,197,0.3); }
+  .phase-badge.reclaim{ background:rgba(62,207,142,0.14); color:var(--positive); border:1px solid rgba(62,207,142,0.35); }
   .risk-banner{ display:flex; align-items:center; gap:8px; background:rgba(232,118,61,0.08); border:1px solid rgba(232,118,61,0.3);
     color:#F4A578; font-size:11.5px; padding:8px 12px; border-radius:var(--radius); margin:10px 0; }
   .reversal-banner{ display:flex; align-items:center; gap:8px; background:rgba(79,209,197,0.08); border:1px solid rgba(79,209,197,0.3);
@@ -780,6 +781,11 @@
           note: 'Sebelumnya asing net beli, tapi 3 hari terakhir mulai berbalik jual. Waspada — bisa jadi awal dari pembalikan arah ke bawah.' });
       }
     }
+    // Reclaim MA20: support hold + volume naik + harga tembus & bertahan di atas MA20
+    if(r.reclaimPattern || r.ind?.reclaimPattern){
+      tags.push({ label: '🎯 Reclaim MA20', cls: 'reclaim',
+        note: 'Harga sempat dekat area support, volume mulai naik, dan berhasil menembus + bertahan di atas MA20 — pola teknikal yang sering diikuti kelanjutan kenaikan (bukan jaminan, tetap cek chart manual).' });
+    }
     return tags;
   }
 
@@ -851,11 +857,13 @@
     const earlyCount = filtered.filter(r => computeSignalPhase(r).some(p => p.cls === 'early')).length;
     const riskCount = filtered.filter(r => computeSignalPhase(r).some(p => p.cls === 'risk')).length;
     const reversalCount = filtered.filter(r => computeSignalPhase(r).some(p => p.cls === 'reversal')).length;
+    const reclaimCount = filtered.filter(r => computeSignalPhase(r).some(p => p.cls === 'reclaim')).length;
     const distCount = filtered.filter(r => r.distributionWarning).length;
     const phaseParts = [];
     if(earlyCount) phaseParts.push(`<span style="color:var(--positive);">🟢 ${earlyCount} Tahap Awal</span>`);
     if(riskCount) phaseParts.push(`<span style="color:var(--risk-orange);">🟠 ${riskCount} Rawan Guyur</span>`);
     if(reversalCount) phaseParts.push(`<span style="color:var(--cyan);">🔄 ${reversalCount} Reversal/Melemah</span>`);
+    if(reclaimCount) phaseParts.push(`<span style="color:var(--positive);">🎯 ${reclaimCount} Reclaim MA20</span>`);
     if(distCount) phaseParts.push(`<span style="color:var(--negative);">⚠ ${distCount} Tanda Distribusi</span>`);
     document.getElementById('phaseSummary').innerHTML = phaseParts.length ? phaseParts.join(' &nbsp;·&nbsp; ') : '';
 
