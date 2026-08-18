@@ -151,6 +151,7 @@
   .phase-badge.risk{ background:rgba(232,118,61,0.14); color:var(--risk-orange); border:1px solid rgba(232,118,61,0.35); }
   .phase-badge.reversal{ background:rgba(79,209,197,0.12); color:var(--cyan); border:1px solid rgba(79,209,197,0.3); }
   .phase-badge.reclaim{ background:rgba(62,207,142,0.14); color:var(--positive); border:1px solid rgba(62,207,142,0.35); }
+  .phase-badge.candle{ background:rgba(212,168,87,0.14); color:var(--gold); border:1px solid rgba(212,168,87,0.35); }
   .risk-banner{ display:flex; align-items:center; gap:8px; background:rgba(232,118,61,0.08); border:1px solid rgba(232,118,61,0.3);
     color:#F4A578; font-size:11.5px; padding:8px 12px; border-radius:var(--radius); margin:10px 0; }
   .reversal-banner{ display:flex; align-items:center; gap:8px; background:rgba(79,209,197,0.08); border:1px solid rgba(79,209,197,0.3);
@@ -786,6 +787,12 @@
       tags.push({ label: '🎯 Reclaim MA20', cls: 'reclaim',
         note: 'Harga sempat dekat area support, volume mulai naik, dan berhasil menembus + bertahan di atas MA20 — pola teknikal yang sering diikuti kelanjutan kenaikan (bukan jaminan, tetap cek chart manual).' });
     }
+    // Candle konfirmasi hari terakhir (Pin Bar / Bullish Engulfing / Marubozu)
+    const candles = r.candlePatterns || r.ind?.candlePatterns || [];
+    candles.forEach(p => {
+      tags.push({ label: `🕯️ ${p}`, cls: 'candle',
+        note: `Candle ${p} terdeteksi di hari terakhir — sinyal konfirmasi entry jangka pendek, biasanya lebih kuat kalau muncul di area support atau bareng sinyal lain.` });
+    });
     return tags;
   }
 
