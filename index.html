@@ -763,7 +763,7 @@
 
   async function computeRollingStats(){
     if(!firebaseReady) return;
-    const { collection, query, orderBy, limit, getDocs, doc, setDoc } = firestoreFns;
+    const { collection, query, orderBy, limit, getDocs, doc, setDoc, deleteDoc } = firestoreFns;
     const out = document.getElementById('rollingResult');
     out.innerHTML = '';
     document.getElementById('progressWrap4').style.display = 'block';
@@ -991,6 +991,25 @@
       warnings.push(`⚠ ${saveErrors} saham gagal disimpan hasilnya. Contoh error: ${saveFirstError ? saveFirstError.message : '-'}`);
     }
 
+    // 8b. bersihkan data lama: ticker yang dulu pernah jadi kandidat tapi sekarang
+    // sudah tidak lolos filter (harga di bawah minimum, atau jadi tidak aktif) —
+    // supaya tidak nyangkut selamanya di tickerRollingStats dan tetap muncul di Dashboard
+    updateProgress4(0, 1, 'Membersihkan data lama');
+    const currentTickerSet = new Set(raw.map(r => r.ticker));
+    const allRollingStatsSnap = await getDocs(collection(db, 'tickerRollingStats'));
+    const staleDocs = allRollingStatsSnap.docs.filter(d => !currentTickerSet.has(d.id));
+    let removed = 0;
+    if(staleDocs.length){
+      const { errorCount: removeErrors } = await runWithConcurrency(staleDocs, 15, async (d) => {
+        await deleteDoc(doc(db, 'tickerRollingStats', d.id));
+        removed++;
+        updateProgress4(removed, staleDocs.length, 'Membersihkan data lama');
+      });
+      if(removeErrors > 0){
+        warnings.push(`⚠ Sebagian data lama gagal dibersihkan (tidak fatal, coba jalankan ulang).`);
+      }
+    }
+
     // 9. ringkasan hasil di UI
     const withHistory3 = raw.filter(r => r.foreignNet3d !== null).length;
     const matched3plus = raw.filter(r => r.matchCount >= 3).sort((a,b)=>b.matchCount-a.matchCount || b.totalScorePartial-a.totalScorePartial).slice(0,10);
@@ -1002,7 +1021,7 @@
       <div class="stat-box ${withHistory3>=candidates.length*0.5?'ok':'warn'}"><div class="label">Histori \u22653 Hari</div><div class="value">${withHistory3}</div></div>
       <div class="stat-box"><div class="label">Match \u22653 Kategori</div><div class="value">${matched3plus.length}</div></div>
     </div>
-    <div class="msg-box info">ℹ ${belowMinPrice} saham dibuang karena harga di bawah Rp${minPrice}/lembar (rawan likuiditas semu).</div>`;
+    <div class="msg-box info">ℹ ${belowMinPrice} saham dibuang karena harga di bawah Rp${minPrice}/lembar (rawan likuiditas semu).${staleDocs.length ? ` ${staleDocs.length} data lama (sudah tidak lolos filter) dibersihkan dari database.` : ''}</div>`;
 
     if(withHistory3 < candidates.length){
       html += `<div class="msg-box warning">⚠ ${candidates.length - withHistory3} saham belum punya histori 3 hari — kategori Foreign Uptrend/Big Accum/Bandar Accum untuk saham itu belum bisa dievaluasi (butuh upload beberapa hari lagi, termasuk backfill kalau ada).</div>`;
