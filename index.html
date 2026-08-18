@@ -1299,10 +1299,42 @@
         const atrWindow = rangeSeries.slice(-14);
         const atr14 = atrWindow.length ? atrWindow.reduce((a,b)=>a+b,0) / atrWindow.length : null;
 
+        // --- Deteksi pola: Support Hold + Volume Naik + Reclaim MA20 & Bertahan ---
+        let reclaimPattern = false;
+        if(daysAccumulated >= 25){
+          // 1. Support Hold: harga pernah dekat level low 15 hari terakhir (5 hari terakhir),
+          //    dan sekarang belum jebol jauh di bawah level itu
+          const supportWindow = lows.slice(-15);
+          const supportLevel = Math.min(...supportWindow);
+          const recentLows = lows.slice(-5);
+          const touchedSupport = recentLows.some(l => l <= supportLevel * 1.03);
+          const stillHolding = latestClose >= supportLevel * 0.97;
+          const supportHold = touchedSupport && stillHolding;
+
+          // 2. Volume Naik: rata-rata 3 hari terakhir > rata-rata 3 hari sebelumnya (naik \u226510%)
+          const vol3Recent = volumes.slice(-3);
+          const vol3Prior = volumes.slice(-6, -3);
+          const avgVol3Recent = vol3Recent.reduce((a,b)=>a+b,0) / (vol3Recent.length||1);
+          const avgVol3Prior = vol3Prior.reduce((a,b)=>a+b,0) / (vol3Prior.length||1);
+          const volumeIncreasing = avgVol3Prior > 0 && avgVol3Recent > avgVol3Prior * 1.1;
+
+          // 3. Reclaim MA20 & Bertahan: pernah di bawah EMA20 (10 hari lalu), sekarang di atas 3 hari berturut-turut
+          const emaTail = ema20Series.slice(-13); // 10 hari lalu s.d. sekarang (13 titik)
+          const closeTail = closes.slice(-13);
+          const wasBelow = emaTail.slice(0, 10).some((e, i) => e !== undefined && closeTail[i] < e);
+          const last3AboveEma = [0,1,2].every(i => {
+            const idx = emaTail.length - 1 - i;
+            return emaTail[idx] !== undefined && closeTail[idx] > emaTail[idx];
+          });
+          const maReclaim = wasBelow && last3AboveEma;
+
+          reclaimPattern = supportHold && volumeIncreasing && maReclaim;
+        }
+
         return {
           ticker, companyName, daysAccumulated,
           ema20, ema50, rsi14, macdLine, macdSignal, trendLabel,
-          volumeTrendRatio, atr14,
+          volumeTrendRatio, atr14, reclaimPattern,
         };
       });
 
@@ -1350,6 +1382,7 @@
           volumeTrendRatio: r.volumeTrendRatio,
           atr14: r.atr14,
           technicalScore: r.technicalScore,
+          reclaimPattern: r.reclaimPattern,
           updatedAt: new Date().toISOString(),
         });
         saved++;
@@ -1379,6 +1412,7 @@
         await setDoc(rsRef, {
           technicalScore: r.technicalScore,
           totalScore,
+          reclaimPattern: r.reclaimPattern,
         }, { merge: true });
         merged++;
         updateProgress5(merged, computed.length, 'Menggabungkan skor');
@@ -1410,8 +1444,12 @@
       <div class="msg-box success">✓ Technical Score sudah digabung ke Total Score di <code>tickerRollingStats</code> (Liquidity 25% + Foreign 30% + Technical 20%, bobot redistribusi otomatis kalau ada pilar kosong).</div>`;
 
       if(computed.length){
+        const reclaimCount = computed.filter(r => r.reclaimPattern).length;
+        if(reclaimCount){
+          html += `<div class="msg-box success">✓ ${reclaimCount} saham menunjukkan pola Support Hold + Volume Naik + Reclaim MA20 — lihat kolom "Pola" di tabel bawah.</div>`;
+        }
         html += `<div class="preview-table-wrap"><table><thead><tr>
-          <th>Ticker</th><th>RSI14</th><th>Trend</th><th>Tech Score</th><th>EMA20</th><th>EMA50</th><th>Cek</th>
+          <th>Ticker</th><th>RSI14</th><th>Trend</th><th>Tech Score</th><th>EMA20</th><th>EMA50</th><th>Pola</th><th>Cek</th>
         </tr></thead><tbody>`;
         computed.sort((a,b) => (b.technicalScore||0) - (a.technicalScore||0)).forEach(r => {
           html += `<tr>
@@ -1421,6 +1459,7 @@
             <td class="pos">${r.technicalScore ?? '-'}</td>
             <td>${r.ema20!==null ? r.ema20.toLocaleString('id-ID',{maximumFractionDigits:0}) : '-'}</td>
             <td>${r.ema50!==null ? r.ema50.toLocaleString('id-ID',{maximumFractionDigits:0}) : '-'}</td>
+            <td>${r.reclaimPattern ? '<span style="color:var(--positive); font-size:11px;">🎯 Reclaim MA20</span>' : ''}</td>
             <td><a href="https://stockbit.com/symbol/${r.ticker}" target="_blank" rel="noopener" style="color:var(--gold); text-decoration:none; font-size:11.5px;">Stockbit ↗</a></td>
           </tr>`;
         });
