@@ -146,7 +146,7 @@
   .cat-badges{ display:flex; flex-wrap:wrap; gap:5px; margin:10px 0; }
   .cat-badge{ font-size:9.5px; padding:3px 8px; border-radius:10px; background:rgba(79,209,197,0.1); color:var(--cyan); border:1px solid rgba(79,209,197,0.25); }
   .distribution-badge{ font-size:9.5px; padding:3px 8px; border-radius:10px; background:rgba(242,84,91,0.12); color:var(--negative); border:1px solid rgba(242,84,91,0.3); font-weight:600; }
-  .phase-badge{ font-size:9.5px; padding:3px 8px; border-radius:10px; font-weight:600; }
+  .phase-badge{ font-size:9.5px; padding:3px 8px; border-radius:10px; font-weight:600; cursor:help; }
   .phase-badge.early{ background:rgba(62,207,142,0.12); color:var(--positive); border:1px solid rgba(62,207,142,0.3); }
   .phase-badge.risk{ background:rgba(232,118,61,0.14); color:var(--risk-orange); border:1px solid rgba(232,118,61,0.35); }
   .phase-badge.reversal{ background:rgba(79,209,197,0.12); color:var(--cyan); border:1px solid rgba(79,209,197,0.3); }
@@ -902,7 +902,7 @@
               <button class="watchlist-btn ${watchlistTickers.has(r.ticker)?'saved':''}" data-ticker="${r.ticker}" style="margin-top:6px;">${watchlistTickers.has(r.ticker) ? '★ Tersimpan' : '☆ Watchlist'}</button>
             </div>
           </div>
-          <div class="cat-badges">${tags.map(t => `<span class="cat-badge">${t}</span>`).join('')}${phaseTags.map(p => `<span class="phase-badge ${p.cls}">${p.label}</span>`).join('')}${r.distributionWarning ? `<span class="distribution-badge">⚠ Distribusi</span>` : ''}</div>
+          <div class="cat-badges">${tags.map(t => `<span class="cat-badge">${t}</span>`).join('')}${phaseTags.map(p => `<span class="phase-badge ${p.cls}" title="${p.note.replace(/"/g,'&quot;')}">${p.label}</span>`).join('')}${r.distributionWarning ? `<span class="distribution-badge">⚠ Distribusi</span>` : ''}</div>
           ${phaseTags.filter(p=>p.cls==='risk').map(p => `<div class="risk-banner">🟠 ${p.note}</div>`).join('')}
           ${phaseTags.filter(p=>p.cls==='reversal').map(p => `<div class="reversal-banner">🔄 ${p.note}</div>`).join('')}
           ${r.distributionWarning ? `<div class="distribution-banner">⚠ Tanda distribusi terdeteksi — tekanan jual mendominasi, closing melemah. Cek ulang sebelum entry.</div>` : ''}
@@ -948,7 +948,7 @@
         const tags = categoryTags(r);
         const phaseTags = computeSignalPhase(r);
         const warningCell = [
-          ...phaseTags.map(p => `<span class="phase-badge ${p.cls}">${p.label}</span>`),
+          ...phaseTags.map(p => `<span class="phase-badge ${p.cls}" title="${p.note.replace(/"/g,'&quot;')}">${p.label}</span>`),
           r.distributionWarning ? '<span class="distribution-badge">⚠ Distribusi</span>' : ''
         ].filter(Boolean).join(' ');
         html += `<tr>
