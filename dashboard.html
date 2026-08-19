@@ -830,17 +830,21 @@
       const rsiExtreme = rsi != null && rsi > 80;
       const overExtended = pctAboveEma20 != null && pctAboveEma20 > 15;
       const alreadyRunning = daysSinceFirst != null && daysSinceFirst >= 4;
+      const conditionsMet = [rsiExtreme, overExtended, alreadyRunning].filter(Boolean).length;
 
-      if(rsiExtreme || overExtended || alreadyRunning){
+      if(conditionsMet >= 2){
         const reasons = [];
         if(rsiExtreme) reasons.push(`RSI ${rsi.toFixed(0)} (jenuh beli)`);
         if(overExtended) reasons.push(`${pctAboveEma20.toFixed(0)}% di atas EMA20 (terlalu jauh dari rata-rata)`);
         if(alreadyRunning) reasons.push(`sudah ${daysSinceFirst} hari sejak pertama terdeteksi`);
         tags.push({ label: '🟠 Rawan Guyur', cls: 'risk',
-          note: `Harga sudah breakout dan mulai terlihat jenuh: ${reasons.join(', ')}. Risiko profit taking lebih tinggi — pertimbangkan tunggu koreksi dulu.` });
+          note: `Harga sudah breakout dan mulai terlihat jenuh dari ${conditionsMet} sisi sekaligus: ${reasons.join(', ')}. Risiko profit taking lebih tinggi — pertimbangkan tunggu koreksi dulu.` });
       } else {
+        const partialNote = conditionsMet === 1
+          ? ' (ada 1 tanda jenuh, tapi belum cukup kuat sendirian — masih dianggap wajar).'
+          : '.';
         tags.push({ label: '🔵 Momentum Breakout', cls: 'momentum',
-          note: `Baru mulai breakout dari fase akumulasi, belum terlihat tanda jenuh (RSI/EMA20/durasi masih wajar) — masih berpotensi lanjut naik dalam waktu dekat. Tetap bukan jaminan, cek chart manual sebelum masuk.` });
+          note: `Baru mulai breakout dari fase akumulasi, belum terlihat tanda jenuh yang meyakinkan (butuh minimal 2 dari 3: RSI ekstrem, jarak EMA20, durasi)${partialNote} Masih berpotensi lanjut naik dalam waktu dekat. Tetap bukan jaminan, cek chart manual sebelum masuk.` });
       }
     }
     // Divergensi 3D vs 10D: bagian dari 10 hari yang lebih tua vs 3 hari terbaru arahnya berlawanan
