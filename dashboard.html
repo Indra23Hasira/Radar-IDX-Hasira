@@ -312,6 +312,7 @@
           <div class="main-title">Watchlist <span class="count" id="watchlistCount">·</span></div>
           <div class="main-desc">Saham yang Anda tandai untuk dipantau — bandingkan kondisi saat ditambahkan vs sekarang, buat uji apakah sinyal radar terbukti akurat.</div>
         </div>
+        <button class="btn-remove-watchlist" id="btnCleanWatchlist" style="white-space:nowrap;">🧹 Bersihkan (Auto, Match &lt;3)</button>
       </div>
       <div id="watchlistContent"><div class="loading-msg">Memuat watchlist...</div></div>
     </div>
@@ -624,6 +625,46 @@
     const { doc, deleteDoc } = firestoreFns;
     await deleteDoc(doc(db, 'watchlist', ticker));
     watchlistTickers.delete(ticker);
+  }
+
+  // ============================================================
+  // BERSIHKAN WATCHLIST — hapus HANYA yang auto-masuk gara-gara dulu masih
+  // ikut aturan "Tahap Awal" (belum pernah match >=3 kategori beneran).
+  // Entry manual dan yang match >=3 TIDAK disentuh — termasuk yang paling awal.
+  // ============================================================
+  document.getElementById('btnCleanWatchlist').addEventListener('click', cleanWatchlist);
+
+  async function cleanWatchlist(){
+    if(!firebaseReady) return;
+    const btn = document.getElementById('btnCleanWatchlist');
+    if(!confirm('Hapus semua entry Watchlist yang auto-masuk tapi tidak pernah match \u22653 kategori (entry manual & match \u22653 tetap aman)?')) return;
+    btn.disabled = true;
+    btn.textContent = 'Membersihkan...';
+    const { collection, getDocs, doc, deleteDoc } = firestoreFns;
+    try{
+      const wlSnap = await getDocs(collection(db, 'watchlist'));
+      const toDelete = wlSnap.docs.filter(d => {
+        const data = d.data();
+        const wasAuto = data.autoAdded === true;
+        const snapMatch = data.snapshot?.matchCount ?? 0;
+        return wasAuto && snapMatch < 3;
+      });
+      if(!toDelete.length){
+        alert('Tidak ada entry yang perlu dibersihkan — semua sudah match \u22653 kategori atau ditambahkan manual.');
+      }else{
+        const { errorCount } = await runWithConcurrency(toDelete, 15, async (d) => {
+          await deleteDoc(doc(db, 'watchlist', d.id));
+        });
+        alert(`Selesai — ${toDelete.length - errorCount} entry dibersihkan.${errorCount ? ` ${errorCount} gagal dihapus.` : ''}`);
+      }
+      loadWatchlist();
+    }catch(err){
+      console.error('cleanWatchlist gagal:', err);
+      alert('Gagal membersihkan: ' + err.message);
+    }finally{
+      btn.disabled = false;
+      btn.textContent = '🧹 Bersihkan (Auto, Match <3)';
+    }
   }
 
   // ============================================================
