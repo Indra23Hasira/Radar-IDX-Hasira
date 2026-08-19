@@ -1029,13 +1029,10 @@
       }
     }
 
-    // 8c. auto-tambah ke Watchlist — kandidat dengan match \u22653 kategori ATAU sudah dapat
-    // fase "Tahap Awal" (Bandar Accum aktif, belum breakout). Tujuannya: supaya sinyal kuat
-    // tetap terekam untuk dipantau meski besok hilang dari radar utama (celah transisi kategori).
-    const autoWatchlistCandidates = raw.filter(r => {
-      const earlyStage = r.bandarAccum === true && r.volumeBreakout === false;
-      return r.matchCount >= 3 || earlyStage;
-    });
+    // 8c. auto-tambah ke Watchlist — HANYA kandidat dengan match \u22653 kategori.
+    // (Sebelumnya juga termasuk fase "Tahap Awal" saja, tapi itu bikin watchlist
+    // kebanjiran kandidat lemah — dipersempit supaya fokus ke yang benar2 kuat.)
+    const autoWatchlistCandidates = raw.filter(r => r.matchCount >= 3);
     let autoAdded = 0;
     if(autoWatchlistCandidates.length){
       const { errorCount: watchlistErrors } = await runWithConcurrency(autoWatchlistCandidates, 15, async (r) => {
