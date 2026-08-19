@@ -152,10 +152,13 @@
   .phase-badge.reversal{ background:rgba(79,209,197,0.12); color:var(--cyan); border:1px solid rgba(79,209,197,0.3); }
   .phase-badge.reclaim{ background:rgba(62,207,142,0.14); color:var(--positive); border:1px solid rgba(62,207,142,0.35); }
   .phase-badge.candle{ background:rgba(212,168,87,0.14); color:var(--gold); border:1px solid rgba(212,168,87,0.35); }
+  .phase-badge.momentum{ background:rgba(59,130,246,0.14); color:#60A5FA; border:1px solid rgba(59,130,246,0.35); }
   .risk-banner{ display:flex; align-items:center; gap:8px; background:rgba(232,118,61,0.08); border:1px solid rgba(232,118,61,0.3);
     color:#F4A578; font-size:11.5px; padding:8px 12px; border-radius:var(--radius); margin:10px 0; }
   .reversal-banner{ display:flex; align-items:center; gap:8px; background:rgba(79,209,197,0.08); border:1px solid rgba(79,209,197,0.3);
     color:var(--cyan); font-size:11.5px; padding:8px 12px; border-radius:var(--radius); margin:10px 0; }
+  .momentum-banner{ display:flex; align-items:center; gap:8px; background:rgba(59,130,246,0.08); border:1px solid rgba(59,130,246,0.3);
+    color:#60A5FA; font-size:11.5px; padding:8px 12px; border-radius:var(--radius); margin:10px 0; }
   .context10-panel{ display:flex; justify-content:space-between; align-items:center; background:var(--panel-alt); border:1px solid var(--border-soft);
     border-radius:var(--radius); padding:9px 12px; margin-top:12px; font-size:11px; }
   .context10-panel .c10-label{ color:var(--text-faint); text-transform:uppercase; letter-spacing:0.5px; font-size:9.5px; }
@@ -384,6 +387,7 @@
   let sortMode = 'match'; // 'match' = kategori dulu (default), 'score' = score dulu
   let lastRenderedData = [];
   let watchlistTickers = new Set(); // ticker yang sudah masuk watchlist, buat status tombol di kartu
+  let watchlistAddedDates = new Map(); // ticker -> addedDate, buat hitung "sudah berapa hari sejak pertama terdeteksi"
   let currentTab = 'radar';
 
   document.getElementById('sortMatchBtn').addEventListener('click', () => {
@@ -487,8 +491,10 @@
 
     try{
       // 0. ambil daftar ticker yang sudah di watchlist (buat status tombol di tiap kartu)
+      //    sekalian ambil addedDate-nya buat hitung "sudah berapa hari sejak pertama terdeteksi"
       const wlSnap = await getDocs(collection(db, 'watchlist'));
       watchlistTickers = new Set(wlSnap.docs.map(d => d.id));
+      watchlistAddedDates = new Map(wlSnap.docs.map(d => [d.id, d.data().addedDate]));
       updateWatchlistCountBadge(wlSnap.size);
 
       // 1. ambil kandidat dengan match >= 1 sekaligus (filter ketat diterapkan saat render, biar ganti threshold tidak perlu query ulang)
@@ -766,11 +772,35 @@
       tags.push({ label: '🟢 Tahap Awal', cls: 'early',
         note: 'Masih dalam fase ditahan/dikumpulkan — belum breakout harga.' });
     }
-    // Sudah Naik — Rawan Guyur: breakout sudah kejadian + sinyal asing masih ada,
-    // tapi harga sudah lepas dari fase "ditahan" (Bandar Accum tidak lagi terpenuhi)
+    // Sudah Naik — breakout sudah kejadian + sinyal asing masih ada, harga sudah
+    // lepas dari fase "ditahan" (Bandar Accum tidak lagi terpenuhi). Dipecah 2 arah
+    // tergantung apakah sudah "overextended" atau masih di fase awal momentum:
     if(c.volumeBreakout && !c.bandarAccum && c.foreignUptrend && c.bigAccum){
-      tags.push({ label: '🟠 Sudah Naik — Rawan Guyur', cls: 'risk',
-        note: 'Harga sudah breakout dari fase sideways — risiko masuk di puncak / kena profit taking.' });
+      const rsi = r.ind?.rsi14;
+      const ema20 = r.ind?.ema20;
+      const close = r.price?.close;
+      const pctAboveEma20 = (ema20 && close) ? ((close - ema20) / ema20) * 100 : null;
+
+      const addedDateStr = watchlistAddedDates.get(r.ticker);
+      const daysSinceFirst = addedDateStr
+        ? Math.floor((Date.now() - new Date(addedDateStr).getTime()) / 864e5)
+        : null;
+
+      const rsiExtreme = rsi != null && rsi > 80;
+      const overExtended = pctAboveEma20 != null && pctAboveEma20 > 15;
+      const alreadyRunning = daysSinceFirst != null && daysSinceFirst >= 4;
+
+      if(rsiExtreme || overExtended || alreadyRunning){
+        const reasons = [];
+        if(rsiExtreme) reasons.push(`RSI ${rsi.toFixed(0)} (jenuh beli)`);
+        if(overExtended) reasons.push(`${pctAboveEma20.toFixed(0)}% di atas EMA20 (terlalu jauh dari rata-rata)`);
+        if(alreadyRunning) reasons.push(`sudah ${daysSinceFirst} hari sejak pertama terdeteksi`);
+        tags.push({ label: '🟠 Rawan Guyur', cls: 'risk',
+          note: `Harga sudah breakout dan mulai terlihat jenuh: ${reasons.join(', ')}. Risiko profit taking lebih tinggi — pertimbangkan tunggu koreksi dulu.` });
+      } else {
+        tags.push({ label: '🔵 Momentum Breakout', cls: 'momentum',
+          note: `Baru mulai breakout dari fase akumulasi, belum terlihat tanda jenuh (RSI/EMA20/durasi masih wajar) — masih berpotensi lanjut naik dalam waktu dekat. Tetap bukan jaminan, cek chart manual sebelum masuk.` });
+      }
     }
     // Divergensi 3D vs 10D: bagian dari 10 hari yang lebih tua vs 3 hari terbaru arahnya berlawanan
     if(r.foreignNet3d != null && r.foreignNet10d != null){
@@ -863,11 +893,13 @@
 
     const earlyCount = filtered.filter(r => computeSignalPhase(r).some(p => p.cls === 'early')).length;
     const riskCount = filtered.filter(r => computeSignalPhase(r).some(p => p.cls === 'risk')).length;
+    const momentumCount = filtered.filter(r => computeSignalPhase(r).some(p => p.cls === 'momentum')).length;
     const reversalCount = filtered.filter(r => computeSignalPhase(r).some(p => p.cls === 'reversal')).length;
     const reclaimCount = filtered.filter(r => computeSignalPhase(r).some(p => p.cls === 'reclaim')).length;
     const distCount = filtered.filter(r => r.distributionWarning).length;
     const phaseParts = [];
     if(earlyCount) phaseParts.push(`<span style="color:var(--positive);">🟢 ${earlyCount} Tahap Awal</span>`);
+    if(momentumCount) phaseParts.push(`<span style="color:#60A5FA;">🔵 ${momentumCount} Momentum Breakout</span>`);
     if(riskCount) phaseParts.push(`<span style="color:var(--risk-orange);">🟠 ${riskCount} Rawan Guyur</span>`);
     if(reversalCount) phaseParts.push(`<span style="color:var(--cyan);">🔄 ${reversalCount} Reversal/Melemah</span>`);
     if(reclaimCount) phaseParts.push(`<span style="color:var(--positive);">🎯 ${reclaimCount} Reclaim MA20</span>`);
@@ -905,6 +937,7 @@
           <div class="cat-badges">${tags.map(t => `<span class="cat-badge">${t}</span>`).join('')}${phaseTags.map(p => `<span class="phase-badge ${p.cls}" title="${p.note.replace(/"/g,'&quot;')}">${p.label}</span>`).join('')}${r.distributionWarning ? `<span class="distribution-badge">⚠ Distribusi</span>` : ''}</div>
           ${phaseTags.filter(p=>p.cls==='risk').map(p => `<div class="risk-banner">🟠 ${p.note}</div>`).join('')}
           ${phaseTags.filter(p=>p.cls==='reversal').map(p => `<div class="reversal-banner">🔄 ${p.note}</div>`).join('')}
+          ${phaseTags.filter(p=>p.cls==='momentum').map(p => `<div class="momentum-banner">🔵 ${p.note}</div>`).join('')}
           ${r.distributionWarning ? `<div class="distribution-banner">⚠ Tanda distribusi terdeteksi — tekanan jual mendominasi, closing melemah. Cek ulang sebelum entry.</div>` : ''}
           <div class="card-body">
             <div class="spider-wrap">${buildSpiderSVG([r.liquidityScore, r.foreignScore, tech])}</div>
