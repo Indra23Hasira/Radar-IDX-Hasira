@@ -1452,13 +1452,16 @@
         const atrWindow = rangeSeries.slice(-14);
         const atr14 = atrWindow.length ? atrWindow.reduce((a,b)=>a+b,0) / atrWindow.length : null;
 
+        // Level Support (low terendah 15 hari terakhir) — dihitung terpisah dari deteksi
+        // pola Reclaim MA20, supaya tetap muncul sebagai referensi meski pola lengkapnya
+        // belum tentu terpenuhi (butuh histori minimal 15 hari)
+        const supportLevel = daysAccumulated >= 15 ? Math.min(...lows.slice(-15)) : null;
+
         // --- Deteksi pola: Support Hold + Volume Naik + Reclaim MA20 & Bertahan ---
         let reclaimPattern = false;
         if(daysAccumulated >= 25){
           // 1. Support Hold: harga pernah dekat level low 15 hari terakhir (5 hari terakhir),
           //    dan sekarang belum jebol jauh di bawah level itu
-          const supportWindow = lows.slice(-15);
-          const supportLevel = Math.min(...supportWindow);
           const recentLows = lows.slice(-5);
           const touchedSupport = recentLows.some(l => l <= supportLevel * 1.03);
           const stillHolding = latestClose >= supportLevel * 0.97;
@@ -1489,7 +1492,7 @@
         return {
           ticker, companyName, daysAccumulated,
           ema20, ema50, rsi14, macdLine, macdSignal, trendLabel,
-          volumeTrendRatio, atr14, reclaimPattern, dataStale, candlePatterns,
+          volumeTrendRatio, atr14, reclaimPattern, dataStale, candlePatterns, supportLevel,
         };
       });
 
@@ -1539,6 +1542,7 @@
           technicalScore: r.technicalScore,
           reclaimPattern: r.reclaimPattern,
           candlePatterns: r.candlePatterns,
+          supportLevel: r.supportLevel,
           updatedAt: new Date().toISOString(),
         });
         saved++;
@@ -1569,6 +1573,8 @@
           totalScore,
           reclaimPattern: r.reclaimPattern,
           candlePatterns: r.candlePatterns,
+          supportLevel: r.supportLevel,
+          atr14: r.atr14,
         }, { merge: true });
         merged++;
         updateProgress5(merged, computed.length, 'Menggabungkan skor');
