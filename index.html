@@ -1104,7 +1104,10 @@
             try{
               const hist = await fetchYahooHistory(ticker);
               for(let i = 0; i < hist.closes.length; i++){
-                if(!hist.dates[i] || hist.dates[i] < addedDate) continue; // cuma hitung sejak masuk watchlist
+                // cuma hitung dari tanggal masuk watchlist SAMPAI tanggal resmi terakhir kita
+                // (latestDate) — jangan ikut data "hari ini" dari Yahoo kalau market masih
+                // jalan (itu harga sementara/live, belum final, dan belum kita upload resmi)
+                if(!hist.dates[i] || hist.dates[i] < addedDate || hist.dates[i] > latestDate) continue;
                 const c = hist.closes[i];
                 if(peakClose == null || c > peakClose){ peakClose = c; peakDate = hist.dates[i]; }
                 if(lowestClose == null || c < lowestClose){ lowestClose = c; lowestDate = hist.dates[i]; }
