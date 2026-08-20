@@ -805,6 +805,19 @@
           ${curPhase.length ? `<div class="snapshot-row"><span class="sp-label">Fase</span><span class="sp-val" style="font-size:10px;">${curPhase.map(p=>p.label).join(', ')}</span></div>` : ''}
         </div>
 
+        ${(() => {
+          const supportLevel = cur.supportLevel ?? cur.ind?.supportLevel;
+          const atr14 = cur.atr14 ?? cur.ind?.atr14;
+          if(supportLevel == null && atr14 == null) return '';
+          const supportDistPct = (supportLevel != null && curClose) ? ((curClose - supportLevel) / curClose) * 100 : null;
+          const atrPct = (atr14 != null && curClose) ? (atr14 / curClose) * 100 : null;
+          return `<div class="snapshot-panel" style="background:rgba(96,165,250,0.05); border-color:rgba(96,165,250,0.2);" title="Referensi buat hitung SL/TP sendiri — bukan rekomendasi otomatis">
+            <div class="sp-title">📍 Support &amp; 📏 ATR14</div>
+            <div class="snapshot-row"><span class="sp-label">Support (15D)</span><span class="sp-val" style="color:#60A5FA;">${fmtNum(supportLevel)} ${supportDistPct!=null ? `<span style="font-size:9px; color:var(--text-faint);">(${supportDistPct.toFixed(1)}% di bawah)</span>` : ''}</span></div>
+            <div class="snapshot-row"><span class="sp-label">ATR14</span><span class="sp-val" style="color:#60A5FA;">${fmtNum(atr14)} ${atrPct!=null ? `<span style="font-size:9px; color:var(--text-faint);">(${atrPct.toFixed(1)}% dari harga)</span>` : ''}</span></div>
+          </div>`;
+        })()}
+
         <div class="card-foot">
           <div class="pillar-mini">
             <div class="p">RSI <b>${cur.ind?.rsi14!=null ? cur.ind.rsi14.toFixed(1) : '-'}</b></div>
