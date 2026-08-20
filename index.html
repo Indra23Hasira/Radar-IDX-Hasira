@@ -1072,6 +1072,94 @@
       }
     }
 
+    // 8d. update tracking harga TERTINGGI & TERENDAH sejak tiap saham masuk Watchlist —
+    // supaya bisa jawab "kalau masuk pas ditambahkan, potensi cuan maksimalnya berapa,
+    // dan seberapa dalam koreksinya sebelum itu". Jalan tiap Step 4, tidak tergantung
+    // apakah Anda buka tab Watchlist atau tidak.
+    //
+    // 2 jalur:
+    //   - Belum pernah ada peakClose (item lama sebelum fitur ini ada) → BACKFILL SEKALI
+    //     dari histori Yahoo Finance (filter dari addedDate), baru "peakBackfilled" ditandai
+    //   - Sudah pernah ada → cukup bandingkan harga resmi hari ini (ringan, tanpa Yahoo)
+    let peakUpdated = 0, peakBackfilled = 0;
+    try{
+      const allWlSnap = await getDocs(collection(db, 'watchlist'));
+      if(allWlSnap.size){
+        const needsBackfill = allWlSnap.docs.filter(d => !d.data().peakBackfilled);
+        const alreadyTracked = allWlSnap.docs.filter(d => d.data().peakBackfilled);
+
+        // Jalur A: backfill sekali dari Yahoo Finance (concurrency kecil, ini API eksternal)
+        if(needsBackfill.length){
+          const { errorCount: backfillErrors } = await runWithConcurrency(needsBackfill, 5, async (wlDoc) => {
+            const item = wlDoc.data();
+            const ticker = item.ticker;
+            const baseClose = item.snapshot?.close ?? null;
+            const addedDate = item.addedDate;
+
+            let peakClose = item.peakClose ?? baseClose;
+            let peakDate = item.peakDate ?? addedDate;
+            let lowestClose = item.lowestClose ?? baseClose;
+            let lowestDate = item.lowestDate ?? addedDate;
+
+            try{
+              const hist = await fetchYahooHistory(ticker);
+              for(let i = 0; i < hist.closes.length; i++){
+                if(!hist.dates[i] || hist.dates[i] < addedDate) continue; // cuma hitung sejak masuk watchlist
+                const c = hist.closes[i];
+                if(peakClose == null || c > peakClose){ peakClose = c; peakDate = hist.dates[i]; }
+                if(lowestClose == null || c < lowestClose){ lowestClose = c; lowestDate = hist.dates[i]; }
+              }
+            }catch(e){
+              // Yahoo gagal buat ticker ini — tetap lanjut pakai baseClose sebagai fallback, jangan gagalkan semua
+            }
+
+            await setDoc(doc(db, 'watchlist', ticker), {
+              peakClose, peakDate, lowestClose, lowestDate, peakBackfilled: true,
+            }, { merge: true });
+            peakBackfilled++;
+          });
+          if(backfillErrors > 0){
+            warnings.push(`⚠ Sebagian gagal backfill harga tertinggi/terendah dari Yahoo (tidak fatal).`);
+          }
+        }
+
+        // Jalur B: yang sudah pernah di-backfill, tinggal bandingkan harga resmi hari ini (ringan)
+        if(alreadyTracked.length){
+          const { errorCount: peakErrors } = await runWithConcurrency(alreadyTracked, 15, async (wlDoc) => {
+            const item = wlDoc.data();
+            const ticker = item.ticker;
+            const priceSnap = await getDoc(doc(db, 'dailySummary', latestDate, 'stocks', ticker));
+            if(!priceSnap.exists()) return; // saham ini tidak ada di data hari ini (suspend/dsb), lewati
+            const currentClose = priceSnap.data().close;
+            if(!currentClose || currentClose <= 0) return;
+
+            const baseClose = item.snapshot?.close ?? currentClose;
+            const prevPeak = item.peakClose ?? baseClose;
+            const prevLowest = item.lowestClose ?? baseClose;
+
+            const updates = {};
+            if(currentClose >= prevPeak){
+              updates.peakClose = currentClose;
+              updates.peakDate = latestDate;
+            }
+            if(currentClose <= prevLowest){
+              updates.lowestClose = currentClose;
+              updates.lowestDate = latestDate;
+            }
+            if(Object.keys(updates).length){
+              await setDoc(doc(db, 'watchlist', ticker), updates, { merge: true });
+              peakUpdated++;
+            }
+          });
+          if(peakErrors > 0){
+            warnings.push(`⚠ Sebagian gagal update tracking harga tertinggi/terendah watchlist (tidak fatal).`);
+          }
+        }
+      }
+    }catch(e){
+      console.error('Update peak tracking gagal:', e);
+    }
+
     // 9. ringkasan hasil di UI
     const withHistory3 = raw.filter(r => r.foreignNet3d !== null).length;
     const matched3plus = raw.filter(r => r.matchCount >= 3).sort((a,b)=>b.matchCount-a.matchCount || b.totalScorePartial-a.totalScorePartial).slice(0,10);
@@ -1083,7 +1171,7 @@
       <div class="stat-box ${withHistory3>=candidates.length*0.5?'ok':'warn'}"><div class="label">Histori \u22653 Hari</div><div class="value">${withHistory3}</div></div>
       <div class="stat-box"><div class="label">Match \u22653 Kategori</div><div class="value">${matched3plus.length}</div></div>
     </div>
-    <div class="msg-box info">ℹ ${belowMinPrice} saham dibuang karena harga di bawah Rp${minPrice}/lembar. ${belowLiquidity} saham dibuang karena Value/Frequency rata-rata di bawah batas minimal (dari ${rawBeforeLiquidityFilter} kandidat harga OK, tersisa ${raw.length}).${staleDocs.length ? ` ${staleDocs.length} data lama (sudah tidak lolos filter) dibersihkan dari database.` : ''}${autoAdded ? ` ⭐ ${autoAdded} saham baru otomatis masuk Watchlist (match \u22653 atau Tahap Awal).` : ''}</div>`;
+    <div class="msg-box info">ℹ ${belowMinPrice} saham dibuang karena harga di bawah Rp${minPrice}/lembar. ${belowLiquidity} saham dibuang karena Value/Frequency rata-rata di bawah batas minimal (dari ${rawBeforeLiquidityFilter} kandidat harga OK, tersisa ${raw.length}).${staleDocs.length ? ` ${staleDocs.length} data lama (sudah tidak lolos filter) dibersihkan dari database.` : ''}${autoAdded ? ` ⭐ ${autoAdded} saham baru otomatis masuk Watchlist (match \u22653 kategori).` : ''}${peakUpdated ? ` 📈 ${peakUpdated} entry Watchlist ter-update tracking harga tertinggi/terendahnya.` : ''}${peakBackfilled ? ` ⏪ ${peakBackfilled} entry berhasil di-backfill histori harganya dari Yahoo Finance.` : ''}</div>`;
 
     if(withHistory3 < candidates.length){
       html += `<div class="msg-box warning">⚠ ${candidates.length - withHistory3} saham belum punya histori 3 hari — kategori Foreign Uptrend/Big Accum/Bandar Accum untuk saham itu belum bisa dievaluasi (butuh upload beberapa hari lagi, termasuk backfill kalau ada).</div>`;
@@ -1251,7 +1339,7 @@
         const closesRaw = quote.close || [], highsRaw = quote.high || [];
         const lowsRaw = quote.low || [], volumesRaw = quote.volume || [];
         const opensRaw = quote.open || [];
-        const closes = [], highs = [], lows = [], volumes = [], opens = [];
+        const closes = [], highs = [], lows = [], volumes = [], opens = [], dates = [];
         for(let i = 0; i < timestamps.length; i++){
           if(closesRaw[i] != null && highsRaw[i] != null && lowsRaw[i] != null && opensRaw[i] != null){
             closes.push(closesRaw[i]);
@@ -1259,12 +1347,12 @@
             lows.push(lowsRaw[i]);
             volumes.push(volumesRaw[i] ?? 0);
             opens.push(opensRaw[i]);
+            dates.push(new Date(timestamps[i] * 1000).toISOString().slice(0,10));
           }
         }
         if(!closes.length) throw new Error('Tidak ada data harga valid dari Yahoo');
-        const lastTs = timestamps[timestamps.length - 1];
-        const lastDate = lastTs ? new Date(lastTs * 1000).toISOString().slice(0,10) : null;
-        return { closes, highs, lows, volumes, opens, lastDate };
+        const lastDate = dates.length ? dates[dates.length - 1] : null;
+        return { closes, highs, lows, volumes, opens, dates, lastDate };
       }catch(err){
         lastErr = err;
         continue; // coba proxy berikutnya
@@ -1323,6 +1411,7 @@
               hist.lows.push(official.low || official.close);
               hist.volumes.push(official.volume || 0);
               hist.opens.push(official.open || official.close);
+              hist.dates.push(officialLatestDate);
             }
           }
         }
