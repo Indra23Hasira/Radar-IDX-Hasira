@@ -751,6 +751,16 @@
           ${s.phase && s.phase.length ? `<div class="snapshot-row"><span class="sp-label">Fase</span><span class="sp-val" style="font-size:10px;">${s.phase.join(', ')}</span></div>` : ''}
         </div>
 
+        ${(item.peakClose != null || item.lowestClose != null) ? (() => {
+          const peakPct = (item.peakClose != null && s.close) ? ((item.peakClose - s.close) / s.close) * 100 : null;
+          const lowPct = (item.lowestClose != null && s.close) ? ((item.lowestClose - s.close) / s.close) * 100 : null;
+          return `<div class="snapshot-panel" style="background:rgba(62,207,142,0.05); border-color:rgba(62,207,142,0.2);">
+            <div class="sp-title">Rentang Harga Sejak Ditambahkan</div>
+            <div class="snapshot-row"><span class="sp-label">🔺 Tertinggi</span><span class="sp-val pos">${fmtNum(item.peakClose)} ${peakPct!=null ? `(+${peakPct.toFixed(2)}%)` : ''} <span style="color:var(--text-faint); font-size:9px;">${item.peakDate ? 'pada '+item.peakDate : ''}</span></span></div>
+            <div class="snapshot-row"><span class="sp-label">🔻 Terendah</span><span class="sp-val neg">${fmtNum(item.lowestClose)} ${lowPct!=null ? `(${lowPct>=0?'+':''}${lowPct.toFixed(2)}%)` : ''} <span style="color:var(--text-faint); font-size:9px;">${item.lowestDate ? 'pada '+item.lowestDate : ''}</span></span></div>
+          </div>`;
+        })() : ''}
+
         <div class="snapshot-panel" style="background:rgba(212,168,87,0.05); border-color:rgba(212,168,87,0.2);">
           <div class="sp-title">Sekarang</div>
           <div class="snapshot-row"><span class="sp-label">Close</span><span class="sp-val ${priceDiffPct>=0?'pos':'neg'}">${fmtNum(curClose)} ${priceDiffPct!=null ? `(${priceDiffPct>=0?'+':''}${priceDiffPct.toFixed(2)}%)` : ''}</span></div>
