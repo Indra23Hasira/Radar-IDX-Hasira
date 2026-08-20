@@ -312,7 +312,10 @@
           <div class="main-title">Watchlist <span class="count" id="watchlistCount">·</span></div>
           <div class="main-desc">Saham yang Anda tandai untuk dipantau — bandingkan kondisi saat ditambahkan vs sekarang, buat uji apakah sinyal radar terbukti akurat.</div>
         </div>
-        <button class="btn-remove-watchlist" id="btnCleanWatchlist" style="white-space:nowrap;">🧹 Bersihkan (Auto, Match &lt;3)</button>
+        <div style="display:flex; gap:8px;">
+          <button class="btn-remove-watchlist" id="btnResetPeakTracking" style="white-space:nowrap; border-color:rgba(212,168,87,0.35); color:var(--gold);">🔁 Reset Tracking Harga</button>
+          <button class="btn-remove-watchlist" id="btnCleanWatchlist" style="white-space:nowrap;">🧹 Bersihkan (Auto, Match &lt;3)</button>
+        </div>
       </div>
       <div id="watchlistContent"><div class="loading-msg">Memuat watchlist...</div></div>
     </div>
@@ -625,6 +628,38 @@
     const { doc, deleteDoc } = firestoreFns;
     await deleteDoc(doc(db, 'watchlist', ticker));
     watchlistTickers.delete(ticker);
+  }
+
+  // ============================================================
+  // RESET TRACKING HARGA — hapus field peakClose/lowestClose/peakBackfilled
+  // supaya Step 4 backfill ulang pakai logika terbaru (yang sudah diperbaiki
+  // agar tidak ikut kepakai harga "hari ini" yang masih live/belum final).
+  // ============================================================
+  document.getElementById('btnResetPeakTracking').addEventListener('click', resetPeakTracking);
+
+  async function resetPeakTracking(){
+    if(!firebaseReady) return;
+    const btn = document.getElementById('btnResetPeakTracking');
+    if(!confirm('Reset tracking harga tertinggi/terendah untuk SEMUA watchlist? Nanti akan di-backfill ulang otomatis lain kali Anda jalankan Step 4 di halaman Import.')) return;
+    btn.disabled = true;
+    btn.textContent = 'Mereset...';
+    const { collection, getDocs, doc, setDoc } = firestoreFns;
+    try{
+      const wlSnap = await getDocs(collection(db, 'watchlist'));
+      const { errorCount } = await runWithConcurrency(wlSnap.docs, 15, async (d) => {
+        await setDoc(doc(db, 'watchlist', d.id), {
+          peakClose: null, peakDate: null, lowestClose: null, lowestDate: null, peakBackfilled: false,
+        }, { merge: true });
+      });
+      alert(`Selesai — ${wlSnap.size - errorCount} entry di-reset.${errorCount ? ` ${errorCount} gagal.` : ''} Jalankan Step 4 di halaman Import untuk backfill ulang.`);
+      loadWatchlist();
+    }catch(err){
+      console.error('resetPeakTracking gagal:', err);
+      alert('Gagal reset: ' + err.message);
+    }finally{
+      btn.disabled = false;
+      btn.textContent = '🔁 Reset Tracking Harga';
+    }
   }
 
   // ============================================================
