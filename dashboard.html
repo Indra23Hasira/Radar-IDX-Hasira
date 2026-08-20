@@ -1050,6 +1050,21 @@
               <div class="c10-val ${r.priceChange10d>=0?'pos':'neg'}">${r.priceChange10d!=null ? (r.priceChange10d>=0?'+':'')+r.priceChange10d.toFixed(2)+'%' : '-'}</div>
             </div>
           </div>
+          ${(r.supportLevel != null || r.atr14 != null) ? (() => {
+            const close = r.price?.close;
+            const supportDistPct = (r.supportLevel != null && close) ? ((close - r.supportLevel) / close) * 100 : null;
+            const atrPct = (r.atr14 != null && close) ? (r.atr14 / close) * 100 : null;
+            return `<div class="context10-panel" style="background:rgba(96,165,250,0.05); border-color:rgba(96,165,250,0.2);" title="Referensi buat hitung SL/TP sendiri — bukan rekomendasi otomatis">
+              <div>
+                <div class="c10-label">📍 Support (15D)</div>
+                <div class="c10-val" style="color:#60A5FA;">${fmtNum(r.supportLevel)} ${supportDistPct!=null ? `<span style="font-size:9px; color:var(--text-faint);">(${supportDistPct.toFixed(1)}% di bawah harga)</span>` : ''}</div>
+              </div>
+              <div style="text-align:right;">
+                <div class="c10-label">📏 ATR14</div>
+                <div class="c10-val" style="color:#60A5FA;">${fmtNum(r.atr14)} ${atrPct!=null ? `<span style="font-size:9px; color:var(--text-faint);">(${atrPct.toFixed(1)}% dari harga)</span>` : ''}</div>
+              </div>
+            </div>`;
+          })() : ''}
           <div class="card-foot">
             <div class="pillar-mini">
               <div class="p">Liq <b>${r.liquidityScore ?? '-'}</b></div>
@@ -1064,7 +1079,7 @@
       content.innerHTML = html;
     }else{
       let html = `<table><thead><tr>
-        <th>Ticker</th><th>Match</th><th>Score</th><th>Close</th><th>Change%</th><th>Foreign Net Value (3D)</th><th>Harga vs 10D</th><th>RSI14</th><th>Trend</th><th>Kategori</th><th>Warning</th><th>Cek</th>
+        <th>Ticker</th><th>Match</th><th>Score</th><th>Close</th><th>Change%</th><th>Foreign Net Value (3D)</th><th>Harga vs 10D</th><th>Support</th><th>ATR14</th><th>RSI14</th><th>Trend</th><th>Kategori</th><th>Warning</th><th>Cek</th>
       </tr></thead><tbody>`;
       filtered.forEach(r => {
         const changePct = r.price?.changePct;
@@ -1082,6 +1097,8 @@
           <td class="${changePct>=0?'pos':'neg'}">${changePct!=null ? (changePct>=0?'+':'')+changePct.toFixed(2)+'%' : '-'}</td>
           <td class="${r.foreignNet3d>=0?'pos':'neg'}">${fmtValue(r.foreignNetValue3d)}</td>
           <td class="${r.priceChange10d>=0?'pos':'neg'}">${r.priceChange10d!=null ? (r.priceChange10d>=0?'+':'')+r.priceChange10d.toFixed(2)+'%' : '-'}</td>
+          <td style="color:#60A5FA;">${fmtNum(r.supportLevel)}</td>
+          <td style="color:#60A5FA;">${fmtNum(r.atr14)}</td>
           <td>${r.ind?.rsi14!=null ? r.ind.rsi14.toFixed(1) : '-'}</td>
           <td>${r.ind?.trendLabel ?? '-'}</td>
           <td style="font-family:'Inter'; font-size:11px; color:var(--cyan);">${tags.join(', ')}</td>
