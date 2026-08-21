@@ -1032,13 +1032,39 @@
     // 8c. auto-tambah ke Watchlist — HANYA kandidat dengan match \u22653 kategori.
     // (Sebelumnya juga termasuk fase "Tahap Awal" saja, tapi itu bikin watchlist
     // kebanjiran kandidat lemah — dipersempit supaya fokus ke yang benar2 kuat.)
+    //
+    // WINDOW AKTIF 5 HARI: kalau ticker yang sama terdeteksi lagi setelah lewat
+    // 5 hari dari `addedDate` terakhir, dianggap "kejadian baru" — data lama
+    // (snapshot, peak, low) diarsipkan ke `episodeHistory` (tetap kepakai buat
+    // statistik win rate), lalu entry-nya di-reset seolah baru pertama masuk.
+    // Kalau masih dalam 5 hari, tetap dilewati seperti biasa (tidak ditimpa).
+    const WATCHLIST_MONITORING_DAYS = 5;
     const autoWatchlistCandidates = raw.filter(r => r.matchCount >= 3);
-    let autoAdded = 0;
+    let autoAdded = 0, autoReactivated = 0;
     if(autoWatchlistCandidates.length){
       const { errorCount: watchlistErrors } = await runWithConcurrency(autoWatchlistCandidates, 15, async (r) => {
         const wlRef = doc(db, 'watchlist', r.ticker);
         const existing = await getDoc(wlRef);
-        if(existing.exists()) return; // sudah dipantau (manual atau auto sebelumnya), jangan timpa snapshot lamanya
+        let episodeHistory = [];
+        if(existing.exists()){
+          const data = existing.data();
+          const daysSince = data.addedDate
+            ? Math.floor((new Date(latestDate) - new Date(data.addedDate)) / 864e5)
+            : 0;
+          if(daysSince <= WATCHLIST_MONITORING_DAYS){
+            return; // masih dalam window aktif, jangan timpa snapshot yang sedang dipantau
+          }
+          // window sudah lewat — arsipkan episode lama sebelum ditimpa
+          episodeHistory = [...(data.episodeHistory || []), {
+            addedDate: data.addedDate,
+            snapshot: data.snapshot || null,
+            peakClose: data.peakClose ?? null,
+            peakDate: data.peakDate ?? null,
+            lowestClose: data.lowestClose ?? null,
+            lowestDate: data.lowestDate ?? null,
+          }];
+          autoReactivated++;
+        }
         const tags = [];
         if(r.volumeBreakout) tags.push('Volume Breakout');
         if(r.foreignUptrend) tags.push('Foreign Uptrend');
@@ -1053,6 +1079,9 @@
           addedDate: latestDate,
           addedAt: new Date().toISOString(),
           autoAdded: true,
+          episodeHistory,
+          // reset tracking harga — episode baru mulai dari nol lagi
+          peakClose: null, peakDate: null, lowestClose: null, lowestDate: null, peakBackfilled: false,
           snapshot: {
             close: r.row.close ?? null,
             score: r.totalScorePartial ?? null,
@@ -1174,7 +1203,7 @@
       <div class="stat-box ${withHistory3>=candidates.length*0.5?'ok':'warn'}"><div class="label">Histori \u22653 Hari</div><div class="value">${withHistory3}</div></div>
       <div class="stat-box"><div class="label">Match \u22653 Kategori</div><div class="value">${matched3plus.length}</div></div>
     </div>
-    <div class="msg-box info">ℹ ${belowMinPrice} saham dibuang karena harga di bawah Rp${minPrice}/lembar. ${belowLiquidity} saham dibuang karena Value/Frequency rata-rata di bawah batas minimal (dari ${rawBeforeLiquidityFilter} kandidat harga OK, tersisa ${raw.length}).${staleDocs.length ? ` ${staleDocs.length} data lama (sudah tidak lolos filter) dibersihkan dari database.` : ''}${autoAdded ? ` ⭐ ${autoAdded} saham baru otomatis masuk Watchlist (match \u22653 kategori).` : ''}${peakUpdated ? ` 📈 ${peakUpdated} entry Watchlist ter-update tracking harga tertinggi/terendahnya.` : ''}${peakBackfilled ? ` ⏪ ${peakBackfilled} entry berhasil di-backfill histori harganya dari Yahoo Finance.` : ''}</div>`;
+    <div class="msg-box info">ℹ ${belowMinPrice} saham dibuang karena harga di bawah Rp${minPrice}/lembar. ${belowLiquidity} saham dibuang karena Value/Frequency rata-rata di bawah batas minimal (dari ${rawBeforeLiquidityFilter} kandidat harga OK, tersisa ${raw.length}).${staleDocs.length ? ` ${staleDocs.length} data lama (sudah tidak lolos filter) dibersihkan dari database.` : ''}${autoAdded ? ` ⭐ ${autoAdded} saham baru otomatis masuk Watchlist (match \u22653 kategori)${autoReactivated ? `, ${autoReactivated} di antaranya kejadian BARU dari ticker yang pernah dipantau (>5 hari lalu, data lama diarsipkan)` : ''}.` : ''}${peakUpdated ? ` 📈 ${peakUpdated} entry Watchlist ter-update tracking harga tertinggi/terendahnya.` : ''}${peakBackfilled ? ` ⏪ ${peakBackfilled} entry berhasil di-backfill histori harganya dari Yahoo Finance.` : ''}</div>`;
 
     if(withHistory3 < candidates.length){
       html += `<div class="msg-box warning">⚠ ${candidates.length - withHistory3} saham belum punya histori 3 hari — kategori Foreign Uptrend/Big Accum/Bandar Accum untuk saham itu belum bisa dievaluasi (butuh upload beberapa hari lagi, termasuk backfill kalau ada).</div>`;
