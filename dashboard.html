@@ -80,6 +80,21 @@
   .snapshot-row .sp-val{ font-family:'IBM Plex Mono'; }
   .btn-remove-watchlist{ background:transparent; border:1px solid rgba(242,84,91,0.35); color:var(--negative); border-radius:var(--radius);
     padding:6px 12px; font-size:11px; cursor:pointer; font-family:'Inter'; }
+
+  .stats-grid{ display:grid; grid-template-columns:repeat(auto-fit, minmax(160px, 1fr)); gap:14px; margin-bottom:24px; }
+  .stats-card{ background:var(--panel); border:1px solid var(--border); border-radius:6px; padding:16px; }
+  .stats-card .sc-label{ font-size:10px; text-transform:uppercase; letter-spacing:0.6px; color:var(--text-faint); margin-bottom:6px; }
+  .stats-card .sc-val{ font-family:'Big Shoulders Display', sans-serif; font-size:28px; font-weight:700; color:var(--gold); line-height:1; }
+  .stats-card .sc-val.pos{ color:var(--positive); }
+  .stats-card .sc-val.neg{ color:var(--negative); }
+  .stats-card .sc-sub{ font-size:10px; color:var(--text-faint); margin-top:4px; }
+
+  .phase-breakdown{ display:grid; grid-template-columns:repeat(auto-fit, minmax(220px, 1fr)); gap:12px; margin-bottom:24px; }
+  .phase-stat-card{ background:var(--panel-alt); border:1px solid var(--border-soft); border-radius:6px; padding:14px; }
+  .phase-stat-card .ps-title{ font-size:12px; font-weight:600; margin-bottom:10px; }
+  .phase-stat-card .ps-row{ display:flex; justify-content:space-between; font-size:11px; margin-top:5px; }
+  .phase-stat-card .ps-row .ps-label{ color:var(--text-dim); }
+  .phase-stat-card .ps-row .ps-val{ font-family:'IBM Plex Mono'; }
   .btn-remove-watchlist:hover{ background:rgba(242,84,91,0.1); }
   aside{ border-right:1px solid var(--border); background:var(--panel); padding:22px 18px; overflow-y:auto; }
   .side-section{ margin-bottom:24px; }
@@ -246,6 +261,7 @@
 <div class="tab-bar">
   <button class="tab-btn active" id="tabRadarBtn">📡 Radar</button>
   <button class="tab-btn" id="tabWatchlistBtn">⭐ Watchlist <span id="watchlistCountBadge"></span></button>
+  <button class="tab-btn" id="tabStatsBtn">📊 Statistik</button>
 </div>
 
 <div class="layout" id="mainLayout">
@@ -320,6 +336,16 @@
       <div id="watchlistContent"><div class="loading-msg">Memuat watchlist...</div></div>
     </div>
 
+    <div id="statsSection" style="display:none;">
+      <div class="main-header">
+        <div>
+          <div class="main-title">Statistik Efektivitas Radar</div>
+          <div class="main-desc">Ringkasan gabungan dari semua saham yang pernah masuk Watchlist — buat jawab "radar ini beneran efektif atau tidak" pakai data, bukan tebakan.</div>
+        </div>
+      </div>
+      <div id="statsContent"><div class="loading-msg">Menghitung statistik...</div></div>
+    </div>
+
     <footer>Data dari Firestore Anda sendiri — perbarui lewat halaman Import Data.</footer>
   </main>
 </div>
@@ -392,6 +418,7 @@
   let lastRenderedData = [];
   let watchlistTickers = new Set(); // ticker yang sudah masuk watchlist, buat status tombol di kartu
   let watchlistAddedDates = new Map(); // ticker -> addedDate, buat hitung "sudah berapa hari sejak pertama terdeteksi"
+  const WATCHLIST_MONITORING_DAYS = 5; // sama dengan yang dipakai di halaman Import (Step 4)
   let currentTab = 'radar';
 
   document.getElementById('sortMatchBtn').addEventListener('click', () => {
@@ -496,9 +523,18 @@
     try{
       // 0. ambil daftar ticker yang sudah di watchlist (buat status tombol di tiap kartu)
       //    sekalian ambil addedDate-nya buat hitung "sudah berapa hari sejak pertama terdeteksi"
+      //    HANYA yang masih dalam window aktif 5 hari — yang sudah lewat dianggap
+      //    "selesai dipantau", jadi tombolnya kembali ke "☆ Watchlist" (bisa dipantau ulang
+      //    sebagai kejadian baru kalau muncul lagi)
       const wlSnap = await getDocs(collection(db, 'watchlist'));
-      watchlistTickers = new Set(wlSnap.docs.map(d => d.id));
-      watchlistAddedDates = new Map(wlSnap.docs.map(d => [d.id, d.data().addedDate]));
+      const activeWlDocs = wlSnap.docs.filter(d => {
+        const added = d.data().addedDate;
+        if(!added) return false;
+        const daysSince = Math.floor((Date.now() - new Date(added).getTime()) / 864e5);
+        return daysSince <= WATCHLIST_MONITORING_DAYS;
+      });
+      watchlistTickers = new Set(activeWlDocs.map(d => d.id));
+      watchlistAddedDates = new Map(activeWlDocs.map(d => [d.id, d.data().addedDate]));
       updateWatchlistCountBadge(wlSnap.size);
 
       // 1. ambil kandidat dengan match >= 1 sekaligus (filter ketat diterapkan saat render, biar ganti threshold tidak perlu query ulang)
@@ -560,19 +596,23 @@
   }
 
   // ============================================================
-  // TAB SWITCHING (Radar / Watchlist)
+  // TAB SWITCHING (Radar / Watchlist / Statistik)
   // ============================================================
   document.getElementById('tabRadarBtn').addEventListener('click', () => switchTab('radar'));
   document.getElementById('tabWatchlistBtn').addEventListener('click', () => switchTab('watchlist'));
+  document.getElementById('tabStatsBtn').addEventListener('click', () => switchTab('stats'));
 
   function switchTab(tab){
     currentTab = tab;
     document.getElementById('tabRadarBtn').classList.toggle('active', tab === 'radar');
     document.getElementById('tabWatchlistBtn').classList.toggle('active', tab === 'watchlist');
+    document.getElementById('tabStatsBtn').classList.toggle('active', tab === 'stats');
     document.getElementById('radarSection').style.display = tab === 'radar' ? 'block' : 'none';
     document.getElementById('watchlistSection').style.display = tab === 'watchlist' ? 'block' : 'none';
-    document.getElementById('mainLayout').classList.toggle('watchlist-mode', tab === 'watchlist');
+    document.getElementById('statsSection').style.display = tab === 'stats' ? 'block' : 'none';
+    document.getElementById('mainLayout').classList.toggle('watchlist-mode', tab === 'watchlist' || tab === 'stats');
     if(tab === 'watchlist') loadWatchlist();
+    if(tab === 'stats') loadStats();
   }
 
   function updateWatchlistCountBadge(n){
@@ -601,14 +641,33 @@
   });
 
   async function addToWatchlist(r){
-    const { doc, setDoc } = firestoreFns;
+    const { doc, getDoc, setDoc } = firestoreFns;
+    const wlRef = doc(db, 'watchlist', r.ticker);
+
+    // cek apakah sudah ada entry lama yang sudah lewat window aktif — kalau iya, arsipkan dulu
+    let episodeHistory = [];
+    const existing = await getDoc(wlRef);
+    if(existing.exists()){
+      const data = existing.data();
+      episodeHistory = [...(data.episodeHistory || []), {
+        addedDate: data.addedDate,
+        snapshot: data.snapshot || null,
+        peakClose: data.peakClose ?? null,
+        peakDate: data.peakDate ?? null,
+        lowestClose: data.lowestClose ?? null,
+        lowestDate: data.lowestDate ?? null,
+      }];
+    }
+
     const tags = categoryTags(r);
     const phaseTags = computeSignalPhase(r);
-    await setDoc(doc(db, 'watchlist', r.ticker), {
+    await setDoc(wlRef, {
       ticker: r.ticker,
       companyName: r.companyName || '',
       addedDate: r.date || new Date().toISOString().slice(0,10),
       addedAt: new Date().toISOString(),
+      episodeHistory,
+      peakClose: null, peakDate: null, lowestClose: null, lowestDate: null, peakBackfilled: false,
       snapshot: {
         close: r.price?.close ?? null,
         score: r.liveScore ?? null,
@@ -839,6 +898,152 @@
     updateWatchlistCountBadge(watchlistTickers.size);
     loadWatchlist();
   });
+
+  // ============================================================
+  // TAB STATISTIK — ringkasan gabungan efektivitas radar dari
+  // seluruh data Watchlist (bukan cuma per-saham)
+  // ============================================================
+  async function loadStats(){
+    if(!firebaseReady) return;
+    const content = document.getElementById('statsContent');
+    content.innerHTML = `<div class="loading-msg">Menghitung statistik...</div>`;
+    const { collection, getDocs } = firestoreFns;
+
+    try{
+      const wlSnap = await getDocs(collection(db, 'watchlist'));
+      const rawItems = wlSnap.docs.map(d => d.data());
+
+      // ratakan tiap dokumen jadi beberapa "episode" — episode arsip (kejadian lama,
+      // sudah lewat window 5 hari) + episode aktif sekarang, digabung jadi 1 daftar
+      // supaya statistik menghitung SEMUA kejadian, bukan cuma yang lagi dipantau
+      const items = [];
+      rawItems.forEach(item => {
+        (item.episodeHistory || []).forEach(ep => {
+          items.push({ ticker: item.ticker, companyName: item.companyName, ...ep });
+        });
+        items.push({
+          ticker: item.ticker, companyName: item.companyName,
+          addedDate: item.addedDate, snapshot: item.snapshot,
+          peakClose: item.peakClose, peakDate: item.peakDate,
+          lowestClose: item.lowestClose, lowestDate: item.lowestDate,
+        });
+      });
+
+      if(!items.length){
+        content.innerHTML = `<div class="empty-state">
+          <div class="big">📊</div>
+          <div class="msg">Belum ada data untuk dihitung.</div>
+          <div class="sub">Statistik akan muncul begitu ada saham yang masuk Watchlist.</div>
+        </div>`;
+        return;
+      }
+
+      // hitung metrik per item
+      const computed = items.map(item => {
+        const s = item.snapshot || {};
+        const baseClose = s.close ?? null;
+        const peakClose = item.peakClose ?? null;
+        const lowestClose = item.lowestClose ?? null;
+
+        const daysToPeak = (item.peakDate && item.addedDate)
+          ? Math.round((new Date(item.peakDate) - new Date(item.addedDate)) / 864e5)
+          : null;
+        const maxGainPct = (baseClose && peakClose) ? ((peakClose - baseClose) / baseClose) * 100 : null;
+        const maxDrawdownPct = (baseClose && lowestClose) ? ((lowestClose - baseClose) / baseClose) * 100 : null;
+        const isWin = maxGainPct != null ? maxGainPct > 0 : null;
+        const entryPhase = (s.phase && s.phase.length) ? s.phase[0] : (s.categories && s.categories.length ? 'Tanpa Fase Khusus' : '-');
+
+        return { ticker: item.ticker, companyName: item.companyName, addedDate: item.addedDate,
+          daysToPeak, maxGainPct, maxDrawdownPct, isWin, entryPhase };
+      });
+
+      // ringkasan keseluruhan
+      const withGain = computed.filter(c => c.maxGainPct != null);
+      const withDays = computed.filter(c => c.daysToPeak != null);
+      const winCount = computed.filter(c => c.isWin === true).length;
+      const totalWithResult = computed.filter(c => c.isWin != null).length;
+      const winRate = totalWithResult ? (winCount / totalWithResult) * 100 : null;
+      const avgDaysToPeak = withDays.length ? withDays.reduce((a,c)=>a+c.daysToPeak,0) / withDays.length : null;
+      const avgMaxGain = withGain.length ? withGain.reduce((a,c)=>a+c.maxGainPct,0) / withGain.length : null;
+      const withDrawdown = computed.filter(c => c.maxDrawdownPct != null);
+      const avgMaxDrawdown = withDrawdown.length ? withDrawdown.reduce((a,c)=>a+c.maxDrawdownPct,0) / withDrawdown.length : null;
+
+      let html = `<div class="stats-grid">
+        <div class="stats-card">
+          <div class="sc-label">Total Dipantau</div>
+          <div class="sc-val">${computed.length}</div>
+        </div>
+        <div class="stats-card">
+          <div class="sc-label">Win Rate</div>
+          <div class="sc-val ${winRate>=50?'pos':'neg'}">${winRate!=null ? winRate.toFixed(0)+'%' : '-'}</div>
+          <div class="sc-sub">${winCount}/${totalWithResult} pernah untung sejak masuk</div>
+        </div>
+        <div class="stats-card">
+          <div class="sc-label">Rata-rata Hari ke-Puncak</div>
+          <div class="sc-val">${avgDaysToPeak!=null ? avgDaysToPeak.toFixed(1) : '-'}</div>
+          <div class="sc-sub">dari ${withDays.length} saham dengan data lengkap</div>
+        </div>
+        <div class="stats-card">
+          <div class="sc-label">Rata-rata Gain Maksimal</div>
+          <div class="sc-val pos">${avgMaxGain!=null ? '+'+avgMaxGain.toFixed(1)+'%' : '-'}</div>
+        </div>
+        <div class="stats-card">
+          <div class="sc-label">Rata-rata Drawdown Maksimal</div>
+          <div class="sc-val neg">${avgMaxDrawdown!=null ? avgMaxDrawdown.toFixed(1)+'%' : '-'}</div>
+        </div>
+      </div>`;
+
+      // breakdown per fase saat masuk
+      const phaseGroups = {};
+      computed.forEach(c => {
+        const key = c.entryPhase || '-';
+        if(!phaseGroups[key]) phaseGroups[key] = [];
+        phaseGroups[key].push(c);
+      });
+
+      html += `<div class="table-section-title" style="margin-top:0;">Breakdown per Fase Saat Pertama Masuk</div>
+        <div class="phase-breakdown">`;
+      Object.entries(phaseGroups).forEach(([phase, group]) => {
+        const gWin = group.filter(c => c.isWin === true).length;
+        const gTotal = group.filter(c => c.isWin != null).length;
+        const gWinRate = gTotal ? (gWin/gTotal)*100 : null;
+        const gGains = group.filter(c => c.maxGainPct != null);
+        const gAvgGain = gGains.length ? gGains.reduce((a,c)=>a+c.maxGainPct,0)/gGains.length : null;
+        const gDays = group.filter(c => c.daysToPeak != null);
+        const gAvgDays = gDays.length ? gDays.reduce((a,c)=>a+c.daysToPeak,0)/gDays.length : null;
+        html += `<div class="phase-stat-card">
+          <div class="ps-title">${phase}</div>
+          <div class="ps-row"><span class="ps-label">Jumlah</span><span class="ps-val">${group.length} saham</span></div>
+          <div class="ps-row"><span class="ps-label">Win Rate</span><span class="ps-val">${gWinRate!=null ? gWinRate.toFixed(0)+'%' : '-'}</span></div>
+          <div class="ps-row"><span class="ps-label">Avg Gain Maks</span><span class="ps-val pos">${gAvgGain!=null ? '+'+gAvgGain.toFixed(1)+'%' : '-'}</span></div>
+          <div class="ps-row"><span class="ps-label">Avg Hari ke-Puncak</span><span class="ps-val">${gAvgDays!=null ? gAvgDays.toFixed(1) : '-'}</span></div>
+        </div>`;
+      });
+      html += `</div>`;
+
+      // tabel detail
+      html += `<div class="table-section-title">Detail per Saham</div>
+        <div class="preview-table-wrap"><table><thead><tr>
+          <th>Ticker</th><th>Ditambahkan</th><th>Fase Masuk</th><th>Hari ke-Puncak</th><th>Gain Maks</th><th>Drawdown Maks</th>
+        </tr></thead><tbody>`;
+      computed.sort((a,b) => (b.maxGainPct ?? -999) - (a.maxGainPct ?? -999)).forEach(c => {
+        html += `<tr>
+          <td>${c.ticker}</td>
+          <td>${c.addedDate ?? '-'}</td>
+          <td style="font-size:10.5px;">${c.entryPhase}</td>
+          <td>${c.daysToPeak != null ? c.daysToPeak+' hari' : '-'}</td>
+          <td class="pos">${c.maxGainPct != null ? '+'+c.maxGainPct.toFixed(1)+'%' : '-'}</td>
+          <td class="neg">${c.maxDrawdownPct != null ? c.maxDrawdownPct.toFixed(1)+'%' : '-'}</td>
+        </tr>`;
+      });
+      html += `</tbody></table></div>`;
+
+      content.innerHTML = html;
+    }catch(err){
+      console.error('loadStats gagal:', err);
+      content.innerHTML = `<div class="empty-state"><div class="big">⚠</div><div class="msg">Gagal menghitung statistik.</div><div class="sub">${err.message}</div></div>`;
+    }
+  }
 
   // ============================================================
   // COMPUTE LIVE TOTAL SCORE + RENDER
