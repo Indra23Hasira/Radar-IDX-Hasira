@@ -1082,6 +1082,7 @@
           episodeHistory,
           // reset tracking harga — episode baru mulai dari nol lagi
           peakClose: null, peakDate: null, lowestClose: null, lowestDate: null, peakBackfilled: false,
+          intradayHigh: null, intradayHighDate: null, intradayLow: null, intradayLowDate: null,
           snapshot: {
             close: r.row.close ?? null,
             score: r.totalScorePartial ?? null,
@@ -1135,6 +1136,13 @@
             let peakDate = item.peakDate ?? addedDate;
             let lowestClose = item.lowestClose ?? baseClose;
             let lowestDate = item.lowestDate ?? addedDate;
+            // Intraday High/Low — beda dari Close, ini harga TERTINGGI/TERENDAH yang
+            // sempat TERSENTUH sepanjang hari (bukan cuma harga penutupan). Lebih
+            // relevan buat estimasi potensi TP day-trade, meski butuh timing pas.
+            let intradayHigh = item.intradayHigh ?? baseClose;
+            let intradayHighDate = item.intradayHighDate ?? addedDate;
+            let intradayLow = item.intradayLow ?? baseClose;
+            let intradayLowDate = item.intradayLowDate ?? addedDate;
 
             try{
               const hist = await fetchYahooHistory(ticker);
@@ -1145,6 +1153,9 @@
                 const c = hist.closes[i];
                 if(peakClose == null || c > peakClose){ peakClose = c; peakDate = hist.dates[i]; }
                 if(lowestClose == null || c < lowestClose){ lowestClose = c; lowestDate = hist.dates[i]; }
+                const h = hist.highs[i], l = hist.lows[i];
+                if(h != null && (intradayHigh == null || h > intradayHigh)){ intradayHigh = h; intradayHighDate = hist.dates[i]; }
+                if(l != null && (intradayLow == null || l < intradayLow)){ intradayLow = l; intradayLowDate = hist.dates[i]; }
               }
             }catch(e){
               // Yahoo gagal buat ticker ini — tetap lanjut pakai baseClose sebagai fallback, jangan gagalkan semua
@@ -1152,6 +1163,7 @@
 
             await setDoc(doc(db, 'watchlist', ticker), {
               peakClose, peakDate, lowestClose, lowestDate, peakBackfilled: true,
+              intradayHigh, intradayHighDate, intradayLow, intradayLowDate,
             }, { merge: true });
             peakBackfilled++;
           });
@@ -1174,12 +1186,17 @@
 
             const priceSnap = await getDoc(doc(db, 'dailySummary', latestDate, 'stocks', ticker));
             if(!priceSnap.exists()) return; // saham ini tidak ada di data hari ini (suspend/dsb), lewati
-            const currentClose = priceSnap.data().close;
+            const priceData = priceSnap.data();
+            const currentClose = priceData.close;
             if(!currentClose || currentClose <= 0) return;
+            const currentHigh = priceData.high ?? currentClose;
+            const currentLow = priceData.low ?? currentClose;
 
             const baseClose = item.snapshot?.close ?? currentClose;
             const prevPeak = item.peakClose ?? baseClose;
             const prevLowest = item.lowestClose ?? baseClose;
+            const prevIntradayHigh = item.intradayHigh ?? baseClose;
+            const prevIntradayLow = item.intradayLow ?? baseClose;
 
             const updates = {};
             if(currentClose >= prevPeak){
@@ -1189,6 +1206,14 @@
             if(currentClose <= prevLowest){
               updates.lowestClose = currentClose;
               updates.lowestDate = latestDate;
+            }
+            if(currentHigh >= prevIntradayHigh){
+              updates.intradayHigh = currentHigh;
+              updates.intradayHighDate = latestDate;
+            }
+            if(currentLow <= prevIntradayLow){
+              updates.intradayLow = currentLow;
+              updates.intradayLowDate = latestDate;
             }
             if(Object.keys(updates).length){
               await setDoc(doc(db, 'watchlist', ticker), updates, { merge: true });
