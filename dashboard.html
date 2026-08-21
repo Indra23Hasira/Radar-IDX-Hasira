@@ -668,6 +668,7 @@
       addedAt: new Date().toISOString(),
       episodeHistory,
       peakClose: null, peakDate: null, lowestClose: null, lowestDate: null, peakBackfilled: false,
+      intradayHigh: null, intradayHighDate: null, intradayLow: null, intradayLowDate: null,
       snapshot: {
         close: r.price?.close ?? null,
         score: r.liveScore ?? null,
@@ -708,6 +709,7 @@
       const { errorCount } = await runWithConcurrency(wlSnap.docs, 15, async (d) => {
         await setDoc(doc(db, 'watchlist', d.id), {
           peakClose: null, peakDate: null, lowestClose: null, lowestDate: null, peakBackfilled: false,
+          intradayHigh: null, intradayHighDate: null, intradayLow: null, intradayLowDate: null,
         }, { merge: true });
       });
       alert(`Selesai — ${wlSnap.size - errorCount} entry di-reset.${errorCount ? ` ${errorCount} gagal.` : ''} Jalankan Step 4 di halaman Import untuk backfill ulang.`);
@@ -892,10 +894,17 @@
         ${(item.peakClose != null || item.lowestClose != null) ? (() => {
           const peakPct = (item.peakClose != null && s.close) ? ((item.peakClose - s.close) / s.close) * 100 : null;
           const lowPct = (item.lowestClose != null && s.close) ? ((item.lowestClose - s.close) / s.close) * 100 : null;
+          const ihPct = (item.intradayHigh != null && s.close) ? ((item.intradayHigh - s.close) / s.close) * 100 : null;
+          const ilPct = (item.intradayLow != null && s.close) ? ((item.intradayLow - s.close) / s.close) * 100 : null;
           return `<div class="snapshot-panel" style="background:rgba(62,207,142,0.05); border-color:rgba(62,207,142,0.2);">
-            <div class="sp-title">Rentang Harga Sejak Ditambahkan</div>
+            <div class="sp-title">Rentang Harga Sejak Ditambahkan (Closing)</div>
             <div class="snapshot-row"><span class="sp-label">🔺 Tertinggi</span><span class="sp-val pos">${fmtNum(item.peakClose)} ${peakPct!=null ? `(+${peakPct.toFixed(2)}%)` : ''} <span style="color:var(--text-faint); font-size:9px;">${item.peakDate ? 'pada '+item.peakDate : ''}</span></span></div>
             <div class="snapshot-row"><span class="sp-label">🔻 Terendah</span><span class="sp-val neg">${fmtNum(item.lowestClose)} ${lowPct!=null ? `(${lowPct>=0?'+':''}${lowPct.toFixed(2)}%)` : ''} <span style="color:var(--text-faint); font-size:9px;">${item.lowestDate ? 'pada '+item.lowestDate : ''}</span></span></div>
+            ${(item.intradayHigh != null || item.intradayLow != null) ? `
+            <div style="border-top:1px solid rgba(255,255,255,0.06); margin:8px 0 6px; padding-top:6px; font-size:9px; color:var(--text-faint); text-transform:uppercase; letter-spacing:0.5px;">Intraday (sempat tersentuh, bukan cuma closing)</div>
+            <div class="snapshot-row"><span class="sp-label">⚡ High Intraday</span><span class="sp-val pos">${fmtNum(item.intradayHigh)} ${ihPct!=null ? `(+${ihPct.toFixed(2)}%)` : ''} <span style="color:var(--text-faint); font-size:9px;">${item.intradayHighDate ? 'pada '+item.intradayHighDate : ''}</span></span></div>
+            <div class="snapshot-row"><span class="sp-label">⚡ Low Intraday</span><span class="sp-val neg">${fmtNum(item.intradayLow)} ${ilPct!=null ? `(${ilPct>=0?'+':''}${ilPct.toFixed(2)}%)` : ''} <span style="color:var(--text-faint); font-size:9px;">${item.intradayLowDate ? 'pada '+item.intradayLowDate : ''}</span></span></div>
+            ` : ''}
           </div>`;
         })() : ''}
 
@@ -960,8 +969,15 @@
 
         <div class="snapshot-panel" style="background:${isWin ? 'rgba(62,207,142,0.05)' : 'rgba(242,84,91,0.05)'}; border-color:${isWin ? 'rgba(62,207,142,0.2)' : 'rgba(242,84,91,0.2)'};">
           <div class="sp-title">Hasil Final (Window ${WATCHLIST_MONITORING_DAYS} Hari) — ${isWin===true ? '✓ Pernah Untung' : isWin===false ? '✕ Tidak Pernah Untung' : '-'}</div>
-          <div class="snapshot-row"><span class="sp-label">🔺 Tertinggi</span><span class="sp-val pos">${fmtNum(item.peakClose)} ${peakPct!=null ? `(+${peakPct.toFixed(2)}%)` : ''} ${daysToPeak!=null ? `<span style="font-size:9px; color:var(--text-faint);">di hari ke-${daysToPeak}</span>` : ''}</span></div>
-          <div class="snapshot-row"><span class="sp-label">🔻 Terendah</span><span class="sp-val neg">${fmtNum(item.lowestClose)} ${lowPct!=null ? `(${lowPct>=0?'+':''}${lowPct.toFixed(2)}%)` : ''}</span></div>
+          <div class="snapshot-row"><span class="sp-label">🔺 Tertinggi (Close)</span><span class="sp-val pos">${fmtNum(item.peakClose)} ${peakPct!=null ? `(+${peakPct.toFixed(2)}%)` : ''} ${daysToPeak!=null ? `<span style="font-size:9px; color:var(--text-faint);">di hari ke-${daysToPeak}</span>` : ''}</span></div>
+          <div class="snapshot-row"><span class="sp-label">🔻 Terendah (Close)</span><span class="sp-val neg">${fmtNum(item.lowestClose)} ${lowPct!=null ? `(${lowPct>=0?'+':''}${lowPct.toFixed(2)}%)` : ''}</span></div>
+          ${(item.intradayHigh != null || item.intradayLow != null) ? (() => {
+            const ihPct = (item.intradayHigh != null && s.close) ? ((item.intradayHigh - s.close) / s.close) * 100 : null;
+            const ilPct = (item.intradayLow != null && s.close) ? ((item.intradayLow - s.close) / s.close) * 100 : null;
+            return `<div style="border-top:1px solid rgba(255,255,255,0.06); margin:8px 0 6px; padding-top:6px; font-size:9px; color:var(--text-faint); text-transform:uppercase; letter-spacing:0.5px;">Intraday</div>
+            <div class="snapshot-row"><span class="sp-label">⚡ High Intraday</span><span class="sp-val pos">${fmtNum(item.intradayHigh)} ${ihPct!=null ? `(+${ihPct.toFixed(2)}%)` : ''}</span></div>
+            <div class="snapshot-row"><span class="sp-label">⚡ Low Intraday</span><span class="sp-val neg">${fmtNum(item.intradayLow)} ${ilPct!=null ? `(${ilPct>=0?'+':''}${ilPct.toFixed(2)}%)` : ''}</span></div>`;
+          })() : ''}
         </div>
 
         <div class="card-foot">
