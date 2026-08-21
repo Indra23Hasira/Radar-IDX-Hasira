@@ -772,10 +772,10 @@
 
     try{
       const wlSnap = await getDocs(collection(db, 'watchlist'));
-      const items = wlSnap.docs.map(d => d.data());
-      document.getElementById('watchlistCount').textContent = '· ' + items.length;
+      const allItems = wlSnap.docs.map(d => d.data());
+      document.getElementById('watchlistCount').textContent = '· ' + allItems.length;
 
-      if(!items.length){
+      if(!allItems.length){
         content.innerHTML = `<div class="empty-state">
           <div class="big">⭐</div>
           <div class="msg">Watchlist masih kosong.</div>
@@ -784,13 +784,22 @@
         return;
       }
 
-      // ambil kondisi TERKINI tiap ticker (sama seperti radar), untuk dibandingkan dengan snapshot
-      const metaSnap = await getDocs(collection(db, 'dailySummary'));
-      // ambil tanggal terbaru dari salah satu tickerRollingStats (lebih murah daripada scan semua dailySummary)
+      // pisahkan AKTIF (masih dalam window 5 hari) vs ARSIP (sudah selesai dipantau,
+      // datanya sudah dibekukan) — supaya tampilan utama tetap rapi & fokus
+      const todayForSplit = new Date();
+      const activeItems = [], archivedItems = [];
+      allItems.forEach(item => {
+        const daysSince = item.addedDate ? Math.floor((todayForSplit - new Date(item.addedDate)) / 864e5) : 0;
+        if(daysSince <= WATCHLIST_MONITORING_DAYS) activeItems.push(item);
+        else archivedItems.push(item);
+      });
+
+      // ambil kondisi TERKINI cuma buat yang AKTIF (yang arsip datanya sudah beku,
+      // tidak perlu baca live lagi — hemat baca Firestore)
       const anyRsSnap = await getDocs(collection(db, 'tickerRollingStats'));
       const latestDate = anyRsSnap.docs[0]?.data()?.date;
 
-      const { results } = await runWithConcurrency(items, 15, async (item) => {
+      const { results } = await runWithConcurrency(activeItems, 15, async (item) => {
         const [rsSnap, priceSnap, indSnap] = await Promise.all([
           getDoc(doc(db, 'tickerRollingStats', item.ticker)),
           latestDate ? getDoc(doc(db, 'dailySummary', latestDate, 'stocks', item.ticker)) : Promise.resolve(null),
@@ -802,37 +811,72 @@
         return { ...item, current: { ...rs, price, ind } };
       });
 
-      renderWatchlistCards(results.filter(Boolean));
+      renderWatchlistSections(results.filter(Boolean), archivedItems);
     }catch(err){
       console.error('loadWatchlist gagal:', err);
       content.innerHTML = `<div class="empty-state"><div class="big">⚠</div><div class="msg">Gagal memuat watchlist.</div><div class="sub">${err.message}</div></div>`;
     }
   }
 
-  function renderWatchlistCards(items){
+  function renderWatchlistSections(activeItems, archivedItems){
     const content = document.getElementById('watchlistContent');
-    items.sort((a,b) => new Date(b.addedAt) - new Date(a.addedAt));
+    let html = '';
 
+    html += `<div class="table-section-title" style="margin-top:0;">📡 Sedang Dipantau (≤${WATCHLIST_MONITORING_DAYS} hari) — ${activeItems.length}</div>`;
+    html += activeItems.length
+      ? buildWatchlistCardGrid(activeItems, false)
+      : `<div class="msg-box info" style="margin-bottom:20px;">Tidak ada yang sedang dipantau aktif saat ini.</div>`;
+
+    html += `<div style="margin-top:28px;">
+      <button class="btn-remove-watchlist" id="btnToggleArchive" style="border-color:var(--border); color:var(--text-dim);">
+        📦 ${archivedItems.length} Arsip (selesai dipantau, >${WATCHLIST_MONITORING_DAYS} hari) — klik untuk lihat
+      </button>
+      <div id="archiveGrid" style="display:none; margin-top:14px;">
+        ${archivedItems.length ? buildWatchlistCardGrid(archivedItems, true) : `<div class="msg-box info">Belum ada arsip.</div>`}
+      </div>
+    </div>`;
+
+    content.innerHTML = html;
+
+    const toggleBtn = document.getElementById('btnToggleArchive');
+    if(toggleBtn){
+      toggleBtn.addEventListener('click', () => {
+        const grid = document.getElementById('archiveGrid');
+        const isHidden = grid.style.display === 'none';
+        grid.style.display = isHidden ? 'block' : 'none';
+        toggleBtn.textContent = `📦 ${archivedItems.length} Arsip (selesai dipantau, >${WATCHLIST_MONITORING_DAYS} hari) — ${isHidden ? 'klik untuk sembunyikan' : 'klik untuk lihat'}`;
+      });
+    }
+  }
+
+  function buildWatchlistCardGrid(items, isArchived){
+    items.sort((a,b) => new Date(b.addedAt) - new Date(a.addedAt));
     let html = `<div class="card-grid">`;
     items.forEach(item => {
-      const s = item.snapshot || {};
-      const cur = item.current || {};
-      const curClose = cur.price?.close;
-      const priceDiffPct = (s.close && curClose) ? ((curClose - s.close) / s.close) * 100 : null;
-      const curScore = cur.technicalScore != null || cur.foreignScore != null || cur.liquidityScore != null
-        ? Math.round(((cur.liquidityScore??0)*33 + (cur.foreignScore??0)*40 + ((cur.technicalScore??cur.ind?.technicalScore)??0)*27) / 100)
-        : null;
-      const scoreDiff = (s.score!=null && curScore!=null) ? curScore - s.score : null;
-      const daysHeld = s ? Math.floor((Date.now() - new Date(item.addedAt).getTime()) / 864e5) : null;
-      const curTags = categoryTags(cur);
-      const curPhase = computeSignalPhase(cur);
+      html += isArchived ? buildArchivedCard(item) : buildActiveCard(item);
+    });
+    html += `</div>`;
+    return html;
+  }
 
-      html += `<div class="stock-card">
+  function buildActiveCard(item){
+    const s = item.snapshot || {};
+    const cur = item.current || {};
+    const curClose = cur.price?.close;
+    const priceDiffPct = (s.close && curClose) ? ((curClose - s.close) / s.close) * 100 : null;
+    const curScore = cur.technicalScore != null || cur.foreignScore != null || cur.liquidityScore != null
+      ? Math.round(((cur.liquidityScore??0)*33 + (cur.foreignScore??0)*40 + ((cur.technicalScore??cur.ind?.technicalScore)??0)*27) / 100)
+      : null;
+    const scoreDiff = (s.score!=null && curScore!=null) ? curScore - s.score : null;
+    const daysHeld = Math.floor((Date.now() - new Date(item.addedAt).getTime()) / 864e5);
+    const curPhase = computeSignalPhase(cur);
+
+    return `<div class="stock-card">
         <div class="card-top">
           <div class="ticker-block">
             <div class="ticker">${item.ticker}</div>
             <div class="company">${item.companyName || ''}</div>
-            <div style="font-size:10px; color:var(--text-faint); margin-top:4px;">Ditambahkan ${item.addedDate} (${daysHeld}${daysHeld===1?' hari':' hari'} lalu)</div>
+            <div style="font-size:10px; color:var(--text-faint); margin-top:4px;">Ditambahkan ${item.addedDate} (${daysHeld} hari lalu, ${WATCHLIST_MONITORING_DAYS - daysHeld} hari lagi sampai arsip)</div>
           </div>
           <button class="btn-remove-watchlist" data-ticker="${item.ticker}">🗑 Hapus</button>
         </div>
@@ -885,9 +929,46 @@
           <a class="link-chart" href="https://stockbit.com/symbol/${item.ticker}" target="_blank" rel="noopener">Cek Stockbit ↗</a>
         </div>
       </div>`;
-    });
-    html += `</div>`;
-    content.innerHTML = html;
+  }
+
+  function buildArchivedCard(item){
+    const s = item.snapshot || {};
+    const peakPct = (item.peakClose != null && s.close) ? ((item.peakClose - s.close) / s.close) * 100 : null;
+    const lowPct = (item.lowestClose != null && s.close) ? ((item.lowestClose - s.close) / s.close) * 100 : null;
+    const isWin = peakPct != null ? peakPct > 0 : null;
+    const daysToPeak = (item.peakDate && item.addedDate)
+      ? Math.round((new Date(item.peakDate) - new Date(item.addedDate)) / 864e5) : null;
+    const episodeCount = (item.episodeHistory || []).length;
+
+    return `<div class="stock-card" style="opacity:0.85;">
+        <div class="card-top">
+          <div class="ticker-block">
+            <div class="ticker">${item.ticker}</div>
+            <div class="company">${item.companyName || ''}</div>
+            <div style="font-size:10px; color:var(--text-faint); margin-top:4px;">Ditambahkan ${item.addedDate} — window ${WATCHLIST_MONITORING_DAYS} hari selesai${episodeCount ? ` · ${episodeCount} episode lampau tersimpan` : ''}</div>
+          </div>
+          <button class="btn-remove-watchlist" data-ticker="${item.ticker}">🗑 Hapus</button>
+        </div>
+
+        <div class="snapshot-panel">
+          <div class="sp-title">Saat Ditambahkan (${item.addedDate})</div>
+          <div class="snapshot-row"><span class="sp-label">Close</span><span class="sp-val">${fmtNum(s.close)}</span></div>
+          <div class="snapshot-row"><span class="sp-label">Score</span><span class="sp-val gold">${s.score ?? '-'}</span></div>
+          <div class="snapshot-row"><span class="sp-label">Kategori</span><span class="sp-val" style="color:var(--cyan); font-size:10px;">${(s.categories||[]).join(', ') || '-'}</span></div>
+          ${s.phase && s.phase.length ? `<div class="snapshot-row"><span class="sp-label">Fase</span><span class="sp-val" style="font-size:10px;">${s.phase.join(', ')}</span></div>` : ''}
+        </div>
+
+        <div class="snapshot-panel" style="background:${isWin ? 'rgba(62,207,142,0.05)' : 'rgba(242,84,91,0.05)'}; border-color:${isWin ? 'rgba(62,207,142,0.2)' : 'rgba(242,84,91,0.2)'};">
+          <div class="sp-title">Hasil Final (Window ${WATCHLIST_MONITORING_DAYS} Hari) — ${isWin===true ? '✓ Pernah Untung' : isWin===false ? '✕ Tidak Pernah Untung' : '-'}</div>
+          <div class="snapshot-row"><span class="sp-label">🔺 Tertinggi</span><span class="sp-val pos">${fmtNum(item.peakClose)} ${peakPct!=null ? `(+${peakPct.toFixed(2)}%)` : ''} ${daysToPeak!=null ? `<span style="font-size:9px; color:var(--text-faint);">di hari ke-${daysToPeak}</span>` : ''}</span></div>
+          <div class="snapshot-row"><span class="sp-label">🔻 Terendah</span><span class="sp-val neg">${fmtNum(item.lowestClose)} ${lowPct!=null ? `(${lowPct>=0?'+':''}${lowPct.toFixed(2)}%)` : ''}</span></div>
+        </div>
+
+        <div class="card-foot">
+          <div class="pillar-mini"><div class="p" style="font-size:10px; color:var(--text-faint);">Data dibekukan — tidak update lagi</div></div>
+          <a class="link-chart" href="https://stockbit.com/symbol/${item.ticker}" target="_blank" rel="noopener">Cek Stockbit ↗</a>
+        </div>
+      </div>`;
   }
 
   document.getElementById('watchlistContent').addEventListener('click', async (e) => {
@@ -914,18 +995,22 @@
       const rawItems = wlSnap.docs.map(d => d.data());
 
       // ratakan tiap dokumen jadi beberapa "episode" — episode arsip (kejadian lama,
-      // sudah lewat window 5 hari) + episode aktif sekarang, digabung jadi 1 daftar
-      // supaya statistik menghitung SEMUA kejadian, bukan cuma yang lagi dipantau
+      // sudah lewat window 5 hari, SELALU final) + episode aktif sekarang (final
+      // cuma kalau sudah lewat 5 hari, kalau belum berarti masih berjalan)
       const items = [];
       rawItems.forEach(item => {
         (item.episodeHistory || []).forEach(ep => {
-          items.push({ ticker: item.ticker, companyName: item.companyName, ...ep });
+          items.push({ ticker: item.ticker, companyName: item.companyName, ...ep, isFinal: true });
         });
+        const daysSinceCurrent = item.addedDate
+          ? Math.floor((Date.now() - new Date(item.addedDate).getTime()) / 864e5)
+          : 0;
         items.push({
           ticker: item.ticker, companyName: item.companyName,
           addedDate: item.addedDate, snapshot: item.snapshot,
           peakClose: item.peakClose, peakDate: item.peakDate,
           lowestClose: item.lowestClose, lowestDate: item.lowestDate,
+          isFinal: daysSinceCurrent > WATCHLIST_MONITORING_DAYS,
         });
       });
 
@@ -954,10 +1039,12 @@
         const entryPhase = (s.phase && s.phase.length) ? s.phase[0] : (s.categories && s.categories.length ? 'Tanpa Fase Khusus' : '-');
 
         return { ticker: item.ticker, companyName: item.companyName, addedDate: item.addedDate,
-          daysToPeak, maxGainPct, maxDrawdownPct, isWin, entryPhase };
+          daysToPeak, maxGainPct, maxDrawdownPct, isWin, entryPhase, isFinal: item.isFinal };
       });
 
       // ringkasan keseluruhan
+      const finalCount = computed.filter(c => c.isFinal).length;
+      const ongoingCount = computed.length - finalCount;
       const withGain = computed.filter(c => c.maxGainPct != null);
       const withDays = computed.filter(c => c.daysToPeak != null);
       const winCount = computed.filter(c => c.isWin === true).length;
@@ -968,7 +1055,8 @@
       const withDrawdown = computed.filter(c => c.maxDrawdownPct != null);
       const avgMaxDrawdown = withDrawdown.length ? withDrawdown.reduce((a,c)=>a+c.maxDrawdownPct,0) / withDrawdown.length : null;
 
-      let html = `<div class="stats-grid">
+      let html = `<div class="msg-box info" style="margin-bottom:16px;">ℹ Angka di bawah gabungan dari <b>${finalCount} episode final</b> (sudah lewat ${WATCHLIST_MONITORING_DAYS} hari, hasil tetap) dan <b>${ongoingCount} episode masih berjalan</b> (belum lewat ${WATCHLIST_MONITORING_DAYS} hari, hasilnya bisa masih berubah — lihat kolom "Status" di tabel bawah untuk detail per saham).</div>
+      <div class="stats-grid">
         <div class="stats-card">
           <div class="sc-label">Total Dipantau</div>
           <div class="sc-val">${computed.length}</div>
@@ -1024,12 +1112,13 @@
       // tabel detail
       html += `<div class="table-section-title">Detail per Saham</div>
         <div class="preview-table-wrap"><table><thead><tr>
-          <th>Ticker</th><th>Ditambahkan</th><th>Fase Masuk</th><th>Hari ke-Puncak</th><th>Gain Maks</th><th>Drawdown Maks</th>
+          <th>Ticker</th><th>Ditambahkan</th><th>Status</th><th>Fase Masuk</th><th>Hari ke-Puncak</th><th>Gain Maks</th><th>Drawdown Maks</th>
         </tr></thead><tbody>`;
       computed.sort((a,b) => (b.maxGainPct ?? -999) - (a.maxGainPct ?? -999)).forEach(c => {
-        html += `<tr>
+        html += `<tr style="${c.isFinal ? '' : 'opacity:0.75;'}">
           <td>${c.ticker}</td>
           <td>${c.addedDate ?? '-'}</td>
+          <td>${c.isFinal ? '<span style="color:var(--positive); font-size:10.5px;">✓ Final</span>' : '<span style="color:var(--amber-flag); font-size:10.5px;">⏳ Berjalan</span>'}</td>
           <td style="font-size:10.5px;">${c.entryPhase}</td>
           <td>${c.daysToPeak != null ? c.daysToPeak+' hari' : '-'}</td>
           <td class="pos">${c.maxGainPct != null ? '+'+c.maxGainPct.toFixed(1)+'%' : '-'}</td>
