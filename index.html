@@ -1124,6 +1124,12 @@
             const ticker = item.ticker;
             const baseClose = item.snapshot?.close ?? null;
             const addedDate = item.addedDate;
+            // window pengamatan cuma 5 hari sejak masuk — supaya statistik win rate
+            // TIDAK bias oleh pergerakan harga jauh setelah sinyal aslinya (misal
+            // reli 2 bulan kemudian yang tidak ada hubungannya dengan deteksi radar)
+            const windowEndDate = new Date(new Date(addedDate).getTime() + WATCHLIST_MONITORING_DAYS * 864e5)
+              .toISOString().slice(0,10);
+            const effectiveEndDate = windowEndDate < latestDate ? windowEndDate : latestDate;
 
             let peakClose = item.peakClose ?? baseClose;
             let peakDate = item.peakDate ?? addedDate;
@@ -1133,10 +1139,9 @@
             try{
               const hist = await fetchYahooHistory(ticker);
               for(let i = 0; i < hist.closes.length; i++){
-                // cuma hitung dari tanggal masuk watchlist SAMPAI tanggal resmi terakhir kita
-                // (latestDate) — jangan ikut data "hari ini" dari Yahoo kalau market masih
-                // jalan (itu harga sementara/live, belum final, dan belum kita upload resmi)
-                if(!hist.dates[i] || hist.dates[i] < addedDate || hist.dates[i] > latestDate) continue;
+                // cuma hitung dari tanggal masuk s.d. MANA YANG LEBIH DEKAT antara
+                // tanggal resmi terakhir kita ATAU akhir window 5 hari
+                if(!hist.dates[i] || hist.dates[i] < addedDate || hist.dates[i] > effectiveEndDate) continue;
                 const c = hist.closes[i];
                 if(peakClose == null || c > peakClose){ peakClose = c; peakDate = hist.dates[i]; }
                 if(lowestClose == null || c < lowestClose){ lowestClose = c; lowestDate = hist.dates[i]; }
@@ -1155,11 +1160,18 @@
           }
         }
 
-        // Jalur B: yang sudah pernah di-backfill, tinggal bandingkan harga resmi hari ini (ringan)
+        // Jalur B: yang sudah pernah di-backfill, tinggal bandingkan harga resmi hari ini (ringan) —
+        // TAPI cuma update kalau masih dalam window 5 hari; kalau sudah lewat, dibekukan
+        // (frozen) supaya "Hari ke-Puncak" tidak terus melar dan statistik tetap valid
         if(alreadyTracked.length){
           const { errorCount: peakErrors } = await runWithConcurrency(alreadyTracked, 15, async (wlDoc) => {
             const item = wlDoc.data();
             const ticker = item.ticker;
+            const daysSinceAdded = item.addedDate
+              ? Math.floor((new Date(latestDate) - new Date(item.addedDate)) / 864e5)
+              : 0;
+            if(daysSinceAdded > WATCHLIST_MONITORING_DAYS) return; // window sudah lewat, dibekukan — jangan update lagi
+
             const priceSnap = await getDoc(doc(db, 'dailySummary', latestDate, 'stocks', ticker));
             if(!priceSnap.exists()) return; // saham ini tidak ada di data hari ini (suspend/dsb), lewati
             const currentClose = priceSnap.data().close;
