@@ -1033,13 +1033,19 @@
         const daysToPeak = (item.peakDate && item.addedDate)
           ? Math.round((new Date(item.peakDate) - new Date(item.addedDate)) / 864e5)
           : null;
+        const daysSinceAdded = item.addedDate
+          ? Math.floor((Date.now() - new Date(item.addedDate).getTime()) / 864e5)
+          : null;
         const maxGainPct = (baseClose && peakClose) ? ((peakClose - baseClose) / baseClose) * 100 : null;
         const maxDrawdownPct = (baseClose && lowestClose) ? ((lowestClose - baseClose) / baseClose) * 100 : null;
-        const isWin = maxGainPct != null ? maxGainPct > 0 : null;
+        // saham yang baru ditambahkan HARI INI JUGA (0 hari berlalu) belum sempat
+        // bergerak sama sekali — jangan dihitung menang/kalah dulu, biar tidak
+        // menjatuhkan Win Rate secara tidak adil
+        const isWin = (maxGainPct != null && daysSinceAdded > 0) ? maxGainPct > 0 : null;
         const entryPhase = (s.phase && s.phase.length) ? s.phase[0] : (s.categories && s.categories.length ? 'Tanpa Fase Khusus' : '-');
 
         return { ticker: item.ticker, companyName: item.companyName, addedDate: item.addedDate,
-          daysToPeak, maxGainPct, maxDrawdownPct, isWin, entryPhase, isFinal: item.isFinal };
+          daysToPeak, maxGainPct, maxDrawdownPct, isWin, entryPhase, isFinal: item.isFinal, daysSinceAdded };
       });
 
       // ringkasan keseluruhan
@@ -1114,11 +1120,16 @@
         <div class="preview-table-wrap"><table><thead><tr>
           <th>Ticker</th><th>Ditambahkan</th><th>Status</th><th>Fase Masuk</th><th>Hari ke-Puncak</th><th>Gain Maks</th><th>Drawdown Maks</th>
         </tr></thead><tbody>`;
-      computed.sort((a,b) => (b.maxGainPct ?? -999) - (a.maxGainPct ?? -999)).forEach(c => {
+      computed.sort((a,b) => new Date(b.addedDate) - new Date(a.addedDate)).forEach(c => {
+        const statusLabel = c.daysSinceAdded === 0
+          ? '<span style="color:var(--text-faint); font-size:10.5px;">🆕 Baru masuk hari ini</span>'
+          : c.isFinal
+            ? '<span style="color:var(--positive); font-size:10.5px;">✓ Final</span>'
+            : '<span style="color:var(--amber-flag); font-size:10.5px;">⏳ Berjalan</span>';
         html += `<tr style="${c.isFinal ? '' : 'opacity:0.75;'}">
           <td>${c.ticker}</td>
           <td>${c.addedDate ?? '-'}</td>
-          <td>${c.isFinal ? '<span style="color:var(--positive); font-size:10.5px;">✓ Final</span>' : '<span style="color:var(--amber-flag); font-size:10.5px;">⏳ Berjalan</span>'}</td>
+          <td>${statusLabel}</td>
           <td style="font-size:10.5px;">${c.entryPhase}</td>
           <td>${c.daysToPeak != null ? c.daysToPeak+' hari' : '-'}</td>
           <td class="pos">${c.maxGainPct != null ? '+'+c.maxGainPct.toFixed(1)+'%' : '-'}</td>
