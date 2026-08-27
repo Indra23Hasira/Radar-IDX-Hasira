@@ -747,7 +747,7 @@
   }
 
   // batasi jumlah request paralel ke Firestore supaya browser & kuota aman
-  async function runWithConcurrency(items, limit, worker){
+  async function runWithConcurrency(items, limit, worker, delayMs){
     const results = new Array(items.length);
     let idx = 0;
     let errorCount = 0;
@@ -755,6 +755,7 @@
     async function next(){
       while(idx < items.length){
         const cur = idx++;
+        if(delayMs && cur > 0) await sleep(delayMs); // jeda kecil biar request gak numpuk bareng
         try{
           results[cur] = await worker(items[cur], cur);
         }catch(err){
@@ -1120,7 +1121,7 @@
 
         // Jalur A: backfill sekali dari Yahoo Finance (concurrency kecil, ini API eksternal)
         if(needsBackfill.length){
-          const { errorCount: backfillErrors } = await runWithConcurrency(needsBackfill, 5, async (wlDoc) => {
+          const { errorCount: backfillErrors } = await runWithConcurrency(needsBackfill, 2, async (wlDoc) => {
             const item = wlDoc.data();
             const ticker = item.ticker;
             const baseClose = item.snapshot?.close ?? null;
@@ -1166,7 +1167,7 @@
               intradayHigh, intradayHighDate, intradayLow, intradayLowDate,
             }, { merge: true });
             peakBackfilled++;
-          });
+          }, 400);
           if(backfillErrors > 0){
             warnings.push(`⚠ Sebagian gagal backfill harga tertinggi/terendah dari Yahoo (tidak fatal).`);
           }
@@ -1386,7 +1387,9 @@
 
   document.getElementById('btnUpdateIndicators').addEventListener('click', updateTechnicalIndicators);
 
-  async function fetchYahooHistory(ticker){
+  function sleep(ms){ return new Promise(resolve => setTimeout(resolve, ms)); }
+
+  async function fetchYahooHistoryOnce(ticker){
     const symbol = ticker + '.JK';
     const yahooUrl = `https://query1.finance.yahoo.com/v8/finance/chart/${symbol}?interval=1d&range=6mo`;
     const proxies = [
@@ -1430,6 +1433,22 @@
     throw lastErr || new Error('Semua proxy gagal diakses');
   }
 
+  // Retry sekali dengan jeda ~2 detik kalau kedua proxy gagal di percobaan
+  // pertama — banyak kegagalan Yahoo/proxy publik sifatnya sesaat (rate-limit
+  // sekejap), jadi nyoba ulang setelah jeda kecil sering langsung berhasil.
+  async function fetchYahooHistory(ticker){
+    try{
+      return await fetchYahooHistoryOnce(ticker);
+    }catch(firstErr){
+      await sleep(2000);
+      try{
+        return await fetchYahooHistoryOnce(ticker);
+      }catch(secondErr){
+        throw secondErr;
+      }
+    }
+  }
+
   async function updateTechnicalIndicators(){
     if(!firebaseReady) return;
     const { collection, query, orderBy, limit, where, getDocs, doc, getDoc, setDoc } = firestoreFns;
@@ -1460,7 +1479,7 @@
 
       // 2. tarik histori harga dari Yahoo Finance (dual-proxy) + data resmi hari ini (buat validasi silang)
       let fetched = 0;
-      const { results, errorCount, firstError } = await runWithConcurrency(candidates, 5, async (row) => {
+      const { results, errorCount, firstError } = await runWithConcurrency(candidates, 2, async (row) => {
         const [hist, officialSnap] = await Promise.all([
           fetchYahooHistory(row.ticker),
           officialLatestDate ? getDoc(doc(db, 'dailySummary', officialLatestDate, 'stocks', row.ticker)) : Promise.resolve(null),
@@ -1486,7 +1505,7 @@
         }
 
         return { ticker: row.ticker, companyName: row.companyName, dataStale, ...hist };
-      });
+      }, 400);
 
       const warnings = [];
       if(errorCount > 0){
