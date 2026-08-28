@@ -1401,6 +1401,99 @@
     document.getElementById('progressLabel5').textContent = `${label || 'Memproses'} ${done} / ${total} saham... (${pct}%)`;
   }
 
+  // ============================================================
+  // computeAndSaveStatsSnapshot — ambil breakdown performa per Fase
+  // (sama persis logic-nya dengan tab Statistik di dashboard.html),
+  // lalu simpan sebagai 1 snapshot harian ke statsHistory/{tanggal}.
+  // Dipanggil otomatis di ujung Tahap 5, supaya ada log tren dari
+  // waktu ke waktu tanpa perlu diklik manual tiap hari.
+  // ============================================================
+  const STATS_WATCHLIST_MONITORING_DAYS = 5; // sama dengan yang dipakai di dashboard.html
+
+  async function computeAndSaveStatsSnapshot(){
+    const { collection, getDocs, doc, setDoc } = firestoreFns;
+    try{
+      const wlSnap = await getDocs(collection(db, 'watchlist'));
+      const rawItems = wlSnap.docs.map(d => d.data());
+
+      const items = [];
+      rawItems.forEach(item => {
+        (item.episodeHistory || []).forEach(ep => {
+          items.push({ ticker: item.ticker, companyName: item.companyName, ...ep, isFinal: true });
+        });
+        const daysSinceCurrent = item.addedDate
+          ? Math.floor((Date.now() - new Date(item.addedDate).getTime()) / 864e5)
+          : 0;
+        items.push({
+          ticker: item.ticker, companyName: item.companyName,
+          addedDate: item.addedDate, snapshot: item.snapshot,
+          peakClose: item.peakClose, peakDate: item.peakDate,
+          lowestClose: item.lowestClose, lowestDate: item.lowestDate,
+          isFinal: daysSinceCurrent > STATS_WATCHLIST_MONITORING_DAYS,
+        });
+      });
+
+      if(!items.length) return; // belum ada data watchlist sama sekali, skip
+
+      const computed = items.map(item => {
+        const s = item.snapshot || {};
+        const baseClose = s.close ?? null;
+        const peakClose = item.peakClose ?? null;
+        const lowestClose = item.lowestClose ?? null;
+        const daysToPeak = (item.peakDate && item.addedDate)
+          ? Math.round((new Date(item.peakDate) - new Date(item.addedDate)) / 864e5)
+          : null;
+        const daysSinceAdded = item.addedDate
+          ? Math.floor((Date.now() - new Date(item.addedDate).getTime()) / 864e5)
+          : null;
+        const maxGainPct = (baseClose && peakClose) ? ((peakClose - baseClose) / baseClose) * 100 : null;
+        const maxDrawdownPct = (baseClose && lowestClose) ? ((lowestClose - baseClose) / baseClose) * 100 : null;
+        const isWin = (maxGainPct != null && daysSinceAdded > 0) ? maxGainPct > 0 : null;
+        const entryPhase = (s.phase && s.phase.length) ? s.phase[0] : (s.categories && s.categories.length ? 'Tanpa Fase Khusus' : '-');
+        return { ticker: item.ticker, daysToPeak, maxGainPct, maxDrawdownPct, isWin, entryPhase };
+      });
+
+      const phaseGroups = {};
+      computed.forEach(c => {
+        const key = c.entryPhase || '-';
+        if(!phaseGroups[key]) phaseGroups[key] = [];
+        phaseGroups[key].push(c);
+      });
+
+      const phaseBreakdown = {};
+      Object.entries(phaseGroups).forEach(([phase, group]) => {
+        const gWin = group.filter(c => c.isWin === true).length;
+        const gTotal = group.filter(c => c.isWin != null).length;
+        const gGains = group.filter(c => c.maxGainPct != null);
+        const gDays = group.filter(c => c.daysToPeak != null);
+        phaseBreakdown[phase] = {
+          jumlah: group.length,
+          winRate: gTotal ? Math.round((gWin/gTotal)*1000)/10 : null,
+          winCount: gWin,
+          totalWithResult: gTotal,
+          avgGainMaks: gGains.length ? Math.round((gGains.reduce((a,c)=>a+c.maxGainPct,0)/gGains.length)*10)/10 : null,
+          avgHariKePuncak: gDays.length ? Math.round((gDays.reduce((a,c)=>a+c.daysToPeak,0)/gDays.length)*10)/10 : null,
+        };
+      });
+
+      const winCountAll = computed.filter(c => c.isWin === true).length;
+      const totalWithResultAll = computed.filter(c => c.isWin != null).length;
+
+      const today = new Date().toISOString().slice(0,10);
+      await setDoc(doc(db, 'statsHistory', today), {
+        date: today,
+        totalDipantau: computed.length,
+        winRateOverall: totalWithResultAll ? Math.round((winCountAll/totalWithResultAll)*1000)/10 : null,
+        phaseBreakdown,
+        savedAt: new Date().toISOString(),
+      });
+    }catch(e){
+      console.error('Gagal simpan snapshot statistik harian:', e);
+      // sengaja tidak dilempar ke atas — kegagalan simpan snapshot statistik
+      // TIDAK boleh menggagalkan/mengganggu proses Tahap 5 yang lebih penting
+    }
+  }
+
   document.getElementById('btnUpdateIndicators').addEventListener('click', updateTechnicalIndicators);
 
   // ============================================================
@@ -1912,6 +2005,11 @@
       if(phaseSynced > 0){
         warnings.push(`🔄 Fase snapshot Watchlist untuk ${phaseSynced} saham yang baru ditambahkan hari ini sudah disinkronkan ulang pakai RSI/EMA terbaru (sebelumnya cuma pakai kombinasi kategori saat auto-add).`);
       }
+
+      // 4d. simpan snapshot statistik harian (breakdown performa per Fase) —
+      //     dipakai buat grafik tren "dari waktu ke waktu" di tab Statistik.
+      //     Gagal simpan snapshot ini TIDAK menggagalkan Tahap 5 secara keseluruhan.
+      await computeAndSaveStatsSnapshot();
 
       // 5. simpan meta status
       await setDoc(doc(db, 'systemMeta', 'technicalIndicators'), {
