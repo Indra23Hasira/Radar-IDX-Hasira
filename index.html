@@ -313,6 +313,25 @@
     <div id="resyncResult"></div>
   </div>
 
+  <!-- UTILITAS: BACKTEST WINDOW 2 HARI VS 3 HARI -->
+  <div class="step-card" id="stepCardBacktestWindow">
+    <div class="step-head">
+      <div class="step-num" id="stepNumBacktestWindow">🔬</div>
+      <div class="step-title">Utilitas: Backtest Window 2 Hari vs 3 Hari</div>
+    </div>
+    <div class="msg-box info">ℹ Kategori <b>Foreign Uptrend/Big Accum/Bandar Accum</b> saat ini butuh minimal <b>3 hari</b> histori berturut-turut sebelum bisa dievaluasi. Tool ini nyoba versi window <b>2 hari</b> secara paralel (formula diperlonggar sepadan), lalu bandingin forward return keduanya — biar keputusan "3 hari ketat" vs "2 hari lebih cepat tapi rawan noise" berdasar data, bukan tebakan. Jalan LIVE tiap diklik — makin banyak histori terkumpul dari hari ke hari, makin akurat hasilnya.</div>
+    <div class="field" style="max-width:260px; margin-top:12px;">
+      <label>Maks hari histori per ticker yang ditarik</label>
+      <input type="number" id="backtestMaxDays" value="40" min="10" max="120" step="5">
+    </div>
+    <button class="btn btn-ghost" id="btnRunBacktestWindow" style="margin-top:4px;">🔬 Jalankan Backtest</button>
+    <div class="progress-wrap" id="progressWrapBacktestWindow">
+      <div class="progress-bar-outer"><div class="progress-bar-inner" id="progressBarBacktestWindow"></div></div>
+      <div class="progress-label" id="progressLabelBacktestWindow">Memproses 0 / 0 saham...</div>
+    </div>
+    <div id="backtestWindowResult"></div>
+  </div>
+
   <!-- HISTORY -->
   <div class="history-section">
     <div class="history-title">Riwayat Upload Terakhir</div>
@@ -1618,6 +1637,293 @@
       out.innerHTML = `<div class="msg-box error">✕ Gagal resync: ${err.message}</div>`;
     }finally{
       document.getElementById('btnResyncPhase').disabled = false;
+    }
+  }
+
+  // ============================================================
+  // UTILITAS: BACKTEST WINDOW 2 HARI VS 3 HARI
+  // Mensimulasikan ulang deteksi Foreign Uptrend/Big Accum/Bandar Accum/
+  // Distribution Warning di SETIAP tanggal historis yang tersedia, dengan
+  // window 3 hari (formula ASLI, sama persis dengan Tahap 4) DAN window 2
+  // hari (formula diadaptasi, dijelaskan di bawah), lalu bandingkan forward
+  // return 7/14 hari dari sinyal yang dihasilkan masing-masing.
+  //
+  // Adaptasi window 2 hari (dari window 3 hari asli):
+  // - foreignUptrend: "monotonic naik 3 titik" -> cukup net hari terbaru >= net hari sebelumnya
+  // - bandarAccum/distributionWarning: bidDominantDays>=2 dari 3 -> harus 2/2 (KEDUANYA)
+  //   hari bid-dominan (proporsi ketat yang sepadan, bukan diperlonggar)
+  // - bigAccum: percentile rank foreignNet2d (bukan foreignNet3d), dibandingkan across
+  //   kandidat yang sama-sama punya window 2 hari di tanggal itu
+  // ============================================================
+  function detectCategoriesForWindow(days, windowSize, row, allNetValuesSameDay){
+    // days = array historis [terbaru, ...mundur], row = data hari terbaru (H)
+    const w = days.slice(0, windowSize);
+    if(w.length < windowSize) return null; // histori belum cukup buat window ini
+
+    const nets = w.map(d => (d.foreignBuy||0) - (d.foreignSell||0)); // [terbaru..lama]
+    const vols = w.map(d => d.volume || 0);
+    const foreignNet = nets.reduce((a,b)=>a+b,0);
+    const totalVol = vols.reduce((a,b)=>a+b,0);
+    const foreignRatio = totalVol !== 0 ? (foreignNet / totalVol) * 100 : 0;
+
+    let consecutiveNetBuy = 0;
+    for(const n of nets){ if(n > 0) consecutiveNetBuy++; else break; }
+
+    let foreignUptrend;
+    if(windowSize >= 3){
+      const ascNets = [...nets].reverse();
+      const monotonicUp = ascNets[1] >= ascNets[0] && ascNets[2] >= ascNets[1];
+      const ratioOldest = vols[windowSize-1] !== 0 ? (nets[windowSize-1]/vols[windowSize-1])*100 : 0;
+      const ratioNewest = vols[0] !== 0 ? (nets[0]/vols[0])*100 : 0;
+      foreignUptrend = monotonicUp && foreignNet > 0 && ratioNewest > ratioOldest;
+    } else {
+      // versi 2 hari: naik dari hari lama ke hari baru + net kumulatif positif
+      const ratioOldest = vols[1] !== 0 ? (nets[1]/vols[1])*100 : 0;
+      const ratioNewest = vols[0] !== 0 ? (nets[0]/vols[0])*100 : 0;
+      foreignUptrend = nets[0] >= nets[1] && foreignNet > 0 && ratioNewest > ratioOldest;
+    }
+
+    const highs = w.map(d => d.high || 0);
+    const lows = w.map(d => d.low || 0);
+    const rangePct = row.close !== 0 ? ((Math.max(...highs) - Math.min(...lows)) / row.close) * 100 : 999;
+    const avgOtherVol = windowSize >= 3
+      ? (vols[1] + vols[2]) / 2
+      : vols[1]; // window 2: bandingkan cuma ke 1 hari sebelumnya
+    const volIncreasing = vols[0] > avgOtherVol;
+    const bidDominantDays = w.filter(d => (d.bidVolume||0) > (d.offerVolume||0)).length;
+    const offerDominantDays = w.filter(d => (d.offerVolume||0) > (d.bidVolume||0)).length;
+    const closingStrengths = w.map(d => {
+      const range = (d.high||0) - (d.low||0);
+      return range > 0 ? ((d.close||0) - (d.low||0)) / range : 0.5;
+    });
+    const avgClosingStrength = closingStrengths.reduce((a,b)=>a+b,0) / closingStrengths.length;
+    const bidDomOk = bidDominantDays >= 2;
+    const offerDomOk = offerDominantDays >= 2;
+    const bandarAccum = rangePct <= 8 && volIncreasing && bidDomOk && avgClosingStrength >= 0.6;
+    const distributionWarning = offerDomOk && avgClosingStrength <= 0.4 && volIncreasing;
+
+    const foreignNetValue = foreignNet * (row.close || 0);
+    const pct = percentileRank(allNetValuesSameDay, foreignNetValue);
+    const bigAccum = pct >= 80;
+
+    // volumeBreakout tidak termasuk window 2v3 (dia sudah pakai window terpisah/lebih panjang)
+    let volumeBreakout = false;
+    if(days.length >= 2){
+      const priorDays = days.slice(1, Math.min(21, days.length));
+      const avgVolPrior = priorDays.length ? priorDays.reduce((a,d)=>a+(d.volume||0),0) / priorDays.length : 0;
+      const volumeRatio = avgVolPrior !== 0 ? row.volume / avgVolPrior : 0;
+      const range = (row.high||0) - (row.low||0);
+      const closePos = range > 0 ? ((row.close||0) - (row.low||0)) / range : 0.5;
+      volumeBreakout = volumeRatio >= 2.0 && row.changePct >= 3 && closePos >= 0.7;
+    }
+
+    const matchCount = [volumeBreakout, foreignUptrend, bigAccum, bandarAccum].filter(Boolean).length;
+    return { foreignUptrend, bandarAccum, distributionWarning, bigAccum, volumeBreakout, matchCount };
+  }
+
+  function updateProgressBacktestWindow(done, total, label){
+    const pct = total ? Math.round((done/total)*100) : 0;
+    document.getElementById('progressBarBacktestWindow').style.width = pct + '%';
+    document.getElementById('progressLabelBacktestWindow').textContent = `${label || 'Memproses'} ${done} / ${total} saham... (${pct}%)`;
+  }
+
+  document.getElementById('btnRunBacktestWindow').addEventListener('click', runBacktestWindow);
+
+  async function runBacktestWindow(){
+    if(!firebaseReady) return;
+    const { collection, query, orderBy, limit, getDocs } = firestoreFns;
+    const out = document.getElementById('backtestWindowResult');
+    out.innerHTML = '';
+    document.getElementById('progressWrapBacktestWindow').style.display = 'block';
+    document.getElementById('btnRunBacktestWindow').disabled = true;
+
+    try{
+      const maxDays = parseInt(document.getElementById('backtestMaxDays').value, 10) || 40;
+
+      // 1. universe = kandidat tanggal terbaru yang lolos filter likuiditas (proksi
+      //    universe historis — cukup representatif untuk saham yang layak dipantau)
+      const metaQ = query(collection(db, 'dailySummary'), orderBy('tradingDate', 'desc'), limit(1));
+      const metaSnap = await getDocs(metaQ);
+      if(metaSnap.empty){
+        out.innerHTML = `<div class="msg-box error">✕ Belum ada data dailySummary.</div>`;
+        return;
+      }
+      const latestDate = metaSnap.docs[0].data().tradingDate;
+      const stocksSnap = await getDocs(collection(db, 'dailySummary', latestDate, 'stocks'));
+      const minPrice = parseFloat(document.getElementById('minPriceFilter').value) || 0;
+      const minAvgValue = parseFloat(document.getElementById('minAvgValueFilter').value) || 0;
+      const minAvgFreq = parseFloat(document.getElementById('minAvgFreqFilter').value) || 0;
+      const universe = stocksSnap.docs.map(d => d.data()).filter(r => r.isActive && r.close >= minPrice);
+
+      if(!universe.length){
+        out.innerHTML = `<div class="msg-box error">✕ Tidak ada saham di universe (cek filter harga minimum).</div>`;
+        return;
+      }
+
+      updateProgressBacktestWindow(0, universe.length, 'Mengambil histori');
+
+      // 2. tarik histori tiap ticker (s.d. maxDays hari, urut terbaru->lama)
+      let fetched = 0;
+      const { results: historyResults, errorCount: fetchErrors } = await runWithConcurrency(universe, 15, async (row) => {
+        const q = query(
+          collection(db, 'tickerHistory', row.ticker, 'days'),
+          orderBy('date', 'desc'),
+          limit(maxDays)
+        );
+        const snap = await getDocs(q);
+        fetched++;
+        updateProgressBacktestWindow(fetched, universe.length, 'Mengambil histori');
+        return { ticker: row.ticker, days: snap.docs.map(d => d.data()) };
+      });
+
+      const historyMap = {};
+      historyResults.forEach(h => { if(h && h.days.length) historyMap[h.ticker] = h.days; });
+
+      // buang ticker dengan likuiditas historis terlalu rendah rata2 (proksi kasar,
+      // dihitung dari histori yg baru saja ditarik, bukan avgValue20d hari ini)
+      const eligible = Object.keys(historyMap).filter(ticker => {
+        const days = historyMap[ticker];
+        const avgVal = days.reduce((a,d)=>a+(d.value||0),0) / days.length;
+        const avgFreq = days.reduce((a,d)=>a+(d.frequency||0),0) / days.length;
+        return avgVal >= minAvgValue && avgFreq >= minAvgFreq;
+      });
+
+      if(!eligible.length){
+        out.innerHTML = `<div class="msg-box error">✕ Tidak ada ticker dengan histori yang lolos filter likuiditas.</div>`;
+        return;
+      }
+
+      // 3. cari rentang tanggal unik yang tersedia (gabungan semua ticker)
+      const allDatesSet = new Set();
+      eligible.forEach(ticker => historyMap[ticker].forEach(d => allDatesSet.add(d.date)));
+      const allDates = Array.from(allDatesSet).sort(); // ascending
+
+      // butuh minimal 14 hari SETELAH tanggal sinyal buat ukur forward return 14 hari
+      const signalableDates = allDates.slice(0, Math.max(0, allDates.length - 14));
+
+      if(signalableDates.length < 3){
+        out.innerHTML = `<div class="msg-box warning">⚠ Histori yang tersedia baru ${allDates.length} hari — belum cukup buat backtest yang berarti (butuh minimal ~17-20 hari: 3 buffer awal + 14 forward). Coba lagi setelah histori bertambah.</div>`;
+        return;
+      }
+
+      // 4. simulasi per tanggal per ticker, window 2 vs window 3
+      const samplesW2 = [], samplesW3 = [];
+      for(const ticker of eligible){
+        const daysDesc = historyMap[ticker]; // [terbaru..lama]
+        const byDateIdx = new Map(daysDesc.map((d,i) => [d.date, i]));
+
+        for(const signalDate of signalableDates){
+          const idx = byDateIdx.get(signalDate);
+          if(idx === undefined) continue;
+          const row = daysDesc[idx];
+          const daysFromHere = daysDesc.slice(idx); // [signalDate, ...mundur]
+          if(daysFromHere.length < 3) continue;
+
+          // forward return: cari harga di +7 dan +14 hari KALENDER dagang dari signalDate
+          // (pakai urutan tanggal unik gabungan, karena tidak semua ticker trading tiap hari)
+          const dateIdxGlobal = allDates.indexOf(signalDate);
+          const fwd7Date = allDates[dateIdxGlobal + 7];
+          const fwd14Date = allDates[dateIdxGlobal + 14];
+          const fwd7Row = fwd7Date ? daysDesc.find(d => d.date === fwd7Date) : null;
+          const fwd14Row = fwd14Date ? daysDesc.find(d => d.date === fwd14Date) : null;
+          if(!fwd7Row && !fwd14Row) continue; // tidak ada data forward return sama sekali, lewati
+
+          const fwd7Pct = fwd7Row && row.close ? ((fwd7Row.close - row.close)/row.close)*100 : null;
+          const fwd14Pct = fwd14Row && row.close ? ((fwd14Row.close - row.close)/row.close)*100 : null;
+
+          // net value list buat percentile bigAccum — dari SEMUA ticker eligible di tanggal yg sama
+          // (dihitung sekali per (ticker,date) jadi agak berat; disederhanakan pakai window ticker itu sendiri
+          // digabung across ticker lain yg juga py data di tanggal sama, dibatasi supaya tidak meledak)
+          const sameDayNets2 = [], sameDayNets3 = [];
+          for(const t2 of eligible){
+            const d2 = historyMap[t2];
+            const i2 = d2.findIndex(x => x.date === signalDate);
+            if(i2 === -1) continue;
+            const w2days = d2.slice(i2, i2+2);
+            const w3days = d2.slice(i2, i2+3);
+            if(w2days.length === 2){
+              const n2 = w2days.reduce((a,x)=>a+((x.foreignBuy||0)-(x.foreignSell||0)),0);
+              sameDayNets2.push(n2 * (d2[i2].close||0));
+            }
+            if(w3days.length === 3){
+              const n3 = w3days.reduce((a,x)=>a+((x.foreignBuy||0)-(x.foreignSell||0)),0);
+              sameDayNets3.push(n3 * (d2[i2].close||0));
+            }
+          }
+
+          const r2 = detectCategoriesForWindow(daysFromHere, 2, row, sameDayNets2);
+          const r3 = detectCategoriesForWindow(daysFromHere, 3, row, sameDayNets3);
+
+          if(r2) samplesW2.push({ ticker, date: signalDate, matchCount: r2.matchCount, fwd7Pct, fwd14Pct });
+          if(r3) samplesW3.push({ ticker, date: signalDate, matchCount: r3.matchCount, fwd7Pct, fwd14Pct });
+        }
+      }
+
+      // 5. bucket per matchCount, hitung avg fwd return + win rate (sama pola dengan backtest BTC)
+      function bucketize(samples){
+        const buckets = {};
+        samples.forEach(s => {
+          const key = s.matchCount >= 3 ? '≥3' : String(s.matchCount);
+          if(!buckets[key]) buckets[key] = [];
+          buckets[key].push(s);
+        });
+        return Object.entries(buckets).map(([key, group]) => {
+          const g7 = group.filter(g => g.fwd7Pct != null);
+          const g14 = group.filter(g => g.fwd14Pct != null);
+          const win7 = g7.filter(g => g.fwd7Pct > 0).length;
+          const win14 = g14.filter(g => g.fwd14Pct > 0).length;
+          return {
+            bucket: key, n: group.length,
+            avgFwd7: g7.length ? g7.reduce((a,g)=>a+g.fwd7Pct,0)/g7.length : null,
+            winRate7: g7.length ? Math.round((win7/g7.length)*100) : null,
+            avgFwd14: g14.length ? g14.reduce((a,g)=>a+g.fwd14Pct,0)/g14.length : null,
+            winRate14: g14.length ? Math.round((win14/g14.length)*100) : null,
+          };
+        }).sort((a,b) => (b.bucket === '≥3' ? 99 : parseInt(b.bucket)) - (a.bucket === '≥3' ? 99 : parseInt(a.bucket)));
+      }
+
+      const bucketsW2 = bucketize(samplesW2);
+      const bucketsW3 = bucketize(samplesW3);
+      const allFwd7W2 = samplesW2.filter(s=>s.fwd7Pct!=null).map(s=>s.fwd7Pct);
+      const allFwd7W3 = samplesW3.filter(s=>s.fwd7Pct!=null).map(s=>s.fwd7Pct);
+      const baseline7W2 = allFwd7W2.length ? allFwd7W2.reduce((a,b)=>a+b,0)/allFwd7W2.length : null;
+      const baseline7W3 = allFwd7W3.length ? allFwd7W3.reduce((a,b)=>a+b,0)/allFwd7W3.length : null;
+
+      function renderTable(title, buckets, baseline7){
+        let html = `<div class="table-section-title" style="margin-top:0;">${title}</div>
+          <div class="preview-table-wrap"><table><thead><tr>
+            <th>Bucket Match</th><th>n</th><th>Avg Fwd7</th><th>Win Rate 7</th><th>Avg Fwd14</th><th>Win Rate 14</th>
+          </tr></thead><tbody>`;
+        buckets.forEach(b => {
+          html += `<tr>
+            <td>${b.bucket}</td><td>${b.n}</td>
+            <td class="${b.avgFwd7>=0?'pos':'neg'}">${b.avgFwd7!=null ? (b.avgFwd7>=0?'+':'')+b.avgFwd7.toFixed(2)+'%' : '-'}</td>
+            <td>${b.winRate7!=null ? b.winRate7+'%' : '-'}</td>
+            <td class="${b.avgFwd14>=0?'pos':'neg'}">${b.avgFwd14!=null ? (b.avgFwd14>=0?'+':'')+b.avgFwd14.toFixed(2)+'%' : '-'}</td>
+            <td>${b.winRate14!=null ? b.winRate14+'%' : '-'}</td>
+          </tr>`;
+        });
+        html += `</tbody></table></div>
+          <p style="font-size:12px; color:var(--text-dim); margin-top:6px;">Baseline (avg fwd7 tanpa filter sinyal apapun): ${baseline7!=null ? (baseline7>=0?'+':'')+baseline7.toFixed(2)+'%' : '-'}</p>`;
+        return html;
+      }
+
+      let html = `<div class="msg-box info">ℹ Rentang histori terpakai: ${allDates[0]} s/d ${allDates[allDates.length-1]} (${allDates.length} hari unik, ${signalableDates.length} tanggal bisa jadi sinyal karena butuh 14 hari forward). ${eligible.length} ticker lolos filter likuiditas historis.</div>`;
+
+      const totalSamples = samplesW2.length + samplesW3.length;
+      if(totalSamples < 20){
+        html += `<div class="msg-box warning">⚠ <b>Sample sangat kecil (${samplesW2.length} sampel window-2, ${samplesW3.length} sampel window-3)</b> — histori yang tersedia masih terlalu pendek untuk kesimpulan yang bisa diandalkan. Angka di bawah baru indikasi arah kasar, BUKAN dasar keputusan. Jalankan ulang tool ini setelah beberapa minggu lagi untuk hasil yang lebih meyakinkan.</div>`;
+      }
+
+      html += renderTable('Window 3 Hari (formula ASLI, dipakai saat ini)', bucketsW3, baseline7W3);
+      html += renderTable('Window 2 Hari (formula diadaptasi)', bucketsW2, baseline7W2);
+
+      out.innerHTML = html;
+    }catch(err){
+      console.error(err);
+      out.innerHTML = `<div class="msg-box error">✕ Gagal menjalankan backtest: ${err.message}</div>`;
+    }finally{
+      document.getElementById('btnRunBacktestWindow').disabled = false;
     }
   }
 
