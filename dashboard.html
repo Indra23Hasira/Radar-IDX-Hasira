@@ -1004,7 +1004,7 @@
     if(!firebaseReady) return;
     const content = document.getElementById('statsContent');
     content.innerHTML = `<div class="loading-msg">Menghitung statistik...</div>`;
-    const { collection, getDocs } = firestoreFns;
+    const { collection, getDocs, query, orderBy } = firestoreFns;
 
     try{
       const wlSnap = await getDocs(collection(db, 'watchlist'));
@@ -1131,6 +1131,26 @@
       });
       html += `</div>`;
 
+      // ============================================================
+      // TREN DARI WAKTU KE WAKTU — baca snapshot harian dari statsHistory
+      // (ditulis otomatis tiap kali Tahap 5 dijalankan di halaman Import Data)
+      // ============================================================
+      try{
+        const trendQ = query(collection(db, 'statsHistory'), orderBy('date', 'asc'));
+        const trendSnap = await getDocs(trendQ);
+        const history = trendSnap.docs.map(d => d.data());
+        if(history.length >= 2){
+          html += `<div class="table-section-title">📈 Tren Performa per Fase (dari Waktu ke Waktu)</div>
+            <div class="msg-box info" style="margin-bottom:12px;">ℹ ${history.length} snapshot harian, dari ${history[0].date} sampai ${history[history.length-1].date}. Snapshot baru tersimpan otomatis tiap Tahap 5 dijalankan — grafik ini baru mulai berarti setelah beberapa hari data terkumpul.</div>
+            ${buildTrendChartSVG(history)}`;
+        } else {
+          html += `<div class="table-section-title">📈 Tren Performa per Fase (dari Waktu ke Waktu)</div>
+            <div class="msg-box warning">⚠ Baru ${history.length} snapshot harian tersimpan — butuh minimal 2 hari data buat mulai menggambar tren. Snapshot tersimpan otomatis tiap kali Tahap 5 dijalankan.</div>`;
+        }
+      }catch(trendErr){
+        console.error('Gagal muat tren statsHistory:', trendErr);
+      }
+
       // tabel detail
       html += `<div class="table-section-title">Detail per Saham</div>
         <div class="preview-table-wrap"><table><thead><tr>
@@ -1248,6 +1268,65 @@
         note: `Candle ${p} terdeteksi di hari terakhir — sinyal konfirmasi entry jangka pendek, biasanya lebih kuat kalau muncul di area support atau bareng sinyal lain.` });
     });
     return tags;
+  }
+
+  function buildTrendChartSVG(history){
+    // history = array snapshot harian { date, totalDipantau, winRateOverall, phaseBreakdown: {label: {jumlah, winRate, ...}} }, sudah terurut tanggal ascending
+    const palette = ['var(--cyan)', 'var(--gold)', 'var(--positive)', 'var(--risk-orange)', 'var(--negative)', 'var(--text-dim)'];
+    const allPhases = new Set();
+    history.forEach(h => Object.keys(h.phaseBreakdown || {}).forEach(p => allPhases.add(p)));
+    const phases = Array.from(allPhases);
+
+    const W = 760, H = 260, padL = 40, padR = 16, padT = 16, padB = 36;
+    const plotW = W - padL - padR, plotH = H - padT - padB;
+    const n = history.length;
+    const xFor = i => padL + (n > 1 ? (i/(n-1)) * plotW : plotW/2);
+    const yFor = v => padT + plotH - (Math.max(0, Math.min(100, v ?? 0))/100) * plotH;
+
+    let svg = `<svg viewBox="0 0 ${W} ${H}" style="width:100%; height:auto; background:var(--panel-alt); border:1px solid var(--border); border-radius:4px;">`;
+    // grid horizontal + label sumbu Y (0/25/50/75/100%)
+    [0,25,50,75,100].forEach(v => {
+      const y = yFor(v);
+      svg += `<line x1="${padL}" y1="${y}" x2="${W-padR}" y2="${y}" stroke="var(--border-soft)" stroke-width="1"/>`;
+      svg += `<text x="${padL-8}" y="${y+3}" text-anchor="end" font-size="9" fill="var(--text-faint)">${v}%</text>`;
+    });
+    // label sumbu X (tanggal) — cukup tampilkan beberapa saja biar tidak numpuk
+    const xLabelStep = Math.max(1, Math.ceil(n/6));
+    history.forEach((h, i) => {
+      if(i % xLabelStep === 0 || i === n-1){
+        svg += `<text x="${xFor(i)}" y="${H-padB+16}" text-anchor="middle" font-size="9" fill="var(--text-faint)">${h.date.slice(5)}</text>`;
+      }
+    });
+    // 1 garis per fase — Win Rate (%) dari waktu ke waktu, titik null (belum ada data fase itu di hari itu) dilewati
+    phases.forEach((phase, pi) => {
+      const color = palette[pi % palette.length];
+      let points = [];
+      history.forEach((h, i) => {
+        const wr = h.phaseBreakdown?.[phase]?.winRate;
+        if(wr != null) points.push([xFor(i), yFor(wr)]);
+      });
+      if(points.length >= 2){
+        svg += `<polyline points="${points.map(p=>p.join(',')).join(' ')}" fill="none" stroke="${color}" stroke-width="2"/>`;
+      }
+      points.forEach(p => { svg += `<circle cx="${p[0]}" cy="${p[1]}" r="2.5" fill="${color}"/>`; });
+    });
+    svg += `</svg>`;
+
+    // legend
+    let legend = `<div style="display:flex; flex-wrap:wrap; gap:12px; margin-top:8px; font-size:11px;">`;
+    phases.forEach((phase, pi) => {
+      const color = palette[pi % palette.length];
+      const latest = [...history].reverse().find(h => h.phaseBreakdown?.[phase]);
+      const latestWr = latest?.phaseBreakdown?.[phase]?.winRate;
+      legend += `<div style="display:flex; align-items:center; gap:5px;">
+        <span style="width:10px; height:10px; border-radius:2px; background:${color}; display:inline-block;"></span>
+        <span style="color:var(--text-dim);">${phase}</span>
+        <span style="color:var(--text-faint);">(${latestWr!=null ? latestWr.toFixed(0)+'%' : '-'} terkini)</span>
+      </div>`;
+    });
+    legend += `</div>`;
+
+    return `<div style="margin-bottom:16px;">${svg}${legend}</div>`;
   }
 
   function buildSpiderSVG(scores){
