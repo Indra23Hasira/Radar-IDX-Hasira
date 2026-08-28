@@ -297,6 +297,22 @@
     <div id="indicatorResult"></div>
   </div>
 
+  <!-- UTILITAS: RE-SYNC FASE WATCHLIST LAMA (sekali jalan, bukan bagian alur harian) -->
+  <div class="step-card" id="stepCardResyncPhase">
+    <div class="step-head">
+      <div class="step-num" id="stepNumResync">🔧</div>
+      <div class="step-title">Utilitas: Re-sync Fase Watchlist Lama</div>
+    </div>
+    <div class="msg-box info">ℹ Sekali-jalan buat benerin label <b>Fase</b> ("Rawan Guyur"/"Momentum Breakout"/dst) di entry Watchlist yang <b>ditambahkan SEBELUM</b> perbaikan sinkronisasi Fase ini ada — waktu itu Fase disimpan pakai kombinasi kategori doang (belum cek RSI/EMA), jadi bisa beda dari yang tampil live di Dashboard sekarang. Entry yang ditambahkan SETELAH perbaikan ini sudah otomatis benar lewat Tahap 5, tidak perlu di-resync lagi.</div>
+    <div class="msg-box warning">⚠ Keterbatasan: RSI14/EMA20 dihitung ulang dari histori Yahoo Finance <b>sampai tanggal ditambahkan</b> (akurat historis). Tapi tag sekunder <b>🔄 Reversal/Momentum Melemah</b> dan <b>🎯 Reclaim MA20</b>/candle tidak ikut di-resync (datanya historis tidak tersimpan) — cuma klasifikasi utama (Tahap Awal/Rawan Guyur/Momentum Breakout) yang dibenahi. Ini tidak mengubah matchCount, kategori, atau skor apa pun — murni label Fase display.</div>
+    <button class="btn btn-ghost" id="btnResyncPhase" style="margin-top:4px;">🔧 Re-sync Fase Watchlist Sekarang</button>
+    <div class="progress-wrap" id="progressWrapResync">
+      <div class="progress-bar-outer"><div class="progress-bar-inner" id="progressBarResync"></div></div>
+      <div class="progress-label" id="progressLabelResync">Memproses 0 / 0 saham...</div>
+    </div>
+    <div id="resyncResult"></div>
+  </div>
+
   <!-- HISTORY -->
   <div class="history-section">
     <div class="history-title">Riwayat Upload Terakhir</div>
@@ -1387,6 +1403,127 @@
 
   document.getElementById('btnUpdateIndicators').addEventListener('click', updateTechnicalIndicators);
 
+  // ============================================================
+  // UTILITAS: RE-SYNC FASE WATCHLIST LAMA (sekali jalan)
+  // Membenahi label Fase untuk entry Watchlist yang ditambahkan SEBELUM
+  // perbaikan sinkronisasi Fase ada. TIDAK menyentuh matchCount/kategori/skor.
+  // ============================================================
+  function updateProgressResync(done, total, label){
+    const pct = total ? Math.round((done/total)*100) : 0;
+    document.getElementById('progressBarResync').style.width = pct + '%';
+    document.getElementById('progressLabelResync').textContent = `${label || 'Memproses'} ${done} / ${total} saham... (${pct}%)`;
+  }
+
+  document.getElementById('btnResyncPhase').addEventListener('click', resyncWatchlistPhases);
+
+  async function resyncWatchlistPhases(){
+    if(!firebaseReady) return;
+    const { collection, getDocs, doc, setDoc } = firestoreFns;
+    const out = document.getElementById('resyncResult');
+    out.innerHTML = '';
+    document.getElementById('progressWrapResync').style.display = 'block';
+    document.getElementById('btnResyncPhase').disabled = true;
+
+    try{
+      // 1. ambil semua entry Watchlist yang masih ada sebagai doc utama
+      //    (episode lampau di dalam episodeHistory tidak ikut di-resync)
+      const wlSnap = await getDocs(collection(db, 'watchlist'));
+      const wlDocs = wlSnap.docs.filter(d => d.data().snapshot && d.data().addedDate);
+
+      if(!wlDocs.length){
+        out.innerHTML = `<div class="msg-box warning">⚠ Tidak ada entry Watchlist untuk di-resync.</div>`;
+        return;
+      }
+
+      updateProgressResync(0, wlDocs.length, 'Mengambil histori Yahoo Finance');
+      let done = 0;
+      const changes = [];
+
+      const { errorCount, firstError } = await runWithConcurrency(wlDocs, 2, async (wlDoc) => {
+        const data = wlDoc.data();
+        const ticker = wlDoc.id;
+        const addedDate = data.addedDate;
+        const oldSnapshot = data.snapshot || {};
+        const oldPhase = oldSnapshot.phase || [];
+
+        // rekonstruksi kategori dari tag yang sudah tersimpan di snapshot lama
+        // (categories asli per-hari tidak tersimpan historis, tapi tag ini setara)
+        const tagList = oldSnapshot.categories || [];
+        const categories = {
+          volumeBreakout: tagList.includes('Volume Breakout'),
+          foreignUptrend: tagList.includes('Foreign Uptrend'),
+          bigAccum: tagList.includes('Big Accum'),
+          bandarAccum: tagList.includes('Bandar Accum'),
+        };
+
+        let hist;
+        try{
+          hist = await fetchYahooHistory(ticker);
+        }catch(e){
+          done++;
+          updateProgressResync(done, wlDocs.length, 'Mengambil histori Yahoo Finance');
+          throw e;
+        }
+
+        // potong histori sampai TANGGAL DITAMBAHKAN saja — supaya RSI/EMA yang
+        // dihitung itu representasi "seolah dihitung pas hari itu", bukan hari ini
+        let cutIdx = hist.dates.findIndex(d => d > addedDate);
+        if(cutIdx === -1) cutIdx = hist.dates.length; // semua data <= addedDate
+        const closesUpTo = hist.closes.slice(0, cutIdx);
+
+        const rsi14 = calcRSI(closesUpTo, 14);
+        const ema20Series = calcEMASeries(closesUpTo, 20);
+        const ema20 = ema20Series.length ? ema20Series[ema20Series.length - 1] ?? null : null;
+        const close = oldSnapshot.close ?? (closesUpTo.length ? closesUpTo[closesUpTo.length-1] : null);
+
+        const r = {
+          categories,
+          foreignNet3d: null, foreignNet10d: null, // tidak tersimpan historis, tag reversal dilewati
+          reclaimPattern: false, candlePatterns: [], // idem, tidak tersimpan historis
+          ind: { rsi14, ema20 },
+          price: { close },
+        };
+        const newPhaseTags = computeSignalPhase(r, 0).filter(p => p.cls === 'early' || p.cls === 'risk' || p.cls === 'momentum');
+        const newPhase = newPhaseTags.map(p => p.label);
+
+        const changed = JSON.stringify(oldPhase) !== JSON.stringify(newPhase);
+        if(changed){
+          await setDoc(doc(db, 'watchlist', ticker), {
+            'snapshot.phase': newPhase,
+          }, { merge: true });
+          changes.push({ ticker, addedDate, oldPhase, newPhase });
+        }
+
+        done++;
+        updateProgressResync(done, wlDocs.length, 'Mengambil histori Yahoo Finance');
+      });
+
+      let html = '';
+      if(errorCount > 0){
+        html += `<div class="msg-box warning">⚠ ${errorCount} saham gagal diproses (dilewati). Contoh error: ${firstError ? firstError.message : '-'}</div>`;
+      }
+      if(changes.length){
+        html += `<div class="msg-box success">✓ ${changes.length} dari ${wlDocs.length} entry Watchlist Fase-nya berubah setelah di-resync.</div>`;
+        html += `<div class="preview-table-wrap"><table><thead><tr>
+          <th>Ticker</th><th>Ditambahkan</th><th>Fase Lama</th><th>Fase Baru</th>
+        </tr></thead><tbody>`;
+        changes.forEach(c => {
+          html += `<tr><td>${c.ticker}</td><td>${c.addedDate}</td>
+            <td>${c.oldPhase.length ? c.oldPhase.join(', ') : '<i>(kosong)</i>'}</td>
+            <td>${c.newPhase.length ? c.newPhase.join(', ') : '<i>(kosong)</i>'}</td></tr>`;
+        });
+        html += `</tbody></table></div>`;
+      } else {
+        html += `<div class="msg-box success">✓ Dicek ${wlDocs.length} entry — semua Fase-nya sudah konsisten, tidak ada yang perlu diubah.</div>`;
+      }
+      out.innerHTML = html;
+    }catch(err){
+      out.innerHTML = `<div class="msg-box error">✕ Gagal resync: ${err.message}</div>`;
+    }finally{
+      document.getElementById('btnResyncPhase').disabled = false;
+    }
+  }
+
   function sleep(ms){ return new Promise(resolve => setTimeout(resolve, ms)); }
 
   async function fetchYahooHistoryOnce(ticker){
@@ -1447,6 +1584,67 @@
         throw secondErr;
       }
     }
+  }
+
+  // ============================================================
+  // computeSignalPhase — PORTED 1:1 dari dashboard.html supaya Fase yang
+  // disimpan ke snapshot Watchlist SELALU sama dengan yang ditampilkan live
+  // di dashboard (RSI/EMA20/durasi, bukan cuma kombinasi kategori doang).
+  // Satu-satunya beda: daysSinceFirst diterima sebagai parameter langsung
+  // (bukan dari Map watchlistAddedDates global yang cuma ada di dashboard.html).
+  // ============================================================
+  function computeSignalPhase(r, daysSinceFirst){
+    const c = r.categories || {};
+    const tags = [];
+    if(c.bandarAccum && !c.volumeBreakout){
+      tags.push({ label: '🟢 Tahap Awal', cls: 'early',
+        note: 'Masih dalam fase ditahan/dikumpulkan — belum breakout harga.' });
+    }
+    if(c.volumeBreakout && !c.bandarAccum && c.foreignUptrend && c.bigAccum){
+      const rsi = r.ind?.rsi14;
+      const ema20 = r.ind?.ema20;
+      const close = r.price?.close;
+      const pctAboveEma20 = (ema20 && close) ? ((close - ema20) / ema20) * 100 : null;
+
+      const rsiExtreme = rsi != null && rsi > 80;
+      const overExtended = pctAboveEma20 != null && pctAboveEma20 > 15;
+      const alreadyRunning = daysSinceFirst != null && daysSinceFirst >= 4;
+      const conditionsMet = [rsiExtreme, overExtended, alreadyRunning].filter(Boolean).length;
+
+      if(conditionsMet >= 2){
+        const reasons = [];
+        if(rsiExtreme) reasons.push(`RSI ${rsi.toFixed(0)} (jenuh beli)`);
+        if(overExtended) reasons.push(`${pctAboveEma20.toFixed(0)}% di atas EMA20 (terlalu jauh dari rata-rata)`);
+        if(alreadyRunning) reasons.push(`sudah ${daysSinceFirst} hari sejak pertama terdeteksi`);
+        tags.push({ label: '🟠 Rawan Guyur', cls: 'risk',
+          note: `Harga sudah breakout dan mulai terlihat jenuh dari ${conditionsMet} sisi sekaligus: ${reasons.join(', ')}. Risiko profit taking lebih tinggi — pertimbangkan tunggu koreksi dulu.` });
+      } else {
+        const partialNote = conditionsMet === 1
+          ? ' (ada 1 tanda jenuh, tapi belum cukup kuat sendirian — masih dianggap wajar).'
+          : '.';
+        tags.push({ label: '🔵 Momentum Breakout', cls: 'momentum',
+          note: `Baru mulai breakout dari fase akumulasi, belum terlihat tanda jenuh yang meyakinkan (butuh minimal 2 dari 3: RSI ekstrem, jarak EMA20, durasi)${partialNote} Masih berpotensi lanjut naik dalam waktu dekat. Tetap bukan jaminan, cek chart manual sebelum masuk.` });
+      }
+    }
+    if(r.foreignNet3d != null && r.foreignNet10d != null){
+      if(r.foreignNet3d > 0 && r.foreignNet10d < 0){
+        tags.push({ label: '🔄 Potensi Reversal', cls: 'reversal',
+          note: 'Asing sempat net jual lebih besar sebelumnya, tapi 3 hari terakhir mulai berbalik beli dan menguat. Baru tahap awal — pantau apakah berlanjut sebelum yakin ini pembalikan beneran.' });
+      } else if(r.foreignNet3d < 0 && r.foreignNet10d > 0){
+        tags.push({ label: '🔄 Momentum Melemah', cls: 'reversal',
+          note: 'Sebelumnya asing net beli, tapi 3 hari terakhir mulai berbalik jual. Waspada — bisa jadi awal dari pembalikan arah ke bawah.' });
+      }
+    }
+    if(r.reclaimPattern || r.ind?.reclaimPattern){
+      tags.push({ label: '🎯 Reclaim MA20', cls: 'reclaim',
+        note: 'Harga sempat dekat area support, volume mulai naik, dan berhasil menembus + bertahan di atas MA20 — pola teknikal yang sering diikuti kelanjutan kenaikan (bukan jaminan, tetap cek chart manual).' });
+    }
+    const candles = r.candlePatterns || r.ind?.candlePatterns || [];
+    candles.forEach(p => {
+      tags.push({ label: `🕯️ ${p}`, cls: 'candle',
+        note: `Candle ${p} terdeteksi di hari terakhir — sinyal konfirmasi entry jangka pendek, biasanya lebih kuat kalau muncul di area support atau bareng sinyal lain.` });
+    });
+    return tags;
   }
 
   async function updateTechnicalIndicators(){
@@ -1578,6 +1776,7 @@
           ticker, companyName, daysAccumulated,
           ema20, ema50, rsi14, macdLine, macdSignal, trendLabel,
           volumeTrendRatio, atr14, reclaimPattern, dataStale, candlePatterns, supportLevel,
+          close: latestClose,
         };
       });
 
@@ -1666,6 +1865,52 @@
       });
       if(mergeRes.errorCount > 0){
         warnings.push(`⚠ ${mergeRes.errorCount} saham gagal digabung skornya ke tickerRollingStats. Contoh error: ${mergeRes.firstError ? mergeRes.firstError.message : '-'}`);
+      }
+
+      // 4c. Sinkronkan ulang Fase snapshot Watchlist buat entry yang addedDate-nya
+      //     = tanggal data terbaru (baru ditambahkan hari ini lewat Tahap 4, SEBELUM
+      //     Technical Score/RSI/EMA ini ada). Tanpa langkah ini, Fase yang kesimpen di
+      //     snapshot Watchlist bisa beda dari yang ditampilkan live di Dashboard, karena
+      //     Tahap 4 auto-add cuma tau kombinasi kategori (belum ada RSI/EMA saat itu).
+      //     TIDAK menyentuh matchCount/kategori/skor — murni update label Fase display
+      //     supaya konsisten dengan computeSignalPhase yang sama dipakai Dashboard.
+      let phaseSynced = 0;
+      try{
+        if(officialLatestDate){
+          const rsByTicker = new Map(candidates.map(c => [c.ticker, c]));
+          const computedByTicker = new Map(computed.map(c => [c.ticker, c]));
+          const wlQ = query(collection(db, 'watchlist'), where('addedDate', '==', officialLatestDate));
+          const wlSnap = await getDocs(wlQ);
+          const wlDocsToday = wlSnap.docs;
+          if(wlDocsToday.length){
+            const syncRes = await runWithConcurrency(wlDocsToday, 15, async (wlDoc) => {
+              const ticker = wlDoc.id;
+              const rs = rsByTicker.get(ticker);
+              const ind = computedByTicker.get(ticker);
+              if(!rs || !ind) return; // ticker ini tidak diproses di run Tahap 5 ini, lewati
+              const r = {
+                categories: rs.categories || {},
+                foreignNet3d: rs.foreignNet3d ?? null,
+                foreignNet10d: rs.foreignNet10d ?? null,
+                reclaimPattern: ind.reclaimPattern,
+                candlePatterns: ind.candlePatterns,
+                ind: { rsi14: ind.rsi14, ema20: ind.ema20 },
+                price: { close: ind.close },
+              };
+              const phaseTags = computeSignalPhase(r, 0); // baru ditambahkan hari ini = 0 hari sejak pertama
+              await setDoc(doc(db, 'watchlist', ticker), {
+                'snapshot.phase': phaseTags.map(p => p.label),
+              }, { merge: true });
+              phaseSynced++;
+            });
+          }
+        }
+      }catch(syncErr){
+        console.error('Gagal sinkronkan Fase Watchlist:', syncErr);
+        warnings.push(`⚠ Gagal sinkronkan ulang Fase Watchlist (tidak fatal, snapshot lama tetap dipakai): ${syncErr.message}`);
+      }
+      if(phaseSynced > 0){
+        warnings.push(`🔄 Fase snapshot Watchlist untuk ${phaseSynced} saham yang baru ditambahkan hari ini sudah disinkronkan ulang pakai RSI/EMA terbaru (sebelumnya cuma pakai kombinasi kategori saat auto-add).`);
       }
 
       // 5. simpan meta status
