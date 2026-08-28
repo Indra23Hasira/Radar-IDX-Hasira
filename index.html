@@ -1044,6 +1044,10 @@
       if(removeErrors > 0){
         warnings.push(`⚠ Sebagian data lama gagal dibersihkan (tidak fatal, coba jalankan ulang).`);
       }
+    } else {
+      // tidak ada data lama yang perlu dibersihkan — tetap tandai progress SELESAI,
+      // supaya teks tidak nyangkut di "0/1 (0%)" padahal prosesnya sudah lanjut
+      updateProgress4(1, 1, 'Membersihkan data lama (tidak ada data lama)');
     }
 
     // 8c. auto-tambah ke Watchlist — HANYA kandidat dengan match \u22653 kategori.
