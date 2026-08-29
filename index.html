@@ -827,6 +827,30 @@
       const latestDate = metaSnap.docs[0].data().tradingDate;
       const warnings = [];
 
+      // Index tanggal bursa AKTUAL (dari daftar dailySummary yang benar-benar ada
+      // datanya) — dipakai untuk hitung "N hari" berdasarkan hari BURSA, bukan
+      // hari kalender. Ini otomatis melompati Sabtu/Minggu/libur bursa, karena
+      // hari-hari itu memang tidak pernah ada entry dailySummary-nya.
+      const allDailySnap = await getDocs(collection(db, 'dailySummary'));
+      const tradingDatesSorted = allDailySnap.docs.map(d => d.id).sort(); // ascending
+      const tradingDateIndex = new Map(tradingDatesSorted.map((d,i) => [d, i]));
+      function tradingDaysElapsed(fromDate, toDate){
+        // jumlah hari bursa yang sudah lewat dari fromDate ke toDate (>=0).
+        // fallback ke hitungan kalender kalau salah satu tanggal belum ada di index
+        // (mis. data baru/tanggal masa depan) — supaya tidak pernah error/NaN.
+        if(tradingDateIndex.has(fromDate) && tradingDateIndex.has(toDate)){
+          return tradingDateIndex.get(toDate) - tradingDateIndex.get(fromDate);
+        }
+        return Math.floor((new Date(toDate) - new Date(fromDate)) / 864e5);
+      }
+      function addTradingDays(fromDate, n){
+        // cari tanggal bursa yang N hari bursa setelah fromDate. Kalau belum ada
+        // datanya sejauh itu (window belum selesai berjalan), return null.
+        const idx = tradingDateIndex.get(fromDate);
+        if(idx == null) return null;
+        return tradingDatesSorted[idx + n] ?? null;
+      }
+
       // 2. ambil seluruh saham untuk tanggal terbaru itu
       const stocksSnap = await getDocs(collection(db, 'dailySummary', latestDate, 'stocks'));
       const latestRows = stocksSnap.docs.map(d => d.data());
@@ -1089,7 +1113,7 @@
         if(existing.exists()){
           const data = existing.data();
           const daysSince = data.addedDate
-            ? Math.floor((new Date(latestDate) - new Date(data.addedDate)) / 864e5)
+            ? tradingDaysElapsed(data.addedDate, latestDate)
             : 0;
           if(daysSince <= WATCHLIST_MONITORING_DAYS){
             return; // masih dalam window aktif, jangan timpa snapshot yang sedang dipantau
@@ -1165,11 +1189,11 @@
             const ticker = item.ticker;
             const baseClose = item.snapshot?.close ?? null;
             const addedDate = item.addedDate;
-            // window pengamatan cuma 5 hari sejak masuk — supaya statistik win rate
-            // TIDAK bias oleh pergerakan harga jauh setelah sinyal aslinya (misal
-            // reli 2 bulan kemudian yang tidak ada hubungannya dengan deteksi radar)
-            const windowEndDate = new Date(new Date(addedDate).getTime() + WATCHLIST_MONITORING_DAYS * 864e5)
-              .toISOString().slice(0,10);
+            // window pengamatan cuma 5 HARI BURSA sejak masuk (bukan hari kalender —
+            // Sabtu/Minggu/libur bursa dilompati) — supaya statistik win rate TIDAK
+            // bias oleh pergerakan harga jauh setelah sinyal aslinya (misal reli 2
+            // bulan kemudian yang tidak ada hubungannya dengan deteksi radar)
+            const windowEndDate = addTradingDays(addedDate, WATCHLIST_MONITORING_DAYS) || latestDate;
             const effectiveEndDate = windowEndDate < latestDate ? windowEndDate : latestDate;
 
             let peakClose = item.peakClose ?? baseClose;
@@ -1220,7 +1244,7 @@
             const item = wlDoc.data();
             const ticker = item.ticker;
             const daysSinceAdded = item.addedDate
-              ? Math.floor((new Date(latestDate) - new Date(item.addedDate)) / 864e5)
+              ? tradingDaysElapsed(item.addedDate, latestDate)
               : 0;
             if(daysSinceAdded > WATCHLIST_MONITORING_DAYS) return; // window sudah lewat, dibekukan — jangan update lagi
 
@@ -1436,6 +1460,17 @@
   async function computeAndSaveStatsSnapshot(){
     const { collection, getDocs, doc, setDoc } = firestoreFns;
     try{
+      // index tanggal bursa aktual — sama seperti yang dipakai di Tahap 4, supaya
+      // "berapa hari" di snapshot statistik ini konsisten hari BURSA, bukan kalender
+      const allDailySnap = await getDocs(collection(db, 'dailySummary'));
+      const tdDatesSorted = allDailySnap.docs.map(d => d.id).sort();
+      const tdIndexOf = new Map(tdDatesSorted.map((d,i) => [d, i]));
+      const tdLatest = tdDatesSorted[tdDatesSorted.length - 1];
+      function tdElapsed(fromDate, toDate){
+        if(tdIndexOf.has(fromDate) && tdIndexOf.has(toDate)) return tdIndexOf.get(toDate) - tdIndexOf.get(fromDate);
+        return Math.floor((new Date(toDate) - new Date(fromDate)) / 864e5);
+      }
+
       const wlSnap = await getDocs(collection(db, 'watchlist'));
       const rawItems = wlSnap.docs.map(d => d.data());
 
@@ -1444,8 +1479,8 @@
         (item.episodeHistory || []).forEach(ep => {
           items.push({ ticker: item.ticker, companyName: item.companyName, ...ep, isFinal: true });
         });
-        const daysSinceCurrent = item.addedDate
-          ? Math.floor((Date.now() - new Date(item.addedDate).getTime()) / 864e5)
+        const daysSinceCurrent = item.addedDate && tdLatest
+          ? tdElapsed(item.addedDate, tdLatest)
           : 0;
         items.push({
           ticker: item.ticker, companyName: item.companyName,
@@ -1464,10 +1499,10 @@
         const peakClose = item.peakClose ?? null;
         const lowestClose = item.lowestClose ?? null;
         const daysToPeak = (item.peakDate && item.addedDate)
-          ? Math.round((new Date(item.peakDate) - new Date(item.addedDate)) / 864e5)
+          ? tdElapsed(item.addedDate, item.peakDate)
           : null;
-        const daysSinceAdded = item.addedDate
-          ? Math.floor((Date.now() - new Date(item.addedDate).getTime()) / 864e5)
+        const daysSinceAdded = item.addedDate && tdLatest
+          ? tdElapsed(item.addedDate, tdLatest)
           : null;
         const maxGainPct = (baseClose && peakClose) ? ((peakClose - baseClose) / baseClose) * 100 : null;
         const maxDrawdownPct = (baseClose && lowestClose) ? ((lowestClose - baseClose) / baseClose) * 100 : null;
