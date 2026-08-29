@@ -1554,6 +1554,7 @@
       updateProgressResync(0, wlDocs.length, 'Mengambil histori Yahoo Finance');
       let done = 0;
       const changes = [];
+      const failedTickers = [];
 
       const { errorCount, firstError } = await runWithConcurrency(wlDocs, 2, async (wlDoc) => {
         const data = wlDoc.data();
@@ -1578,6 +1579,7 @@
         }catch(e){
           done++;
           updateProgressResync(done, wlDocs.length, 'Mengambil histori Yahoo Finance');
+          failedTickers.push({ ticker, reason: e.message });
           throw e;
         }
 
@@ -1616,7 +1618,7 @@
 
       let html = '';
       if(errorCount > 0){
-        html += `<div class="msg-box warning">⚠ ${errorCount} saham gagal diproses (dilewati). Contoh error: ${firstError ? firstError.message : '-'}</div>`;
+        html += `<div class="msg-box warning">⚠ ${errorCount} saham gagal diproses (masih pakai Fase lama, boleh klik tombol lagi buat coba ulang khusus yang gagal): <b>${failedTickers.map(f=>f.ticker).join(', ')}</b></div>`;
       }
       if(changes.length){
         html += `<div class="msg-box success">✓ ${changes.length} dari ${wlDocs.length} entry Watchlist Fase-nya berubah setelah di-resync.</div>`;
