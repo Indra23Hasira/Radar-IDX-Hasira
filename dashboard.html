@@ -421,6 +421,31 @@
   const WATCHLIST_MONITORING_DAYS = 5; // sama dengan yang dipakai di halaman Import (Step 4)
   let currentTab = 'radar';
 
+  // ============================================================
+  // Index tanggal bursa AKTUAL — dipakai untuk hitung "N hari" berdasarkan
+  // hari BURSA (otomatis melompati Sabtu/Minggu/libur bursa), bukan hari
+  // kalender. Sebelumnya semua hitungan "sudah berapa hari" di file ini
+  // pakai Date.now()-addedDate mentah (864e5), yang salah hitung kalau window-nya
+  // melewati akhir pekan/libur bursa. Di-cache sekali per sesi biar hemat baca.
+  // ============================================================
+  let tradingDatesCache = null;
+  async function getTradingDatesIndex(){
+    if(tradingDatesCache) return tradingDatesCache;
+    const { collection, getDocs } = firestoreFns;
+    const snap = await getDocs(collection(db, 'dailySummary'));
+    const dates = snap.docs.map(d => d.id).sort(); // ascending
+    const indexOf = new Map(dates.map((d,i) => [d, i]));
+    const latestDate = dates[dates.length - 1] || new Date().toISOString().slice(0,10);
+    tradingDatesCache = { dates, indexOf, latestDate };
+    return tradingDatesCache;
+  }
+  function tradingDaysElapsed(fromDate, toDate, indexOf){
+    if(indexOf.has(fromDate) && indexOf.has(toDate)){
+      return indexOf.get(toDate) - indexOf.get(fromDate);
+    }
+    return Math.floor((new Date(toDate) - new Date(fromDate)) / 864e5); // fallback kalender
+  }
+
   document.getElementById('sortMatchBtn').addEventListener('click', () => {
     sortMode = 'match';
     document.getElementById('sortMatchBtn').classList.add('active');
@@ -523,14 +548,15 @@
     try{
       // 0. ambil daftar ticker yang sudah di watchlist (buat status tombol di tiap kartu)
       //    sekalian ambil addedDate-nya buat hitung "sudah berapa hari sejak pertama terdeteksi"
-      //    HANYA yang masih dalam window aktif 5 hari — yang sudah lewat dianggap
+      //    HANYA yang masih dalam window aktif 5 HARI BURSA — yang sudah lewat dianggap
       //    "selesai dipantau", jadi tombolnya kembali ke "☆ Watchlist" (bisa dipantau ulang
       //    sebagai kejadian baru kalau muncul lagi)
+      const { indexOf: tdIndexOf, latestDate: tdLatest } = await getTradingDatesIndex();
       const wlSnap = await getDocs(collection(db, 'watchlist'));
       const activeWlDocs = wlSnap.docs.filter(d => {
         const added = d.data().addedDate;
         if(!added) return false;
-        const daysSince = Math.floor((Date.now() - new Date(added).getTime()) / 864e5);
+        const daysSince = tradingDaysElapsed(added, tdLatest, tdIndexOf);
         return daysSince <= WATCHLIST_MONITORING_DAYS;
       });
       watchlistTickers = new Set(activeWlDocs.map(d => d.id));
@@ -786,12 +812,12 @@
         return;
       }
 
-      // pisahkan AKTIF (masih dalam window 5 hari) vs ARSIP (sudah selesai dipantau,
+      // pisahkan AKTIF (masih dalam window 5 HARI BURSA) vs ARSIP (sudah selesai dipantau,
       // datanya sudah dibekukan) — supaya tampilan utama tetap rapi & fokus
-      const todayForSplit = new Date();
+      const { indexOf: tdIndexOf2, latestDate: tdLatest2 } = await getTradingDatesIndex();
       const activeItems = [], archivedItems = [];
       allItems.forEach(item => {
-        const daysSince = item.addedDate ? Math.floor((todayForSplit - new Date(item.addedDate)) / 864e5) : 0;
+        const daysSince = item.addedDate ? tradingDaysElapsed(item.addedDate, tdLatest2, tdIndexOf2) : 0;
         if(daysSince <= WATCHLIST_MONITORING_DAYS) activeItems.push(item);
         else archivedItems.push(item);
       });
@@ -870,7 +896,9 @@
       ? Math.round(((cur.liquidityScore??0)*33 + (cur.foreignScore??0)*40 + ((cur.technicalScore??cur.ind?.technicalScore)??0)*27) / 100)
       : null;
     const scoreDiff = (s.score!=null && curScore!=null) ? curScore - s.score : null;
-    const daysHeld = Math.floor((Date.now() - new Date(item.addedAt).getTime()) / 864e5);
+    const daysHeld = tradingDatesCache
+      ? tradingDaysElapsed(item.addedDate, tradingDatesCache.latestDate, tradingDatesCache.indexOf)
+      : Math.floor((Date.now() - new Date(item.addedDate).getTime()) / 864e5); // fallback kalau cache belum sempat terisi
     const curPhase = computeSignalPhase(cur);
 
     return `<div class="stock-card">
@@ -945,8 +973,9 @@
     const peakPct = (item.peakClose != null && s.close) ? ((item.peakClose - s.close) / s.close) * 100 : null;
     const lowPct = (item.lowestClose != null && s.close) ? ((item.lowestClose - s.close) / s.close) * 100 : null;
     const isWin = peakPct != null ? peakPct > 0 : null;
-    const daysToPeak = (item.peakDate && item.addedDate)
-      ? Math.round((new Date(item.peakDate) - new Date(item.addedDate)) / 864e5) : null;
+    const daysToPeak = (item.peakDate && item.addedDate && tradingDatesCache)
+      ? tradingDaysElapsed(item.addedDate, item.peakDate, tradingDatesCache.indexOf)
+      : (item.peakDate && item.addedDate ? Math.round((new Date(item.peakDate) - new Date(item.addedDate)) / 864e5) : null);
     const episodeCount = (item.episodeHistory || []).length;
 
     return `<div class="stock-card" style="opacity:0.85;">
@@ -1007,19 +1036,20 @@
     const { collection, getDocs, query, orderBy } = firestoreFns;
 
     try{
+      const { indexOf: tdIndexOf3, latestDate: tdLatest3 } = await getTradingDatesIndex();
       const wlSnap = await getDocs(collection(db, 'watchlist'));
       const rawItems = wlSnap.docs.map(d => d.data());
 
       // ratakan tiap dokumen jadi beberapa "episode" — episode arsip (kejadian lama,
-      // sudah lewat window 5 hari, SELALU final) + episode aktif sekarang (final
-      // cuma kalau sudah lewat 5 hari, kalau belum berarti masih berjalan)
+      // sudah lewat window 5 HARI BURSA, SELALU final) + episode aktif sekarang (final
+      // cuma kalau sudah lewat 5 hari bursa, kalau belum berarti masih berjalan)
       const items = [];
       rawItems.forEach(item => {
         (item.episodeHistory || []).forEach(ep => {
           items.push({ ticker: item.ticker, companyName: item.companyName, ...ep, isFinal: true });
         });
         const daysSinceCurrent = item.addedDate
-          ? Math.floor((Date.now() - new Date(item.addedDate).getTime()) / 864e5)
+          ? tradingDaysElapsed(item.addedDate, tdLatest3, tdIndexOf3)
           : 0;
         items.push({
           ticker: item.ticker, companyName: item.companyName,
@@ -1047,10 +1077,10 @@
         const lowestClose = item.lowestClose ?? null;
 
         const daysToPeak = (item.peakDate && item.addedDate)
-          ? Math.round((new Date(item.peakDate) - new Date(item.addedDate)) / 864e5)
+          ? tradingDaysElapsed(item.addedDate, item.peakDate, tdIndexOf3)
           : null;
         const daysSinceAdded = item.addedDate
-          ? Math.floor((Date.now() - new Date(item.addedDate).getTime()) / 864e5)
+          ? tradingDaysElapsed(item.addedDate, tdLatest3, tdIndexOf3)
           : null;
         const maxGainPct = (baseClose && peakClose) ? ((peakClose - baseClose) / baseClose) * 100 : null;
         const maxDrawdownPct = (baseClose && lowestClose) ? ((lowestClose - baseClose) / baseClose) * 100 : null;
@@ -1223,7 +1253,9 @@
 
       const addedDateStr = watchlistAddedDates.get(r.ticker);
       const daysSinceFirst = addedDateStr
-        ? Math.floor((Date.now() - new Date(addedDateStr).getTime()) / 864e5)
+        ? (tradingDatesCache
+            ? tradingDaysElapsed(addedDateStr, tradingDatesCache.latestDate, tradingDatesCache.indexOf)
+            : Math.floor((Date.now() - new Date(addedDateStr).getTime()) / 864e5)) // fallback kalau cache belum sempat terisi
         : null;
 
       const rsiExtreme = rsi != null && rsi > 80;
