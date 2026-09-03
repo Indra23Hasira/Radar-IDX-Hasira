@@ -1966,48 +1966,96 @@
 
   function sleep(ms){ return new Promise(resolve => setTimeout(resolve, ms)); }
 
-  async function fetchYahooHistoryOnce(ticker){
-    const symbol = ticker + '.JK';
-    const yahooUrl = `https://query1.finance.yahoo.com/v8/finance/chart/${symbol}?interval=1d&range=6mo`;
-    const proxies = [
-      `https://api.allorigins.win/raw?url=${encodeURIComponent(yahooUrl)}`,
-      `https://corsproxy.io/?${encodeURIComponent(yahooUrl)}`,
+  // ============================================================
+  // MULTI-PROXY FALLBACK — 5 lapis, dicoba berurutan sampai berhasil.
+  // Ditambahkan setelah ada temuan dari sesi lain: r.jina.ai ternyata proxy
+  // yang jauh lebih stabil & benar-benar support CORS dari browser (bukan
+  // cuma dari server). Dijadikan proxy utama, sisanya cadangan berlapis biar
+  // peluang gagal total makin kecil. Tiap proxy dikasih timeout 10 detik
+  // (AbortController) supaya kalau salah satu nge-hang, tidak nyangkut lama
+  // — langsung dianggap gagal dan lanjut ke proxy berikutnya.
+  // ============================================================
+  function buildProxyList(targetUrl){
+    return [
+      { name: 'r.jina.ai', url: `https://r.jina.ai/${targetUrl}`, mode: 'raw' },
+      { name: 'allorigins.win/raw', url: `https://api.allorigins.win/raw?url=${encodeURIComponent(targetUrl)}`, mode: 'raw' },
+      { name: 'codetabs.com', url: `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(targetUrl)}`, mode: 'raw' },
+      { name: 'corsproxy.io', url: `https://corsproxy.io/?${encodeURIComponent(targetUrl)}`, mode: 'raw' },
+      { name: 'allorigins.win/get', url: `https://api.allorigins.win/get?url=${encodeURIComponent(targetUrl)}`, mode: 'wrapped' }, // {contents: "..."}
     ];
+  }
+
+  async function fetchViaProxyChain(targetUrl, timeoutMs){
+    const proxies = buildProxyList(targetUrl);
     let lastErr = null;
-    for(const proxyUrl of proxies){
+    for(const proxy of proxies){
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), timeoutMs);
       try{
-        const res = await fetch(proxyUrl);
-        if(!res.ok) throw new Error('HTTP ' + res.status);
-        const json = await res.json();
-        const result = json?.chart?.result?.[0];
-        const yErr = json?.chart?.error;
-        if(yErr) throw new Error(yErr.description || 'Yahoo Finance error');
-        if(!result) throw new Error('Data kosong dari Yahoo (ticker mungkin tidak terdaftar)');
-        const timestamps = result.timestamp || [];
-        const quote = result.indicators?.quote?.[0] || {};
-        const closesRaw = quote.close || [], highsRaw = quote.high || [];
-        const lowsRaw = quote.low || [], volumesRaw = quote.volume || [];
-        const opensRaw = quote.open || [];
-        const closes = [], highs = [], lows = [], volumes = [], opens = [], dates = [];
-        for(let i = 0; i < timestamps.length; i++){
-          if(closesRaw[i] != null && highsRaw[i] != null && lowsRaw[i] != null && opensRaw[i] != null){
-            closes.push(closesRaw[i]);
-            highs.push(highsRaw[i]);
-            lows.push(lowsRaw[i]);
-            volumes.push(volumesRaw[i] ?? 0);
-            opens.push(opensRaw[i]);
-            dates.push(new Date(timestamps[i] * 1000).toISOString().slice(0,10));
-          }
+        const res = await fetch(proxy.url, { signal: controller.signal });
+        clearTimeout(timer);
+        if(!res.ok){
+          if(res.status === 429) throw new Error(`${proxy.name}: kena rate limit (429)`);
+          throw new Error(`${proxy.name}: HTTP ${res.status}`);
         }
-        if(!closes.length) throw new Error('Tidak ada data harga valid dari Yahoo');
-        const lastDate = dates.length ? dates[dates.length - 1] : null;
-        return { closes, highs, lows, volumes, opens, dates, lastDate };
+        let text = await res.text();
+        if(proxy.mode === 'wrapped'){
+          const wrapper = JSON.parse(text);
+          text = wrapper.contents;
+        }
+        const json = JSON.parse(text); // kalau r.jina.ai ternyata gak passthrough JSON mentah, ini akan throw dan otomatis lanjut ke proxy berikutnya
+        return json;
       }catch(err){
-        lastErr = err;
+        clearTimeout(timer);
+        if(err.name === 'AbortError'){
+          lastErr = new Error(`${proxy.name}: timeout (>${timeoutMs/1000} detik)`);
+        } else {
+          lastErr = err.message?.includes(':') ? err : new Error(`${proxy.name}: ${err.message}`);
+        }
         continue; // coba proxy berikutnya
       }
     }
     throw lastErr || new Error('Semua proxy gagal diakses');
+  }
+
+  async function fetchYahooHistoryOnce(ticker){
+    const symbol = ticker + '.JK';
+    const yahooUrl = `https://query1.finance.yahoo.com/v8/finance/chart/${symbol}?interval=1d&range=6mo`;
+    try{
+      const json = await fetchViaProxyChain(yahooUrl, 10000);
+      const result = json?.chart?.result?.[0];
+      const yErr = json?.chart?.error;
+      if(yErr) throw new Error(yErr.description || 'Yahoo Finance error');
+      if(!result) throw new Error('Data kosong dari Yahoo (ticker mungkin tidak terdaftar)');
+      const timestamps = result.timestamp || [];
+      const quote = result.indicators?.quote?.[0] || {};
+      const closesRaw = quote.close || [], highsRaw = quote.high || [];
+      const lowsRaw = quote.low || [], volumesRaw = quote.volume || [];
+      const opensRaw = quote.open || [];
+      const closes = [], highs = [], lows = [], volumes = [], opens = [], dates = [];
+      for(let i = 0; i < timestamps.length; i++){
+        if(closesRaw[i] != null && highsRaw[i] != null && lowsRaw[i] != null && opensRaw[i] != null){
+          closes.push(closesRaw[i]);
+          highs.push(highsRaw[i]);
+          lows.push(lowsRaw[i]);
+          volumes.push(volumesRaw[i] ?? 0);
+          opens.push(opensRaw[i]);
+          dates.push(new Date(timestamps[i] * 1000).toISOString().slice(0,10));
+        }
+      }
+      if(!closes.length) throw new Error('Tidak ada data harga valid dari Yahoo');
+      const lastDate = dates.length ? dates[dates.length - 1] : null;
+      return { closes, highs, lows, volumes, opens, dates, lastDate };
+    }catch(err){
+      // Klasifikasi pesan biar lebih actionable, bukan cuma "gagal"
+      if(/rate limit|429/i.test(err.message)){
+        throw new Error(`Kena rate limit di semua proxy — coba lagi beberapa menit lagi. (${err.message})`);
+      }
+      if(/timeout/i.test(err.message)){
+        throw new Error(`Semua proxy timeout — kemungkinan jaringan lambat atau ada ekstensi browser yang memblokir. (${err.message})`);
+      }
+      throw err;
+    }
   }
 
   // Retry sekali dengan jeda ~2 detik kalau kedua proxy gagal di percobaan
@@ -2315,6 +2363,8 @@
       //     TIDAK menyentuh matchCount/kategori/skor — murni update label Fase display
       //     supaya konsisten dengan computeSignalPhase yang sama dipakai Dashboard.
       let phaseSynced = 0;
+      const phaseSkipped = []; // {ticker, reason} — buat diagnosa kalau ada yang gak ke-sync
+      const phaseSyncDetail = []; // {ticker, oldPhase, newPhase} — buat lihat persis apa yang berubah
       try{
         if(officialLatestDate){
           const rsByTicker = new Map(candidates.map(c => [c.ticker, c]));
@@ -2323,11 +2373,23 @@
           const wlSnap = await getDocs(wlQ);
           const wlDocsToday = wlSnap.docs;
           if(wlDocsToday.length){
-            const syncRes = await runWithConcurrency(wlDocsToday, 15, async (wlDoc) => {
+            await runWithConcurrency(wlDocsToday, 15, async (wlDoc) => {
               const ticker = wlDoc.id;
               const rs = rsByTicker.get(ticker);
               const ind = computedByTicker.get(ticker);
-              if(!rs || !ind) return; // ticker ini tidak diproses di run Tahap 5 ini, lewati
+              if(!rs && !ind){
+                phaseSkipped.push({ ticker, reason: 'tidak ada di kandidat maupun hasil Yahoo run ini (kemungkinan matchCount di bawah threshold Tahap 5, atau belum sempat diproses)' });
+                return;
+              }
+              if(!rs){
+                phaseSkipped.push({ ticker, reason: 'tidak ketemu di tickerRollingStats (candidates) run ini' });
+                return;
+              }
+              if(!ind){
+                phaseSkipped.push({ ticker, reason: 'Yahoo Finance gagal/gak sempat diproses run ini (kemungkinan HTTP 403) — coba klik Tahap 5 lagi' });
+                return;
+              }
+              const oldPhase = (wlDoc.data().snapshot?.phase) || [];
               const r = {
                 categories: rs.categories || {},
                 foreignNet3d: rs.foreignNet3d ?? null,
@@ -2338,10 +2400,12 @@
                 price: { close: ind.close },
               };
               const phaseTags = computeSignalPhase(r, 0); // baru ditambahkan hari ini = 0 hari sejak pertama
+              const newPhase = phaseTags.map(p => p.label);
               await setDoc(doc(db, 'watchlist', ticker), {
-                'snapshot.phase': phaseTags.map(p => p.label),
+                'snapshot.phase': newPhase,
               }, { merge: true });
               phaseSynced++;
+              phaseSyncDetail.push({ ticker, oldPhase, newPhase, rsi14: ind.rsi14, ema20: ind.ema20, close: ind.close, categories: r.categories });
             });
           }
         }
@@ -2350,7 +2414,10 @@
         warnings.push(`⚠ Gagal sinkronkan ulang Fase Watchlist (tidak fatal, snapshot lama tetap dipakai): ${syncErr.message}`);
       }
       if(phaseSynced > 0){
-        warnings.push(`🔄 Fase snapshot Watchlist untuk ${phaseSynced} saham yang baru ditambahkan hari ini sudah disinkronkan ulang pakai RSI/EMA terbaru (sebelumnya cuma pakai kombinasi kategori saat auto-add).`);
+        warnings.push(`🔄 Fase snapshot Watchlist untuk ${phaseSynced} saham yang baru ditambahkan hari ini sudah dicoba disinkronkan. Detail lengkap di bawah tabel.`);
+      }
+      if(phaseSkipped.length > 0){
+        warnings.push(`⚠ ${phaseSkipped.length} entry Watchlist hari ini TIDAK ke-sync: ${phaseSkipped.map(s=>`${s.ticker} (${s.reason})`).join('; ')}`);
       }
 
       // 4d. simpan snapshot statistik harian (breakdown performa per Fase) —
@@ -2406,6 +2473,33 @@
           </tr>`;
         });
         html += `</tbody></table></div>`;
+      }
+
+      // Tabel detail hasil sync Fase Watchlist — biar keliatan persis RSI/EMA
+      // yang dipakai per ticker, dan kenapa Fase-nya jadi begitu (transparansi
+      // debug, sekaligus buat cross-check manual kalau ada yang kelihatan aneh)
+      if(phaseSyncDetail.length){
+        html += `<div class="table-section-title">🔄 Detail Sinkronisasi Fase Watchlist</div>
+          <div class="preview-table-wrap"><table><thead><tr>
+            <th>Ticker</th><th>Fase Lama</th><th>Fase Baru</th><th>RSI14</th><th>Close</th><th>EMA20</th><th>% di atas EMA20</th>
+          </tr></thead><tbody>`;
+        phaseSyncDetail.forEach(d => {
+          const pct = (d.ema20 && d.close) ? (((d.close - d.ema20) / d.ema20) * 100).toFixed(1) + '%' : '-';
+          const changed = JSON.stringify(d.oldPhase) !== JSON.stringify(d.newPhase);
+          html += `<tr style="${changed ? 'background:rgba(212,168,87,0.06);' : ''}">
+            <td>${d.ticker}</td>
+            <td style="font-size:11px;">${d.oldPhase.length ? d.oldPhase.join(', ') : '<i>(kosong)</i>'}</td>
+            <td style="font-size:11px;">${d.newPhase.length ? d.newPhase.join(', ') : '<i>(kosong)</i>'}</td>
+            <td>${d.rsi14!=null ? d.rsi14.toFixed(1) : '-'}</td>
+            <td>${d.close!=null ? d.close.toLocaleString('id-ID') : '-'}</td>
+            <td>${d.ema20!=null ? d.ema20.toLocaleString('id-ID',{maximumFractionDigits:0}) : '-'}</td>
+            <td>${pct}</td>
+          </tr>`;
+        });
+        html += `</tbody></table></div>`;
+      }
+      if(phaseSkipped.length){
+        html += `<div class="msg-box warning">⚠ Entry Watchlist hari ini yang TIDAK ke-sync: <b>${phaseSkipped.map(s=>s.ticker).join(', ')}</b> — lihat pesan di atas untuk alasan per ticker.</div>`;
       }
 
       document.getElementById('stepNum5').classList.add('done');
