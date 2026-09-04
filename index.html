@@ -1569,7 +1569,7 @@
 
   async function resyncWatchlistPhases(){
     if(!firebaseReady) return;
-    const { collection, getDocs, doc, setDoc, getDoc } = firestoreFns;
+    const { collection, getDocs, doc, setDoc, getDoc, updateDoc } = firestoreFns;
     const out = document.getElementById('resyncResult');
     out.innerHTML = '';
     document.getElementById('progressWrapResync').style.display = 'block';
@@ -1641,9 +1641,13 @@
 
         const changed = JSON.stringify(oldPhase) !== JSON.stringify(newPhase);
         if(changed){
-          await setDoc(doc(db, 'watchlist', ticker), {
+          // FIX PENTING: setDoc(...,{merge:true}) TIDAK memparse 'snapshot.phase'
+          // sebagai nested path — dia bikin field baru literal bernama "snapshot.phase"
+          // di level atas, field snapshot.phase yang ASLI tidak pernah kesentuh sama
+          // sekali. updateDoc() yang benar-benar memparse dot-notation sebagai nested path.
+          await updateDoc(doc(db, 'watchlist', ticker), {
             'snapshot.phase': newPhase,
-          }, { merge: true });
+          });
           // VERIFIKASI: baca ulang langsung dari Firestore setelah nulis, buat
           // mastiin tulisannya beneran nyangkut (bukan sekadar asumsi berhasil).
           // Kalau verifiedPhase != newPhase, berarti ada yang aneh di level Firestore
@@ -2166,7 +2170,7 @@
 
   async function updateTechnicalIndicators(){
     if(!firebaseReady) return;
-    const { collection, query, orderBy, limit, where, getDocs, doc, getDoc, setDoc } = firestoreFns;
+    const { collection, query, orderBy, limit, where, getDocs, doc, getDoc, setDoc, updateDoc } = firestoreFns;
     const out = document.getElementById('indicatorResult');
     out.innerHTML = '';
     document.getElementById('progressWrap5').style.display = 'block';
@@ -2435,9 +2439,12 @@
               };
               const phaseTags = computeSignalPhase(r, 0); // baru ditambahkan hari ini = 0 hari sejak pertama
               const newPhase = phaseTags.map(p => p.label);
-              await setDoc(doc(db, 'watchlist', ticker), {
+              // FIX SAMA seperti di tool Re-sync — pakai updateDoc(), bukan
+              // setDoc(...,{merge:true}), supaya dot-notation beneran ke-parse
+              // sebagai nested path (snapshot.phase), bukan field literal baru.
+              await updateDoc(doc(db, 'watchlist', ticker), {
                 'snapshot.phase': newPhase,
-              }, { merge: true });
+              });
               // verifikasi baca-ulang langsung — sama seperti di tool Re-sync,
               // biar kalau ada write yang gak nyangkut, ketauan dari sini juga
               let verifiedPhase = null, verifyMatch = null;
