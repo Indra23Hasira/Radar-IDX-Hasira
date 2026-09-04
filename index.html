@@ -1772,17 +1772,23 @@
 
     // volumeBreakout tidak termasuk window 2v3 (dia sudah pakai window terpisah/lebih panjang)
     let volumeBreakout = false;
+    let volumeRatio = null;
     if(days.length >= 2){
       const priorDays = days.slice(1, Math.min(21, days.length));
       const avgVolPrior = priorDays.length ? priorDays.reduce((a,d)=>a+(d.volume||0),0) / priorDays.length : 0;
-      const volumeRatio = avgVolPrior !== 0 ? row.volume / avgVolPrior : 0;
+      volumeRatio = avgVolPrior !== 0 ? row.volume / avgVolPrior : 0;
       const range = (row.high||0) - (row.low||0);
       const closePos = range > 0 ? ((row.close||0) - (row.low||0)) / range : 0.5;
       volumeBreakout = volumeRatio >= 2.0 && row.changePct >= 3 && closePos >= 0.7;
     }
 
     const matchCount = [volumeBreakout, foreignUptrend, bigAccum, bandarAccum].filter(Boolean).length;
-    return { foreignUptrend, bandarAccum, distributionWarning, bigAccum, volumeBreakout, matchCount };
+    return {
+      foreignUptrend, bandarAccum, distributionWarning, bigAccum, volumeBreakout, matchCount,
+      // raw metrics — ditambahkan buat keperluan diagnosa/perbandingan, TIDAK mengubah
+      // formula deteksi apa pun di atas (cuma nge-expose angka yang sudah dihitung)
+      _raw: { foreignRatio, rangePct, avgClosingStrength, foreignNetValue, bigAccumPercentile: pct, volumeRatio },
+    };
   }
 
   function updateProgressBacktestWindow(done, total, label){
@@ -1884,6 +1890,7 @@
       // sebelumnya yang dihitung sebagai sampel — konsisten dengan cara Watchlist beneran
       // auto-add (cuma sekali per episode, bukan tiap hari dia masih match).
       const samplesW2 = [], samplesW3 = [];
+      const recentSignalsW3 = []; // buat perbandingan karakteristik sinyal terakhir vs rata-rata historis
       for(const ticker of eligible){
         const daysDesc = historyMap[ticker]; // [terbaru..lama]
         const tickerDatesAsc = daysDesc.map(d => d.date).sort(); // ascending, semua tanggal yg ada buat ticker ini
@@ -1936,11 +1943,19 @@
             const fwd5Pct = fwd5Row && row.close ? ((fwd5Row.close - row.close)/row.close)*100 : null;
 
             if((fwd2Row || fwd3Row || fwd5Row) && r2 && curMatchW2 !== prevMatchW2){
-              samplesW2.push({ ticker, date: curDate, matchCount: curMatchW2, fwd2Pct, fwd3Pct, fwd5Pct });
+              samplesW2.push({ ticker, date: curDate, matchCount: curMatchW2, fwd2Pct, fwd3Pct, fwd5Pct, raw: r2._raw });
             }
             if((fwd2Row || fwd3Row || fwd5Row) && r3 && curMatchW3 !== prevMatchW3){
-              samplesW3.push({ ticker, date: curDate, matchCount: curMatchW3, fwd2Pct, fwd3Pct, fwd5Pct });
+              samplesW3.push({ ticker, date: curDate, matchCount: curMatchW3, fwd2Pct, fwd3Pct, fwd5Pct, raw: r3._raw });
             }
+          }
+
+          // catat juga karakteristik SETIAP kali matchCount berubah, TANPA syarat
+          // signalable/forward-return — dipakai buat bandingin sinyal 2 hari TERAKHIR
+          // (yang belum tentu punya cukup forward return buat masuk backtest) vs
+          // rata-rata historis. Ini murni observasi, tidak masuk ke tabel backtest.
+          if(r3 && curMatchW3 !== prevMatchW3){
+            recentSignalsW3.push({ ticker, date: curDate, matchCount: curMatchW3, raw: r3._raw });
           }
 
           prevMatchW2 = curMatchW2;
@@ -2012,6 +2027,36 @@
 
       html += renderTable('Window 3 Hari (formula ASLI, dipakai saat ini)', bucketsW3, baseline5W3);
       html += renderTable('Window 2 Hari (formula diadaptasi)', bucketsW2, baseline5W2);
+
+      // ============================================================
+      // PERBANDINGAN: karakteristik sinyal 2 HARI TERAKHIR vs rata-rata
+      // historis bucket ≥3 (Window 3) — buat ngecek apakah sinyal belakangan
+      // ini "lebih lemah" dari rata-rata yang selama ini terbukti di backtest,
+      // atau formula-nya emang persis sama (cuma kondisi market yang beda).
+      // ============================================================
+      function avgRaw(samples, key){
+        const vals = samples.map(s => s.raw?.[key]).filter(v => v != null && isFinite(v));
+        return vals.length ? vals.reduce((a,b)=>a+b,0)/vals.length : null;
+      }
+      const histBucket3plus = samplesW3.filter(s => s.matchCount >= 3);
+      const last2TradingDates = allDates.slice(-2);
+      const recentBucket3plus = recentSignalsW3.filter(s => s.matchCount >= 3 && last2TradingDates.includes(s.date));
+
+      if(recentBucket3plus.length > 0 || histBucket3plus.length > 0){
+        const fmt = (v, digits=1) => v!=null ? v.toFixed(digits) : '-';
+        html += `<div class="table-section-title">🔍 Karakteristik Sinyal ≥3 Kategori: 2 Hari Terakhir vs Rata-rata Historis</div>
+          <div class="msg-box info" style="margin-bottom:12px;">ℹ Membandingkan angka MENTAH di balik formula deteksi (bukan cuma true/false-nya) — kalau angkanya mirip dengan rata-rata historis, berarti formula konsisten dan yang beda kemungkinan besar kondisi market. Kalau jauh beda, berarti sinyal belakangan ini memang "lebih tipis" dari biasanya.</div>
+          <div class="preview-table-wrap"><table><thead><tr>
+            <th>Metrik</th><th>Rata-rata Historis (n=${histBucket3plus.length})</th><th>2 Hari Terakhir (n=${recentBucket3plus.length})</th>
+          </tr></thead><tbody>
+            <tr><td>Foreign Ratio (%)</td><td>${fmt(avgRaw(histBucket3plus,'foreignRatio'))}</td><td>${fmt(avgRaw(recentBucket3plus,'foreignRatio'))}</td></tr>
+            <tr><td>Range Harga 3D (%, makin kecil makin ketat)</td><td>${fmt(avgRaw(histBucket3plus,'rangePct'))}</td><td>${fmt(avgRaw(recentBucket3plus,'rangePct'))}</td></tr>
+            <tr><td>Closing Strength (0-1, makin tinggi makin kuat)</td><td>${fmt(avgRaw(histBucket3plus,'avgClosingStrength'),2)}</td><td>${fmt(avgRaw(recentBucket3plus,'avgClosingStrength'),2)}</td></tr>
+            <tr><td>Volume Ratio (x rata-rata)</td><td>${fmt(avgRaw(histBucket3plus,'volumeRatio'))}</td><td>${fmt(avgRaw(recentBucket3plus,'volumeRatio'))}</td></tr>
+            <tr><td>Persentil Foreign Net (0-100)</td><td>${fmt(avgRaw(histBucket3plus,'bigAccumPercentile'),0)}</td><td>${fmt(avgRaw(recentBucket3plus,'bigAccumPercentile'),0)}</td></tr>
+          </tbody></table></div>
+          <p style="font-size:11px; color:var(--text-muted); margin-top:6px;">Tanggal 2 hari terakhir yang dibandingkan: ${last2TradingDates.join(', ')}. Kalau n di kolom "2 Hari Terakhir" kecil banget (0-2), perbandingan ini juga belum terlalu bisa diandalkan — sama seperti keterbatasan sample di tabel backtest atas.</p>`;
+      }
 
       out.innerHTML = html;
     }catch(err){
