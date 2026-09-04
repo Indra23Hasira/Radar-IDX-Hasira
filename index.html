@@ -1862,46 +1862,46 @@
       eligible.forEach(ticker => historyMap[ticker].forEach(d => allDatesSet.add(d.date)));
       const allDates = Array.from(allDatesSet).sort(); // ascending
 
-      // butuh minimal 14 hari SETELAH tanggal sinyal buat ukur forward return 14 hari
-      const signalableDates = allDates.slice(0, Math.max(0, allDates.length - 14));
+      // butuh minimal 5 HARI BURSA setelah tanggal sinyal buat ukur forward return
+      // sampai hari ke-5 — window ini disamain dengan window pemantauan Watchlist
+      // beneran (5 hari bursa), bukan 7/14 hari kayak konvensi radar BTC/USDT yang
+      // beda konteks (BTC nggak punya window pemantauan tetap 5 hari)
+      const signalableDates = allDates.slice(0, Math.max(0, allDates.length - 5));
 
       if(signalableDates.length < 3){
-        out.innerHTML = `<div class="msg-box warning">⚠ Histori yang tersedia baru ${allDates.length} hari — belum cukup buat backtest yang berarti (butuh minimal ~17-20 hari: 3 buffer awal + 14 forward). Coba lagi setelah histori bertambah.</div>`;
+        out.innerHTML = `<div class="msg-box warning">⚠ Histori yang tersedia baru ${allDates.length} hari — belum cukup buat backtest yang berarti (butuh minimal ~8-10 hari: 3 buffer awal + 5 forward). Coba lagi setelah histori bertambah.</div>`;
         return;
       }
 
       // 4. simulasi per tanggal per ticker, window 2 vs window 3
+      //
+      // PENTING (revisi setelah masukan user): sebelumnya tiap (ticker, tanggal)
+      // dihitung sebagai sampel independen — ini bias, karena 1 saham yang matchCount-nya
+      // bertahan/menurun bertahap selama berhari-hari (misal 3/4 di hari-1, lalu 0/4 di
+      // hari 2-14 karena breakout-nya sudah "terpakai") akan menyumbang BANYAK sampel ke
+      // bucket rendah, padahal itu cuma 1 kejadian harga yang sama, bukan banyak kejadian
+      // independen. Sekarang cuma HARI PERTAMA matchCount berubah dari hari bursa
+      // sebelumnya yang dihitung sebagai sampel — konsisten dengan cara Watchlist beneran
+      // auto-add (cuma sekali per episode, bukan tiap hari dia masih match).
       const samplesW2 = [], samplesW3 = [];
       for(const ticker of eligible){
         const daysDesc = historyMap[ticker]; // [terbaru..lama]
+        const tickerDatesAsc = daysDesc.map(d => d.date).sort(); // ascending, semua tanggal yg ada buat ticker ini
         const byDateIdx = new Map(daysDesc.map((d,i) => [d.date, i]));
 
-        for(const signalDate of signalableDates){
-          const idx = byDateIdx.get(signalDate);
-          if(idx === undefined) continue;
+        let prevMatchW2 = null, prevMatchW3 = null;
+
+        for(const curDate of tickerDatesAsc){
+          const idx = byDateIdx.get(curDate);
           const row = daysDesc[idx];
-          const daysFromHere = daysDesc.slice(idx); // [signalDate, ...mundur]
-          if(daysFromHere.length < 3) continue;
+          const daysFromHere = daysDesc.slice(idx); // [curDate, ...mundur]
+          if(daysFromHere.length < 3){ continue; } // histori belum cukup, skip (prevMatch tetap null)
 
-          // forward return: cari harga di +7 dan +14 hari KALENDER dagang dari signalDate
-          // (pakai urutan tanggal unik gabungan, karena tidak semua ticker trading tiap hari)
-          const dateIdxGlobal = allDates.indexOf(signalDate);
-          const fwd7Date = allDates[dateIdxGlobal + 7];
-          const fwd14Date = allDates[dateIdxGlobal + 14];
-          const fwd7Row = fwd7Date ? daysDesc.find(d => d.date === fwd7Date) : null;
-          const fwd14Row = fwd14Date ? daysDesc.find(d => d.date === fwd14Date) : null;
-          if(!fwd7Row && !fwd14Row) continue; // tidak ada data forward return sama sekali, lewati
-
-          const fwd7Pct = fwd7Row && row.close ? ((fwd7Row.close - row.close)/row.close)*100 : null;
-          const fwd14Pct = fwd14Row && row.close ? ((fwd14Row.close - row.close)/row.close)*100 : null;
-
-          // net value list buat percentile bigAccum — dari SEMUA ticker eligible di tanggal yg sama
-          // (dihitung sekali per (ticker,date) jadi agak berat; disederhanakan pakai window ticker itu sendiri
-          // digabung across ticker lain yg juga py data di tanggal sama, dibatasi supaya tidak meledak)
+          // net value list buat percentile bigAccum
           const sameDayNets2 = [], sameDayNets3 = [];
           for(const t2 of eligible){
             const d2 = historyMap[t2];
-            const i2 = d2.findIndex(x => x.date === signalDate);
+            const i2 = d2.findIndex(x => x.date === curDate);
             if(i2 === -1) continue;
             const w2days = d2.slice(i2, i2+2);
             const w3days = d2.slice(i2, i2+3);
@@ -1917,9 +1917,34 @@
 
           const r2 = detectCategoriesForWindow(daysFromHere, 2, row, sameDayNets2);
           const r3 = detectCategoriesForWindow(daysFromHere, 3, row, sameDayNets3);
+          const curMatchW2 = r2 ? r2.matchCount : null;
+          const curMatchW3 = r3 ? r3.matchCount : null;
 
-          if(r2) samplesW2.push({ ticker, date: signalDate, matchCount: r2.matchCount, fwd7Pct, fwd14Pct });
-          if(r3) samplesW3.push({ ticker, date: signalDate, matchCount: r3.matchCount, fwd7Pct, fwd14Pct });
+          // cuma catat sampel kalau tanggalnya termasuk yg bisa diukur forward return,
+          // DAN matchCount hari ini beda dari hari bursa sebelumnya (episode baru/berubah)
+          const isSignalable = signalableDates.includes(curDate);
+          if(isSignalable){
+            const dateIdxGlobal = allDates.indexOf(curDate);
+            const fwd2Date = allDates[dateIdxGlobal + 2];
+            const fwd3Date = allDates[dateIdxGlobal + 3];
+            const fwd5Date = allDates[dateIdxGlobal + 5];
+            const fwd2Row = fwd2Date ? daysDesc.find(d => d.date === fwd2Date) : null;
+            const fwd3Row = fwd3Date ? daysDesc.find(d => d.date === fwd3Date) : null;
+            const fwd5Row = fwd5Date ? daysDesc.find(d => d.date === fwd5Date) : null;
+            const fwd2Pct = fwd2Row && row.close ? ((fwd2Row.close - row.close)/row.close)*100 : null;
+            const fwd3Pct = fwd3Row && row.close ? ((fwd3Row.close - row.close)/row.close)*100 : null;
+            const fwd5Pct = fwd5Row && row.close ? ((fwd5Row.close - row.close)/row.close)*100 : null;
+
+            if((fwd2Row || fwd3Row || fwd5Row) && r2 && curMatchW2 !== prevMatchW2){
+              samplesW2.push({ ticker, date: curDate, matchCount: curMatchW2, fwd2Pct, fwd3Pct, fwd5Pct });
+            }
+            if((fwd2Row || fwd3Row || fwd5Row) && r3 && curMatchW3 !== prevMatchW3){
+              samplesW3.push({ ticker, date: curDate, matchCount: curMatchW3, fwd2Pct, fwd3Pct, fwd5Pct });
+            }
+          }
+
+          prevMatchW2 = curMatchW2;
+          prevMatchW3 = curMatchW3;
         }
       }
 
@@ -1932,55 +1957,61 @@
           buckets[key].push(s);
         });
         return Object.entries(buckets).map(([key, group]) => {
-          const g7 = group.filter(g => g.fwd7Pct != null);
-          const g14 = group.filter(g => g.fwd14Pct != null);
-          const win7 = g7.filter(g => g.fwd7Pct > 0).length;
-          const win14 = g14.filter(g => g.fwd14Pct > 0).length;
+          const g2 = group.filter(g => g.fwd2Pct != null);
+          const g3 = group.filter(g => g.fwd3Pct != null);
+          const g5 = group.filter(g => g.fwd5Pct != null);
+          const win2 = g2.filter(g => g.fwd2Pct > 0).length;
+          const win3 = g3.filter(g => g.fwd3Pct > 0).length;
+          const win5 = g5.filter(g => g.fwd5Pct > 0).length;
           return {
             bucket: key, n: group.length,
-            avgFwd7: g7.length ? g7.reduce((a,g)=>a+g.fwd7Pct,0)/g7.length : null,
-            winRate7: g7.length ? Math.round((win7/g7.length)*100) : null,
-            avgFwd14: g14.length ? g14.reduce((a,g)=>a+g.fwd14Pct,0)/g14.length : null,
-            winRate14: g14.length ? Math.round((win14/g14.length)*100) : null,
+            avgFwd2: g2.length ? g2.reduce((a,g)=>a+g.fwd2Pct,0)/g2.length : null,
+            winRate2: g2.length ? Math.round((win2/g2.length)*100) : null,
+            avgFwd3: g3.length ? g3.reduce((a,g)=>a+g.fwd3Pct,0)/g3.length : null,
+            winRate3: g3.length ? Math.round((win3/g3.length)*100) : null,
+            avgFwd5: g5.length ? g5.reduce((a,g)=>a+g.fwd5Pct,0)/g5.length : null,
+            winRate5: g5.length ? Math.round((win5/g5.length)*100) : null,
           };
         }).sort((a,b) => (b.bucket === '≥3' ? 99 : parseInt(b.bucket)) - (a.bucket === '≥3' ? 99 : parseInt(a.bucket)));
       }
 
       const bucketsW2 = bucketize(samplesW2);
       const bucketsW3 = bucketize(samplesW3);
-      const allFwd7W2 = samplesW2.filter(s=>s.fwd7Pct!=null).map(s=>s.fwd7Pct);
-      const allFwd7W3 = samplesW3.filter(s=>s.fwd7Pct!=null).map(s=>s.fwd7Pct);
-      const baseline7W2 = allFwd7W2.length ? allFwd7W2.reduce((a,b)=>a+b,0)/allFwd7W2.length : null;
-      const baseline7W3 = allFwd7W3.length ? allFwd7W3.reduce((a,b)=>a+b,0)/allFwd7W3.length : null;
+      const allFwd5W2 = samplesW2.filter(s=>s.fwd5Pct!=null).map(s=>s.fwd5Pct);
+      const allFwd5W3 = samplesW3.filter(s=>s.fwd5Pct!=null).map(s=>s.fwd5Pct);
+      const baseline5W2 = allFwd5W2.length ? allFwd5W2.reduce((a,b)=>a+b,0)/allFwd5W2.length : null;
+      const baseline5W3 = allFwd5W3.length ? allFwd5W3.reduce((a,b)=>a+b,0)/allFwd5W3.length : null;
 
-      function renderTable(title, buckets, baseline7){
+      function renderTable(title, buckets, baseline5){
         let html = `<div class="table-section-title" style="margin-top:0;">${title}</div>
           <div class="preview-table-wrap"><table><thead><tr>
-            <th>Bucket Match</th><th>n</th><th>Avg Fwd7</th><th>Win Rate 7</th><th>Avg Fwd14</th><th>Win Rate 14</th>
+            <th>Bucket Match</th><th>n</th><th>Avg Fwd2</th><th>Win 2</th><th>Avg Fwd3</th><th>Win 3</th><th>Avg Fwd5</th><th>Win 5</th>
           </tr></thead><tbody>`;
         buckets.forEach(b => {
           html += `<tr>
             <td>${b.bucket}</td><td>${b.n}</td>
-            <td class="${b.avgFwd7>=0?'pos':'neg'}">${b.avgFwd7!=null ? (b.avgFwd7>=0?'+':'')+b.avgFwd7.toFixed(2)+'%' : '-'}</td>
-            <td>${b.winRate7!=null ? b.winRate7+'%' : '-'}</td>
-            <td class="${b.avgFwd14>=0?'pos':'neg'}">${b.avgFwd14!=null ? (b.avgFwd14>=0?'+':'')+b.avgFwd14.toFixed(2)+'%' : '-'}</td>
-            <td>${b.winRate14!=null ? b.winRate14+'%' : '-'}</td>
+            <td class="${b.avgFwd2>=0?'pos':'neg'}">${b.avgFwd2!=null ? (b.avgFwd2>=0?'+':'')+b.avgFwd2.toFixed(2)+'%' : '-'}</td>
+            <td>${b.winRate2!=null ? b.winRate2+'%' : '-'}</td>
+            <td class="${b.avgFwd3>=0?'pos':'neg'}">${b.avgFwd3!=null ? (b.avgFwd3>=0?'+':'')+b.avgFwd3.toFixed(2)+'%' : '-'}</td>
+            <td>${b.winRate3!=null ? b.winRate3+'%' : '-'}</td>
+            <td class="${b.avgFwd5>=0?'pos':'neg'}">${b.avgFwd5!=null ? (b.avgFwd5>=0?'+':'')+b.avgFwd5.toFixed(2)+'%' : '-'}</td>
+            <td>${b.winRate5!=null ? b.winRate5+'%' : '-'}</td>
           </tr>`;
         });
         html += `</tbody></table></div>
-          <p style="font-size:12px; color:var(--text-dim); margin-top:6px;">Baseline (avg fwd7 tanpa filter sinyal apapun): ${baseline7!=null ? (baseline7>=0?'+':'')+baseline7.toFixed(2)+'%' : '-'}</p>`;
+          <p style="font-size:12px; color:var(--text-dim); margin-top:6px;">Baseline (avg fwd5 tanpa filter sinyal apapun): ${baseline5!=null ? (baseline5>=0?'+':'')+baseline5.toFixed(2)+'%' : '-'}</p>`;
         return html;
       }
 
-      let html = `<div class="msg-box info">ℹ Rentang histori terpakai: ${allDates[0]} s/d ${allDates[allDates.length-1]} (${allDates.length} hari unik, ${signalableDates.length} tanggal bisa jadi sinyal karena butuh 14 hari forward). ${eligible.length} ticker lolos filter likuiditas historis.</div>`;
+      let html = `<div class="msg-box info">ℹ Rentang histori terpakai: ${allDates[0]} s/d ${allDates[allDates.length-1]} (${allDates.length} hari unik, ${signalableDates.length} tanggal bisa jadi sinyal karena butuh 5 hari forward — disamakan dengan window pemantauan Watchlist). ${eligible.length} ticker lolos filter likuiditas historis. Sampel = HARI PERTAMA matchCount berubah dari hari sebelumnya (episode baru), bukan tiap hari — supaya 1 saham yang matchCount-nya bertahan lama tidak "numpang beken" jadi banyak sampel palsu.</div>`;
 
       const totalSamples = samplesW2.length + samplesW3.length;
       if(totalSamples < 20){
         html += `<div class="msg-box warning">⚠ <b>Sample sangat kecil (${samplesW2.length} sampel window-2, ${samplesW3.length} sampel window-3)</b> — histori yang tersedia masih terlalu pendek untuk kesimpulan yang bisa diandalkan. Angka di bawah baru indikasi arah kasar, BUKAN dasar keputusan. Jalankan ulang tool ini setelah beberapa minggu lagi untuk hasil yang lebih meyakinkan.</div>`;
       }
 
-      html += renderTable('Window 3 Hari (formula ASLI, dipakai saat ini)', bucketsW3, baseline7W3);
-      html += renderTable('Window 2 Hari (formula diadaptasi)', bucketsW2, baseline7W2);
+      html += renderTable('Window 3 Hari (formula ASLI, dipakai saat ini)', bucketsW3, baseline5W3);
+      html += renderTable('Window 2 Hari (formula diadaptasi)', bucketsW2, baseline5W2);
 
       out.innerHTML = html;
     }catch(err){
