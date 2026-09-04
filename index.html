@@ -1644,7 +1644,7 @@
           await setDoc(doc(db, 'watchlist', ticker), {
             'snapshot.phase': newPhase,
           }, { merge: true });
-          changes.push({ ticker, addedDate, oldPhase, newPhase });
+          changes.push({ ticker, addedDate, oldPhase, newPhase, rsi14, ema20, close, historyLength: closesUpTo.length });
         }
 
         done++;
@@ -1658,14 +1658,22 @@
       if(changes.length){
         html += `<div class="msg-box success">✓ ${changes.length} dari ${wlDocs.length} entry Watchlist Fase-nya berubah setelah di-resync.</div>`;
         html += `<div class="preview-table-wrap"><table><thead><tr>
-          <th>Ticker</th><th>Ditambahkan</th><th>Fase Lama</th><th>Fase Baru</th>
+          <th>Ticker</th><th>Ditambahkan</th><th>Fase Lama</th><th>Fase Baru</th><th>RSI14</th><th>Close dipakai</th><th>EMA20</th><th>% di atas EMA20</th><th>Jml hari histori</th>
         </tr></thead><tbody>`;
         changes.forEach(c => {
+          const pct = (c.ema20 && c.close) ? (((c.close - c.ema20) / c.ema20) * 100).toFixed(1) + '%' : '-';
           html += `<tr><td>${c.ticker}</td><td>${c.addedDate}</td>
-            <td>${c.oldPhase.length ? c.oldPhase.join(', ') : '<i>(kosong)</i>'}</td>
-            <td>${c.newPhase.length ? c.newPhase.join(', ') : '<i>(kosong)</i>'}</td></tr>`;
+            <td style="font-size:11px;">${c.oldPhase.length ? c.oldPhase.join(', ') : '<i>(kosong)</i>'}</td>
+            <td style="font-size:11px;">${c.newPhase.length ? c.newPhase.join(', ') : '<i>(kosong)</i>'}</td>
+            <td>${c.rsi14!=null ? c.rsi14.toFixed(1) : '-'}</td>
+            <td>${c.close!=null ? c.close.toLocaleString('id-ID') : '-'}</td>
+            <td>${c.ema20!=null ? c.ema20.toLocaleString('id-ID',{maximumFractionDigits:0}) : '-'}</td>
+            <td>${pct}</td>
+            <td>${c.historyLength}</td>
+            </tr>`;
         });
-        html += `</tbody></table></div>`;
+        html += `</tbody></table></div>
+        <p style="font-size:11px; color:var(--text-muted); margin-top:6px;">Bandingkan kolom RSI14/EMA20 di atas dengan yang tampil live di tab Radar — kalau beda jauh, kemungkinan histori Yahoo yang ketarik proxy kali ini beda jumlah harinya (lihat kolom "Jml hari histori").</p>`;
       } else {
         html += `<div class="msg-box success">✓ Dicek ${wlDocs.length} entry — semua Fase-nya sudah konsisten, tidak ada yang perlu diubah.</div>`;
       }
@@ -1967,21 +1975,27 @@
   function sleep(ms){ return new Promise(resolve => setTimeout(resolve, ms)); }
 
   // ============================================================
-  // MULTI-PROXY FALLBACK — 5 lapis, dicoba berurutan sampai berhasil.
-  // Ditambahkan setelah ada temuan dari sesi lain: r.jina.ai ternyata proxy
-  // yang jauh lebih stabil & benar-benar support CORS dari browser (bukan
-  // cuma dari server). Dijadikan proxy utama, sisanya cadangan berlapis biar
-  // peluang gagal total makin kecil. Tiap proxy dikasih timeout 10 detik
-  // (AbortController) supaya kalau salah satu nge-hang, tidak nyangkut lama
-  // — langsung dianggap gagal dan lanjut ke proxy berikutnya.
+  // MULTI-PROXY FALLBACK — dicoba berurutan sampai berhasil, tiap proxy
+  // dikasih timeout (AbortController) supaya kalau nge-hang, tidak nyangkut
+  // lama — langsung dianggap gagal dan lanjut ke proxy berikutnya.
+  //
+  // CATATAN (diuji ulang, r.jina.ai TIDAK dipakai di urutan awal): sempat
+  // dicoba r.jina.ai sebagai proxy utama, tapi hasil sebenarnya lebih buruk
+  // (kegagalan naik drastis). Setelah dicek dokumentasi resminya: r.jina.ai
+  // didesain buat convert HTML->markdown (bukan passthrough JSON API mentah,
+  // hasilnya dibungkus {code,status,data:{content}} bukan struktur Yahoo asli),
+  // DAN tanpa API key aksesnya "rate-limited dan mungkin dibatasi buat
+  // beberapa URL" menurut dokumentasi Jina sendiri. Jadi ditaruh paling
+  // belakang sebagai upaya terakhir saja (kadang tetap bisa passthrough
+  // untuk sebagian request), bukan proxy andalan.
   // ============================================================
   function buildProxyList(targetUrl){
     return [
-      { name: 'r.jina.ai', url: `https://r.jina.ai/${targetUrl}`, mode: 'raw' },
       { name: 'allorigins.win/raw', url: `https://api.allorigins.win/raw?url=${encodeURIComponent(targetUrl)}`, mode: 'raw' },
       { name: 'codetabs.com', url: `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(targetUrl)}`, mode: 'raw' },
       { name: 'corsproxy.io', url: `https://corsproxy.io/?${encodeURIComponent(targetUrl)}`, mode: 'raw' },
       { name: 'allorigins.win/get', url: `https://api.allorigins.win/get?url=${encodeURIComponent(targetUrl)}`, mode: 'wrapped' }, // {contents: "..."}
+      { name: 'r.jina.ai', url: `https://r.jina.ai/${targetUrl}`, mode: 'raw' }, // upaya terakhir saja, lihat catatan di atas
     ];
   }
 
@@ -2022,7 +2036,7 @@
     const symbol = ticker + '.JK';
     const yahooUrl = `https://query1.finance.yahoo.com/v8/finance/chart/${symbol}?interval=1d&range=6mo`;
     try{
-      const json = await fetchViaProxyChain(yahooUrl, 10000);
+      const json = await fetchViaProxyChain(yahooUrl, 6000);
       const result = json?.chart?.result?.[0];
       const yErr = json?.chart?.error;
       if(yErr) throw new Error(yErr.description || 'Yahoo Finance error');
@@ -2390,6 +2404,11 @@
                 return;
               }
               const oldPhase = (wlDoc.data().snapshot?.phase) || [];
+              // pakai Close RESMI dari snapshot (bukan ind.close dari Yahoo) — supaya
+              // konsisten dengan tool "Re-sync Fase Watchlist Lama" yang juga pakai
+              // Close resmi. Kalau sumber harga beda antar keduanya, %-di-atas-EMA20
+              // bisa geser dan salah satu bisa nimpa balik hasil yang satunya.
+              const officialClose = wlDoc.data().snapshot?.close ?? ind.close;
               const r = {
                 categories: rs.categories || {},
                 foreignNet3d: rs.foreignNet3d ?? null,
@@ -2397,7 +2416,7 @@
                 reclaimPattern: ind.reclaimPattern,
                 candlePatterns: ind.candlePatterns,
                 ind: { rsi14: ind.rsi14, ema20: ind.ema20 },
-                price: { close: ind.close },
+                price: { close: officialClose },
               };
               const phaseTags = computeSignalPhase(r, 0); // baru ditambahkan hari ini = 0 hari sejak pertama
               const newPhase = phaseTags.map(p => p.label);
@@ -2405,7 +2424,7 @@
                 'snapshot.phase': newPhase,
               }, { merge: true });
               phaseSynced++;
-              phaseSyncDetail.push({ ticker, oldPhase, newPhase, rsi14: ind.rsi14, ema20: ind.ema20, close: ind.close, categories: r.categories });
+              phaseSyncDetail.push({ ticker, oldPhase, newPhase, rsi14: ind.rsi14, ema20: ind.ema20, close: officialClose, categories: r.categories });
             });
           }
         }
