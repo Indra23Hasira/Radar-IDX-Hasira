@@ -1569,7 +1569,7 @@
 
   async function resyncWatchlistPhases(){
     if(!firebaseReady) return;
-    const { collection, getDocs, doc, setDoc } = firestoreFns;
+    const { collection, getDocs, doc, setDoc, getDoc } = firestoreFns;
     const out = document.getElementById('resyncResult');
     out.innerHTML = '';
     document.getElementById('progressWrapResync').style.display = 'block';
@@ -1644,7 +1644,17 @@
           await setDoc(doc(db, 'watchlist', ticker), {
             'snapshot.phase': newPhase,
           }, { merge: true });
-          changes.push({ ticker, addedDate, oldPhase, newPhase, rsi14, ema20, close, historyLength: closesUpTo.length });
+          // VERIFIKASI: baca ulang langsung dari Firestore setelah nulis, buat
+          // mastiin tulisannya beneran nyangkut (bukan sekadar asumsi berhasil).
+          // Kalau verifiedPhase != newPhase, berarti ada yang aneh di level Firestore
+          // (write kepentok rules, ke-overwrite proses lain, dsb) — bukan bug di sisi kita.
+          let verifiedPhase = null, verifyError = null;
+          try{
+            const verifySnap = await getDoc(doc(db, 'watchlist', ticker));
+            verifiedPhase = verifySnap.exists() ? (verifySnap.data().snapshot?.phase || []) : null;
+          }catch(ve){ verifyError = ve.message; }
+          const verifyMatch = verifyError ? null : (JSON.stringify(verifiedPhase) === JSON.stringify(newPhase));
+          changes.push({ ticker, addedDate, oldPhase, newPhase, rsi14, ema20, close, historyLength: closesUpTo.length, verifiedPhase, verifyMatch, verifyError });
         }
 
         done++;
@@ -1658,22 +1668,27 @@
       if(changes.length){
         html += `<div class="msg-box success">✓ ${changes.length} dari ${wlDocs.length} entry Watchlist Fase-nya berubah setelah di-resync.</div>`;
         html += `<div class="preview-table-wrap"><table><thead><tr>
-          <th>Ticker</th><th>Ditambahkan</th><th>Fase Lama</th><th>Fase Baru</th><th>RSI14</th><th>Close dipakai</th><th>EMA20</th><th>% di atas EMA20</th><th>Jml hari histori</th>
+          <th>Ticker</th><th>Ditambahkan</th><th>Fase Lama</th><th>Fase Baru (ditulis)</th><th>Fase Terverifikasi (baca ulang)</th><th>RSI14</th><th>Close dipakai</th><th>EMA20</th><th>% di atas EMA20</th>
         </tr></thead><tbody>`;
         changes.forEach(c => {
           const pct = (c.ema20 && c.close) ? (((c.close - c.ema20) / c.ema20) * 100).toFixed(1) + '%' : '-';
+          const verifyLabel = c.verifyError
+            ? `<span style="color:var(--red);">gagal cek: ${c.verifyError}</span>`
+            : c.verifyMatch
+              ? `<span style="color:var(--positive);">✓ cocok</span>`
+              : `<span style="color:var(--red); font-weight:600;">✕ BEDA: ${(c.verifiedPhase||[]).join(', ') || '(kosong)'}</span>`;
           html += `<tr><td>${c.ticker}</td><td>${c.addedDate}</td>
             <td style="font-size:11px;">${c.oldPhase.length ? c.oldPhase.join(', ') : '<i>(kosong)</i>'}</td>
             <td style="font-size:11px;">${c.newPhase.length ? c.newPhase.join(', ') : '<i>(kosong)</i>'}</td>
+            <td style="font-size:11px;">${verifyLabel}</td>
             <td>${c.rsi14!=null ? c.rsi14.toFixed(1) : '-'}</td>
             <td>${c.close!=null ? c.close.toLocaleString('id-ID') : '-'}</td>
             <td>${c.ema20!=null ? c.ema20.toLocaleString('id-ID',{maximumFractionDigits:0}) : '-'}</td>
             <td>${pct}</td>
-            <td>${c.historyLength}</td>
             </tr>`;
         });
         html += `</tbody></table></div>
-        <p style="font-size:11px; color:var(--text-muted); margin-top:6px;">Bandingkan kolom RSI14/EMA20 di atas dengan yang tampil live di tab Radar — kalau beda jauh, kemungkinan histori Yahoo yang ketarik proxy kali ini beda jumlah harinya (lihat kolom "Jml hari histori").</p>`;
+        <p style="font-size:11px; color:var(--text-muted); margin-top:6px;">Kolom "Fase Terverifikasi" itu hasil BACA ULANG dari Firestore tepat setelah nulis — kalau ada yang tandanya "✕ BEDA", berarti write-nya beneran gagal nyangkut di Firestore (bukan soal cache/refresh browser).</p>`;
       } else {
         html += `<div class="msg-box success">✓ Dicek ${wlDocs.length} entry — semua Fase-nya sudah konsisten, tidak ada yang perlu diubah.</div>`;
       }
@@ -2423,8 +2438,16 @@
               await setDoc(doc(db, 'watchlist', ticker), {
                 'snapshot.phase': newPhase,
               }, { merge: true });
+              // verifikasi baca-ulang langsung — sama seperti di tool Re-sync,
+              // biar kalau ada write yang gak nyangkut, ketauan dari sini juga
+              let verifiedPhase = null, verifyMatch = null;
+              try{
+                const verifySnap = await getDoc(doc(db, 'watchlist', ticker));
+                verifiedPhase = verifySnap.exists() ? (verifySnap.data().snapshot?.phase || []) : null;
+                verifyMatch = JSON.stringify(verifiedPhase) === JSON.stringify(newPhase);
+              }catch(ve){ /* biarin null kalau gagal cek */ }
               phaseSynced++;
-              phaseSyncDetail.push({ ticker, oldPhase, newPhase, rsi14: ind.rsi14, ema20: ind.ema20, close: officialClose, categories: r.categories });
+              phaseSyncDetail.push({ ticker, oldPhase, newPhase, rsi14: ind.rsi14, ema20: ind.ema20, close: officialClose, categories: r.categories, verifiedPhase, verifyMatch });
             });
           }
         }
@@ -2500,15 +2523,21 @@
       if(phaseSyncDetail.length){
         html += `<div class="table-section-title">🔄 Detail Sinkronisasi Fase Watchlist</div>
           <div class="preview-table-wrap"><table><thead><tr>
-            <th>Ticker</th><th>Fase Lama</th><th>Fase Baru</th><th>RSI14</th><th>Close</th><th>EMA20</th><th>% di atas EMA20</th>
+            <th>Ticker</th><th>Fase Lama</th><th>Fase Baru (ditulis)</th><th>Terverifikasi</th><th>RSI14</th><th>Close</th><th>EMA20</th><th>% di atas EMA20</th>
           </tr></thead><tbody>`;
         phaseSyncDetail.forEach(d => {
           const pct = (d.ema20 && d.close) ? (((d.close - d.ema20) / d.ema20) * 100).toFixed(1) + '%' : '-';
           const changed = JSON.stringify(d.oldPhase) !== JSON.stringify(d.newPhase);
+          const verifyLabel = d.verifyMatch == null
+            ? '<span style="color:var(--text-muted);">-</span>'
+            : d.verifyMatch
+              ? '<span style="color:var(--positive);">✓ cocok</span>'
+              : `<span style="color:var(--red); font-weight:600;">✕ BEDA: ${(d.verifiedPhase||[]).join(', ') || '(kosong)'}</span>`;
           html += `<tr style="${changed ? 'background:rgba(212,168,87,0.06);' : ''}">
             <td>${d.ticker}</td>
             <td style="font-size:11px;">${d.oldPhase.length ? d.oldPhase.join(', ') : '<i>(kosong)</i>'}</td>
             <td style="font-size:11px;">${d.newPhase.length ? d.newPhase.join(', ') : '<i>(kosong)</i>'}</td>
+            <td style="font-size:11px;">${verifyLabel}</td>
             <td>${d.rsi14!=null ? d.rsi14.toFixed(1) : '-'}</td>
             <td>${d.close!=null ? d.close.toLocaleString('id-ID') : '-'}</td>
             <td>${d.ema20!=null ? d.ema20.toLocaleString('id-ID',{maximumFractionDigits:0}) : '-'}</td>
