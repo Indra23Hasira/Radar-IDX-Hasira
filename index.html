@@ -2083,9 +2083,18 @@
   // beberapa URL" menurut dokumentasi Jina sendiri. Jadi ditaruh paling
   // belakang sebagai upaya terakhir saja (kadang tetap bisa passthrough
   // untuk sebagian request), bukan proxy andalan.
+  //
+  // UPDATE: proxy UTAMA sekarang Cloudflare Worker milik sendiri
+  // (yahoo-proxy.indraanggriawan17.workers.dev) — bukan infrastruktur publik
+  // yang dipakai bareng ribuan aplikasi lain, jadi jauh lebih jarang kena
+  // rate-limit/403. Worker ini sama yang dipakai di app "Aset Tracker" —
+  // 1 Worker dipakai bersama beberapa aplikasi, tidak perlu bikin baru per app.
+  // Proxy publik lama tetap disimpan sebagai cadangan lapis kedua kalau-kalau
+  // Worker-nya lagi down/bermasalah.
   // ============================================================
   function buildProxyList(targetUrl){
     return [
+      { name: 'Cloudflare Worker (punya sendiri)', url: `https://yahoo-proxy.indraanggriawan17.workers.dev/?url=${encodeURIComponent(targetUrl)}`, mode: 'raw' },
       { name: 'allorigins.win/raw', url: `https://api.allorigins.win/raw?url=${encodeURIComponent(targetUrl)}`, mode: 'raw' },
       { name: 'codetabs.com', url: `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(targetUrl)}`, mode: 'raw' },
       { name: 'corsproxy.io', url: `https://corsproxy.io/?${encodeURIComponent(targetUrl)}`, mode: 'raw' },
