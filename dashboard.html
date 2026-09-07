@@ -1647,6 +1647,7 @@
   // ============================================================
   let holdSubview = 'candidates';
   let macroStatusData = null;
+  let dxyData = null; // { price, changePct5d, trend, fetchedAt } — auto-fetch, terpisah dari macroStatusData (manual)
   let fundamentalDocsCache = null; // cache array {id, ...data} dari collection fundamentalData
   let holdPrefill = null; // {ticker, companyName} — dipakai buat lompat dari Kandidat/Edit ke form Input
 
@@ -1681,10 +1682,99 @@
     try{
       const snap = await getDoc(doc(db, 'systemMeta', 'macroStatus'));
       macroStatusData = snap.exists() ? snap.data() : null;
-      renderMacroPanel(true);
     }catch(err){
       console.error('loadMacroPanel gagal:', err);
       panel.innerHTML = `<div class="msg-box error">✕ Gagal memuat status makro: ${err.message}</div>`;
+      return;
+    }
+    renderMacroPanel(true);
+    fetchDXY(); // async, gak diawait — panel udah kerender duluan, DXY nyusul begitu selesai
+  }
+
+  // Rantai proxy buat nembus CORS Yahoo Finance dari browser — pola PERSIS yang
+  // sudah dipakai & terbukti jalan di index.html (fetchViaProxyChain/buildProxyList),
+  // diduplikasi ke sini scoped khusus buat kebutuhan DXY (bukan diimpor lintas file,
+  // karena dashboard.html & index.html tetap dua file HTML terpisah).
+  function buildDXYProxyList(targetUrl){
+    return [
+      { name: 'Cloudflare Worker (punya sendiri)', url: `https://yahoo-proxy.indraanggriawan17.workers.dev/?url=${encodeURIComponent(targetUrl)}`, mode: 'raw' },
+      { name: 'allorigins.win/raw', url: `https://api.allorigins.win/raw?url=${encodeURIComponent(targetUrl)}`, mode: 'raw' },
+      { name: 'codetabs.com', url: `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(targetUrl)}`, mode: 'raw' },
+      { name: 'corsproxy.io', url: `https://corsproxy.io/?${encodeURIComponent(targetUrl)}`, mode: 'raw' },
+      { name: 'allorigins.win/get', url: `https://api.allorigins.win/get?url=${encodeURIComponent(targetUrl)}`, mode: 'wrapped' },
+    ];
+  }
+
+  async function fetchViaDXYProxyChain(targetUrl, timeoutMs){
+    const proxies = buildDXYProxyList(targetUrl);
+    let lastErr = null;
+    for(const proxy of proxies){
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), timeoutMs);
+      try{
+        const res = await fetch(proxy.url, { signal: controller.signal });
+        clearTimeout(timer);
+        if(!res.ok){
+          if(res.status === 429) throw new Error(`${proxy.name}: kena rate limit (429)`);
+          throw new Error(`${proxy.name}: HTTP ${res.status}`);
+        }
+        let text = await res.text();
+        if(proxy.mode === 'wrapped'){
+          const wrapper = JSON.parse(text);
+          text = wrapper.contents;
+        }
+        const json = JSON.parse(text);
+        return json;
+      }catch(err){
+        clearTimeout(timer);
+        lastErr = err.name === 'AbortError' ? new Error(`${proxy.name}: timeout (>${timeoutMs/1000}s)`) : err;
+        continue;
+      }
+    }
+    throw lastErr || new Error('Semua proxy gagal diakses');
+  }
+
+  // Ambil harga DXY (US Dollar Index) lewat rantai proxy di atas, target Yahoo
+  // Finance chart API buat simbol DX-Y.NYB. Best-effort: kalau simbolnya ternyata
+  // gak valid di Yahoo, gagal dengan pesan jelas — field makro manual (Yield SUN,
+  // APBN) tetap jalan normal terlepas dari ini.
+  async function fetchDXY(){
+    try{
+      const yahooUrl = 'https://query1.finance.yahoo.com/v8/finance/chart/DX-Y.NYB?interval=1d&range=10d';
+      const json = await fetchViaDXYProxyChain(yahooUrl, 6000);
+      const result = json?.chart?.result?.[0];
+      const yErr = json?.chart?.error;
+      if(yErr) throw new Error(yErr.description || 'Yahoo Finance error');
+      const closes = (result?.indicators?.quote?.[0]?.close || []).filter(v => v != null);
+      if(!closes.length) throw new Error('Data close kosong dari respons');
+      const latest = closes[closes.length - 1];
+      const fiveDaysAgo = closes.length >= 6 ? closes[closes.length - 6] : closes[0];
+      const changePct = ((latest - fiveDaysAgo) / fiveDaysAgo) * 100;
+      let trend = 'sideways';
+      if(changePct > 0.3) trend = 'up';
+      else if(changePct < -0.3) trend = 'down';
+      dxyData = { price: latest, changePct5d: changePct, trend, fetchedAt: new Date().toISOString() };
+    }catch(err){
+      console.error('fetchDXY gagal:', err);
+      dxyData = { error: err.message };
+    }
+    const badge = document.getElementById('dxyBadge');
+    if(badge) renderDXYBadge();
+  }
+
+  function renderDXYBadge(){
+    const el = document.getElementById('dxyBadge');
+    if(!el) return;
+    if(!dxyData){
+      el.innerHTML = `<span class="macro-field" style="color:var(--text-faint);">DXY: memuat...</span>`;
+    }else if(dxyData.error){
+      el.innerHTML = `<span class="macro-field" style="color:var(--text-faint);" title="${dxyData.error}">DXY: gagal diambil otomatis</span>`;
+    }else{
+      const arrow = dxyData.trend === 'up' ? '▲' : dxyData.trend === 'down' ? '▼' : '→';
+      const color = dxyData.trend === 'up' ? 'var(--negative)' : dxyData.trend === 'down' ? 'var(--positive)' : 'var(--text-dim)';
+      // catatan: DXY naik biasanya risk-off buat aset EM/rupiah, makanya warnanya dibalik
+      // (naik = warna 'negative', turun = warna 'positive') — konsisten sama framing Radar BTC
+      el.innerHTML = `<span class="macro-field">DXY: <b style="color:${color};">${dxyData.price.toFixed(2)} ${arrow} ${dxyData.changePct5d >= 0 ? '+' : ''}${dxyData.changePct5d.toFixed(2)}% (5D)</b></span>`;
     }
   }
 
@@ -1700,11 +1790,13 @@
           <span class="macro-status-badge ${regime}">${regimeLabel}</span>
           <span class="macro-field">Yield SUN 10Y: <b>${d.bondYield10Y != null ? d.bondYield10Y.toFixed(2) + '%' : '-'}</b></span>
           <span class="macro-field">APBN: <b>${d.apbnStatus || '-'}</b></span>
+          <span id="dxyBadge"></span>
           <span class="macro-updated">${updatedStr ? 'Update terakhir: ' + updatedStr : 'Belum pernah diisi'}</span>
         </div>
         <button class="btn-edit-macro" id="btnEditMacro">✏️ Edit Status Makro</button>
       `;
       document.getElementById('btnEditMacro').addEventListener('click', () => renderMacroPanel(false));
+      renderDXYBadge();
     }else{
       panel.innerHTML = `
         <div class="fund-grid" style="flex:1; margin-bottom:0;">
