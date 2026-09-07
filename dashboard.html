@@ -253,6 +253,9 @@
     padding:9px 10px; border-radius:var(--radius); font-family:'IBM Plex Mono'; font-size:12.5px; }
   .fund-field input:focus, .fund-field select:focus{ outline:none; border-color:var(--gold-dim); }
   .fund-field input::placeholder{ color:var(--text-faint); }
+  .fund-field .field-row{ display:flex; gap:6px; }
+  .fund-field .field-row input{ flex:1; min-width:0; }
+  .fund-field .field-row select{ width:auto; flex-shrink:0; }
 
   .quarter-chip{ display:inline-flex; align-items:center; gap:8px; background:var(--panel-alt); border:1px solid var(--border-soft);
     border-radius:var(--radius); padding:6px 10px; font-family:'IBM Plex Mono'; font-size:11px; margin:4px 6px 0 0; }
@@ -2021,11 +2024,48 @@
             </select>
           </div>
           <div class="fund-field"><label>Tanggal Laporan</label><input type="date" id="qReportDate"></div>
-          <div class="fund-field"><label>Laba Bersih YTD (Rp)</label><input type="number" id="qNetIncome" placeholder="misal 15000000000000"></div>
-          <div class="fund-field"><label>Pendapatan YTD (Rp)</label><input type="number" id="qRevenue" placeholder="misal 80000000000000"></div>
-          <div class="fund-field"><label>Total Ekuitas (Rp)</label><input type="number" id="qEquity" placeholder="misal 120000000000000"></div>
-          <div class="fund-field"><label>Jumlah Saham Beredar</label><input type="number" id="qShares" placeholder="misal 24000000000"></div>
+          <div class="fund-field"><label>Laba Bersih YTD</label>
+            <div class="field-row">
+              <input type="number" step="any" id="qNetIncome" placeholder="misal 30.4123">
+              <select id="qNetIncomeUnit">
+                <option value="1000000000000" selected>Triliun</option>
+                <option value="1000000000">Miliar</option>
+                <option value="1">Rp penuh</option>
+              </select>
+            </div>
+          </div>
+          <div class="fund-field"><label>Pendapatan YTD</label>
+            <div class="field-row">
+              <input type="number" step="any" id="qRevenue" placeholder="misal 80">
+              <select id="qRevenueUnit">
+                <option value="1000000000000" selected>Triliun</option>
+                <option value="1000000000">Miliar</option>
+                <option value="1">Rp penuh</option>
+              </select>
+            </div>
+          </div>
+          <div class="fund-field"><label>Total Ekuitas</label>
+            <div class="field-row">
+              <input type="number" step="any" id="qEquity" placeholder="misal 120">
+              <select id="qEquityUnit">
+                <option value="1000000000000" selected>Triliun</option>
+                <option value="1000000000">Miliar</option>
+                <option value="1">Rp penuh</option>
+              </select>
+            </div>
+          </div>
+          <div class="fund-field"><label>Jumlah Saham Beredar</label>
+            <div class="field-row">
+              <input type="number" step="any" id="qShares" placeholder="misal 24">
+              <select id="qSharesUnit">
+                <option value="1000000000" selected>Miliar Lembar</option>
+                <option value="1000000">Juta Lembar</option>
+                <option value="1">Lembar</option>
+              </select>
+            </div>
+          </div>
         </div>
+        <div style="font-size:11px; color:var(--text-faint); margin-top:8px;">Tinggal ketik angka aslinya (misal laba bersih 30,4 triliun → ketik <span class="mono">30.4123</span>, pilih satuan <b>Triliun</b>). Pilih satuan sesuai skala perusahaan — blue chip biasanya Triliun, saham menengah/kecil biasanya Miliar.</div>
         <div class="table-section-title" style="margin-top:14px;">Kuartal Tersimpan</div>
         <div id="quarterChips">${renderQuarterChips(existing?.quarters || [])}</div>
         <div style="display:flex; gap:10px; margin-top:18px;">
@@ -2062,10 +2102,24 @@
     const year = parseInt(document.getElementById('qYear').value, 10);
     const q = parseInt(document.getElementById('qQuarter').value, 10);
     const reportDate = document.getElementById('qReportDate').value || null;
-    const netIncomeYTD = parseFloat(document.getElementById('qNetIncome').value);
-    const revenueYTD = parseFloat(document.getElementById('qRevenue').value);
-    const totalEquity = parseFloat(document.getElementById('qEquity').value);
-    const sharesOutstanding = parseFloat(document.getElementById('qShares').value);
+
+    // baca angka mentah + satuan yang dipilih (Rp penuh/Miliar/Triliun), lalu kaliin —
+    // biar user tinggal ketik angka aslinya (misal 30.4123) tanpa hitung nol manual
+    const netIncomeRaw = parseFloat(document.getElementById('qNetIncome').value);
+    const netIncomeUnit = parseFloat(document.getElementById('qNetIncomeUnit').value);
+    const netIncomeYTD = isNaN(netIncomeRaw) ? NaN : netIncomeRaw * netIncomeUnit;
+
+    const revenueRaw = parseFloat(document.getElementById('qRevenue').value);
+    const revenueUnit = parseFloat(document.getElementById('qRevenueUnit').value);
+    const revenueYTD = isNaN(revenueRaw) ? NaN : revenueRaw * revenueUnit;
+
+    const equityRaw = parseFloat(document.getElementById('qEquity').value);
+    const equityUnit = parseFloat(document.getElementById('qEquityUnit').value);
+    const totalEquity = isNaN(equityRaw) ? NaN : equityRaw * equityUnit;
+
+    const sharesRaw = parseFloat(document.getElementById('qShares').value);
+    const sharesUnit = parseFloat(document.getElementById('qSharesUnit').value);
+    const sharesOutstanding = isNaN(sharesRaw) ? NaN : sharesRaw * sharesUnit;
 
     if(!ticker){ msgEl.innerHTML = `<div class="msg-box error">✕ Ticker wajib diisi.</div>`; return; }
 
