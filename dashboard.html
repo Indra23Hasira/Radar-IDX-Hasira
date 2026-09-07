@@ -216,7 +216,51 @@
   footer{ text-align:center; padding:20px; font-size:11px; color:var(--text-faint); }
 
   @media (max-width: 860px){ .layout{ grid-template-columns:1fr; } aside{ border-right:none; border-bottom:1px solid var(--border); } }
-</style>
+
+  /* ===== HOLD JANGKA MENENGAH-PANJANG (Fundamental) ===== */
+  .msg-box{ display:flex; gap:9px; padding:10px 12px; border-radius:var(--radius); font-size:12px; margin:10px 0; align-items:flex-start; }
+  .msg-box.info{ background:rgba(79,209,197,0.08); border:1px solid rgba(79,209,197,0.3); color:var(--cyan); }
+  .msg-box.warning{ background:rgba(232,163,61,0.1); border:1px solid rgba(232,163,61,0.35); color:var(--amber-flag); }
+  .msg-box.success{ background:rgba(62,207,142,0.08); border:1px solid rgba(62,207,142,0.3); color:var(--positive); }
+  .msg-box.error{ background:rgba(242,84,91,0.1); border:1px solid rgba(242,84,91,0.35); color:#FF8B92; }
+
+  .hold-subnav{ display:flex; gap:8px; margin-bottom:20px; flex-wrap:wrap; }
+  .hold-subnav button{ background:var(--panel-alt); border:1px solid var(--border); color:var(--text-dim); border-radius:var(--radius);
+    padding:8px 14px; font-size:12.5px; cursor:pointer; font-family:'Inter'; }
+  .hold-subnav button:hover{ border-color:var(--gold-dim); color:var(--gold); }
+  .hold-subnav button.active{ background:rgba(212,168,87,0.12); border-color:var(--gold-dim); color:var(--gold); font-weight:600; }
+
+  .macro-panel{ background:var(--panel); border:1px solid var(--border); border-radius:6px; padding:16px 18px; margin-bottom:22px;
+    display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:14px; }
+  .macro-panel .mp-left{ display:flex; align-items:center; gap:16px; flex-wrap:wrap; }
+  .macro-status-badge{ font-family:'IBM Plex Mono'; font-size:12px; padding:6px 12px; border-radius:20px; border:1px solid var(--border); white-space:nowrap; }
+  .macro-status-badge.support{ background:rgba(62,207,142,0.1); border-color:var(--positive); color:var(--positive); }
+  .macro-status-badge.caution{ background:rgba(232,163,61,0.1); border-color:var(--amber-flag); color:var(--amber-flag); }
+  .macro-status-badge.neutral{ background:var(--panel-alt); color:var(--text-dim); }
+  .macro-field{ font-size:11.5px; color:var(--text-dim); }
+  .macro-field b{ color:var(--text); font-family:'IBM Plex Mono'; }
+  .macro-updated{ font-size:10.5px; color:var(--text-faint); }
+  .btn-edit-macro{ background:transparent; border:1px solid var(--border); color:var(--text-dim); border-radius:var(--radius);
+    padding:7px 14px; font-size:11.5px; cursor:pointer; font-family:'Inter'; white-space:nowrap; }
+  .btn-edit-macro:hover{ border-color:var(--gold-dim); color:var(--gold); }
+
+  .fund-form-panel{ background:var(--panel); border:1px solid var(--border); border-radius:6px; padding:22px; margin-bottom:20px; }
+  .fund-form-panel h4{ font-size:14px; font-weight:600; margin-bottom:4px; }
+  .fund-form-panel .fp-sub{ font-size:11.5px; color:var(--text-dim); margin-bottom:16px; }
+  .fund-grid{ display:grid; grid-template-columns:repeat(auto-fit, minmax(170px,1fr)); gap:14px; margin-bottom:6px; }
+  .fund-field label{ display:block; font-size:11px; color:var(--text-dim); margin-bottom:5px; }
+  .fund-field input, .fund-field select{ width:100%; background:var(--panel-alt); border:1px solid var(--border); color:var(--text);
+    padding:9px 10px; border-radius:var(--radius); font-family:'IBM Plex Mono'; font-size:12.5px; }
+  .fund-field input:focus, .fund-field select:focus{ outline:none; border-color:var(--gold-dim); }
+  .fund-field input::placeholder{ color:var(--text-faint); }
+
+  .quarter-chip{ display:inline-flex; align-items:center; gap:8px; background:var(--panel-alt); border:1px solid var(--border-soft);
+    border-radius:var(--radius); padding:6px 10px; font-family:'IBM Plex Mono'; font-size:11px; margin:4px 6px 0 0; }
+  .quarter-chip .qc-del{ color:var(--negative); cursor:pointer; font-weight:600; }
+
+  .metric-tag{ font-family:'IBM Plex Mono'; font-size:10.5px; padding:2px 6px; border-radius:3px; background:var(--panel-alt);
+    border:1px solid var(--border-soft); color:var(--amber-flag); white-space:nowrap; }
+  .metric-note{ font-size:9.5px; color:var(--text-faint); display:block; margin-top:2px; }
 </head>
 <body>
 
@@ -262,6 +306,7 @@
   <button class="tab-btn active" id="tabRadarBtn">📡 Radar</button>
   <button class="tab-btn" id="tabWatchlistBtn">⭐ Watchlist <span id="watchlistCountBadge"></span></button>
   <button class="tab-btn" id="tabStatsBtn">📊 Statistik</button>
+  <button class="tab-btn" id="tabHoldBtn">🏛️ Hold Jk. Panjang</button>
 </div>
 
 <div class="layout" id="mainLayout">
@@ -344,6 +389,35 @@
         </div>
       </div>
       <div id="statsContent"><div class="loading-msg">Menghitung statistik...</div></div>
+    </div>
+
+    <div id="holdSection" style="display:none;">
+      <div class="main-header">
+        <div>
+          <div class="main-title">Hold Jangka Menengah-Panjang</div>
+          <div class="main-desc">Filter fundamental (murah + bagus) buat saham yang mau di-hold, terpisah dari sinyal money flow/momentum harian di tab Radar. Kondisi makro cuma jadi status umum, bukan filter per saham.</div>
+        </div>
+      </div>
+
+      <div class="macro-panel" id="macroPanel">
+        <div class="loading-msg" style="padding:10px 0;">Memuat status makro...</div>
+      </div>
+
+      <div class="hold-subnav">
+        <button class="active" id="holdNavCandidates">📡 Kandidat dari Radar</button>
+        <button id="holdNavRanked">🏆 Watchlist Fundamental</button>
+        <button id="holdNavInput">✏️ Input / Edit Manual</button>
+      </div>
+
+      <div id="holdCandidatesView">
+        <div class="loading-msg">Memuat kandidat...</div>
+      </div>
+
+      <div id="holdRankedView" style="display:none;">
+        <div class="loading-msg">Memuat watchlist fundamental...</div>
+      </div>
+
+      <div id="holdInputView" style="display:none;"></div>
     </div>
 
     <footer>Data dari Firestore Anda sendiri — perbarui lewat halaman Import Data.</footer>
@@ -627,18 +701,22 @@
   document.getElementById('tabRadarBtn').addEventListener('click', () => switchTab('radar'));
   document.getElementById('tabWatchlistBtn').addEventListener('click', () => switchTab('watchlist'));
   document.getElementById('tabStatsBtn').addEventListener('click', () => switchTab('stats'));
+  document.getElementById('tabHoldBtn').addEventListener('click', () => switchTab('hold'));
 
   function switchTab(tab){
     currentTab = tab;
     document.getElementById('tabRadarBtn').classList.toggle('active', tab === 'radar');
     document.getElementById('tabWatchlistBtn').classList.toggle('active', tab === 'watchlist');
     document.getElementById('tabStatsBtn').classList.toggle('active', tab === 'stats');
+    document.getElementById('tabHoldBtn').classList.toggle('active', tab === 'hold');
     document.getElementById('radarSection').style.display = tab === 'radar' ? 'block' : 'none';
     document.getElementById('watchlistSection').style.display = tab === 'watchlist' ? 'block' : 'none';
     document.getElementById('statsSection').style.display = tab === 'stats' ? 'block' : 'none';
-    document.getElementById('mainLayout').classList.toggle('watchlist-mode', tab === 'watchlist' || tab === 'stats');
+    document.getElementById('holdSection').style.display = tab === 'hold' ? 'block' : 'none';
+    document.getElementById('mainLayout').classList.toggle('watchlist-mode', tab === 'watchlist' || tab === 'stats' || tab === 'hold');
     if(tab === 'watchlist') loadWatchlist();
     if(tab === 'stats') loadStats();
+    if(tab === 'hold') loadHoldSection();
   }
 
   function updateWatchlistCountBadge(n){
@@ -1553,6 +1631,487 @@
       });
       html += `</tbody></table>`;
       content.innerHTML = html;
+    }
+  }
+
+  // ============================================================
+  // HOLD JANGKA MENENGAH-PANJANG (Fundamental) — terpisah total dari
+  // scoring Radar (Liquidity/Foreign/Technical) di atas. Collection Firestore
+  // baru sendiri (fundamentalData, systemMeta/macroStatus), tidak menyentuh
+  // dailySummary/tickerRollingStats/watchlist/systemMeta.technicalIndicators
+  // yang dipakai radar harian, supaya tidak ada risiko ganggu fitur lama.
+  // ============================================================
+  let holdSubview = 'candidates';
+  let macroStatusData = null;
+  let fundamentalDocsCache = null; // cache array {id, ...data} dari collection fundamentalData
+  let holdPrefill = null; // {ticker, companyName} — dipakai buat lompat dari Kandidat/Edit ke form Input
+
+  document.getElementById('holdNavCandidates').addEventListener('click', () => switchHoldSubview('candidates'));
+  document.getElementById('holdNavRanked').addEventListener('click', () => switchHoldSubview('ranked'));
+  document.getElementById('holdNavInput').addEventListener('click', () => { holdPrefill = null; switchHoldSubview('input'); });
+
+  async function loadHoldSection(){
+    if(!firebaseReady) return;
+    await loadMacroPanel();
+    switchHoldSubview(holdSubview);
+  }
+
+  function switchHoldSubview(view){
+    holdSubview = view;
+    document.getElementById('holdNavCandidates').classList.toggle('active', view === 'candidates');
+    document.getElementById('holdNavRanked').classList.toggle('active', view === 'ranked');
+    document.getElementById('holdNavInput').classList.toggle('active', view === 'input');
+    document.getElementById('holdCandidatesView').style.display = view === 'candidates' ? 'block' : 'none';
+    document.getElementById('holdRankedView').style.display = view === 'ranked' ? 'block' : 'none';
+    document.getElementById('holdInputView').style.display = view === 'input' ? 'block' : 'none';
+    if(view === 'candidates') loadHoldCandidates();
+    if(view === 'ranked') loadHoldRanked();
+    if(view === 'input') renderFundInputForm();
+  }
+
+  // ---------- Panel status makro (input manual, mingguan/bulanan) ----------
+  async function loadMacroPanel(){
+    const panel = document.getElementById('macroPanel');
+    panel.innerHTML = `<div class="loading-msg" style="padding:10px 0;">Memuat status makro...</div>`;
+    const { doc, getDoc } = firestoreFns;
+    try{
+      const snap = await getDoc(doc(db, 'systemMeta', 'macroStatus'));
+      macroStatusData = snap.exists() ? snap.data() : null;
+      renderMacroPanel(true);
+    }catch(err){
+      console.error('loadMacroPanel gagal:', err);
+      panel.innerHTML = `<div class="msg-box error">✕ Gagal memuat status makro: ${err.message}</div>`;
+    }
+  }
+
+  function renderMacroPanel(readOnly){
+    const panel = document.getElementById('macroPanel');
+    const d = macroStatusData || {};
+    if(readOnly){
+      const regime = d.regime || 'neutral';
+      const regimeLabel = { support: 'Kondisi Mendukung', caution: 'Hati-hati', neutral: 'Netral / Belum Diisi' }[regime];
+      const updatedStr = d.updatedAt ? new Date(d.updatedAt).toLocaleDateString('id-ID', { day:'2-digit', month:'short', year:'numeric' }) : null;
+      panel.innerHTML = `
+        <div class="mp-left">
+          <span class="macro-status-badge ${regime}">${regimeLabel}</span>
+          <span class="macro-field">Yield SUN 10Y: <b>${d.bondYield10Y != null ? d.bondYield10Y.toFixed(2) + '%' : '-'}</b></span>
+          <span class="macro-field">APBN: <b>${d.apbnStatus || '-'}</b></span>
+          <span class="macro-updated">${updatedStr ? 'Update terakhir: ' + updatedStr : 'Belum pernah diisi'}</span>
+        </div>
+        <button class="btn-edit-macro" id="btnEditMacro">✏️ Edit Status Makro</button>
+      `;
+      document.getElementById('btnEditMacro').addEventListener('click', () => renderMacroPanel(false));
+    }else{
+      panel.innerHTML = `
+        <div class="fund-grid" style="flex:1; margin-bottom:0;">
+          <div class="fund-field">
+            <label>Yield Obligasi (SUN) 10Y (%)</label>
+            <input type="number" step="0.01" id="mInputYield" value="${d.bondYield10Y ?? ''}" placeholder="misal 6.85">
+          </div>
+          <div class="fund-field">
+            <label>Status APBN (bebas teks)</label>
+            <input type="text" id="mInputApbn" value="${d.apbnStatus || ''}" placeholder="misal: Defisit terkendali">
+          </div>
+          <div class="fund-field">
+            <label>Kondisi Umum</label>
+            <select id="mInputRegime">
+              <option value="support" ${d.regime==='support'?'selected':''}>Mendukung nambah</option>
+              <option value="neutral" ${(!d.regime || d.regime==='neutral')?'selected':''}>Netral</option>
+              <option value="caution" ${d.regime==='caution'?'selected':''}>Hati-hati</option>
+            </select>
+          </div>
+        </div>
+        <div style="display:flex; gap:8px;">
+          <button class="btn-apply" style="width:auto; padding:9px 18px;" id="btnSaveMacro">Simpan</button>
+          <button class="btn-edit-macro" id="btnCancelMacro">Batal</button>
+        </div>
+      `;
+      document.getElementById('btnSaveMacro').addEventListener('click', saveMacroStatus);
+      document.getElementById('btnCancelMacro').addEventListener('click', () => renderMacroPanel(true));
+    }
+  }
+
+  async function saveMacroStatus(){
+    const { doc, setDoc } = firestoreFns;
+    const btn = document.getElementById('btnSaveMacro');
+    const yieldVal = parseFloat(document.getElementById('mInputYield').value);
+    const apbn = document.getElementById('mInputApbn').value.trim();
+    const regime = document.getElementById('mInputRegime').value;
+    btn.disabled = true; btn.textContent = 'Menyimpan...';
+    try{
+      const payload = {
+        bondYield10Y: isNaN(yieldVal) ? null : yieldVal,
+        apbnStatus: apbn || null,
+        regime,
+        updatedAt: new Date().toISOString(),
+      };
+      await setDoc(doc(db, 'systemMeta', 'macroStatus'), payload, { merge: true });
+      macroStatusData = { ...macroStatusData, ...payload };
+      renderMacroPanel(true);
+    }catch(err){
+      alert('Gagal menyimpan status makro: ' + err.message);
+      btn.disabled = false; btn.textContent = 'Simpan';
+    }
+  }
+
+  // ---------- Sub-tab: Kandidat dari Radar (shortlist otomatis) ----------
+  async function loadHoldCandidates(){
+    const el = document.getElementById('holdCandidatesView');
+    el.innerHTML = `<div class="loading-msg">Memuat kandidat dari radar...</div>`;
+    const { collection, getDocs, where, query } = firestoreFns;
+    try{
+      const [rsSnap, fundSnap] = await Promise.all([
+        getDocs(query(collection(db, 'tickerRollingStats'), where('matchCount', '>=', 1))),
+        getDocs(collection(db, 'fundamentalData')),
+      ]);
+      const already = new Set(fundSnap.docs.map(d => d.id));
+      const candidates = rsSnap.docs
+        .map(d => d.data())
+        .filter(r => !already.has(r.ticker))
+        .filter(r => (r.foreignNetValue3d ?? 0) > 0 && (r.foreignNetValue10d ?? 0) > 0)
+        .sort((a, b) => (b.foreignNetValue10d ?? 0) - (a.foreignNetValue10d ?? 0));
+
+      if(!candidates.length){
+        el.innerHTML = `<div class="empty-state">
+          <div class="big">🔍</div>
+          <div class="msg">Belum ada kandidat net asing masuk konsisten yang belum diriset.</div>
+          <div class="sub">Kriteria saat ini: Foreign Net Value 3D & 10D sama-sama positif, match kategori radar ≥1, dan belum ada di Watchlist Fundamental.</div>
+        </div>`;
+        return;
+      }
+
+      let html = `<div class="msg-box info">📡 Shortlist otomatis dari Radar — <b>bukan rekomendasi beli</b>, cuma saran saham mana yang layak diriset fundamentalnya duluan (ada aliran dana asing masuk konsisten 3D &amp; 10D). Klik "+ Riset" buat mulai isi data fundamental.</div>`;
+      html += `<table><thead><tr>
+        <th>Ticker</th><th>Match Radar</th><th>Foreign Net 3D</th><th>Foreign Net 10D</th><th>Harga vs 10D</th><th>Aksi</th>
+      </tr></thead><tbody>`;
+      candidates.forEach(r => {
+        html += `<tr>
+          <td class="ticker-cell">${r.ticker}${r.companyName ? `<span class="co-name">${r.companyName}</span>` : ''}</td>
+          <td>${r.matchCount ?? '-'}/4</td>
+          <td class="${(r.foreignNetValue3d??0)>=0?'pos':'neg'}">${fmtValue(r.foreignNetValue3d)}</td>
+          <td class="${(r.foreignNetValue10d??0)>=0?'pos':'neg'}">${fmtValue(r.foreignNetValue10d)}</td>
+          <td class="${(r.priceChange10d??0)>=0?'pos':'neg'}">${r.priceChange10d!=null ? (r.priceChange10d>=0?'+':'')+r.priceChange10d.toFixed(2)+'%' : '-'}</td>
+          <td><button class="watchlist-btn" data-add-fund="${r.ticker}" data-company="${(r.companyName||'').replace(/"/g,'&quot;')}">+ Riset</button></td>
+        </tr>`;
+      });
+      html += `</tbody></table>`;
+      el.innerHTML = html;
+
+      el.querySelectorAll('[data-add-fund]').forEach(btn => {
+        btn.addEventListener('click', () => {
+          holdPrefill = { ticker: btn.getAttribute('data-add-fund'), companyName: btn.getAttribute('data-company') };
+          switchHoldSubview('input');
+        });
+      });
+    }catch(err){
+      console.error('loadHoldCandidates gagal:', err);
+      el.innerHTML = `<div class="msg-box error">✕ Gagal memuat kandidat: ${err.message}</div>`;
+    }
+  }
+
+  // ---------- Perhitungan metrik fundamental ----------
+  function parsePeriod(period){
+    const m = /^(\d{4})Q([1-4])$/.exec(period || '');
+    if(!m) return null;
+    return { year: parseInt(m[1],10), q: parseInt(m[2],10) };
+  }
+  function periodKey(year, q){ return `${year}Q${q}`; }
+
+  // Menghitung PBV, ROE, PER, EPS/Revenue Growth YoY dari daftar kuartal.
+  // PER & ROE pakai basis TTM (trailing 12 bulan) KALAU ada data kuartal
+  // sama persis tahun lalu + data Q4 tahun lalu (buat rekonstruksi TTM presisi:
+  // TTM = YTD sekarang + (Laba Full Year lalu - YTD kuartal sama tahun lalu)).
+  // Kalau belum lengkap, fallback ke estimasi run-rate (YTD / kuartal-ke berapa x 4)
+  // dan ditandai isEstimate=true — supaya tidak menyesatkan seolah-olah presisi.
+  function computeFundamentalMetrics(quarters, livePrice){
+    if(!quarters || !quarters.length) return null;
+    const sorted = [...quarters].sort((a, b) => {
+      const pa = parsePeriod(a.period), pb = parsePeriod(b.period);
+      if(!pa || !pb) return 0;
+      return (pb.year*4 + pb.q) - (pa.year*4 + pa.q);
+    });
+    const latest = sorted[0];
+    const p0 = parsePeriod(latest.period);
+    if(!p0 || latest.netIncomeYTD == null) return { latestPeriod: latest.period, pbv:null, roe:null, per:null, isEstimate:true, epsGrowthYoY:null, revenueGrowthYoY:null };
+
+    const byPeriod = new Map(sorted.map(qt => [qt.period, qt]));
+    const yoy = byPeriod.get(periodKey(p0.year - 1, p0.q)) || null;
+    const priorFY = byPeriod.get(periodKey(p0.year - 1, 4)) || null;
+
+    let ttmNetIncome, isEstimate;
+    if(yoy && priorFY && yoy.netIncomeYTD != null && priorFY.netIncomeYTD != null){
+      ttmNetIncome = latest.netIncomeYTD + (priorFY.netIncomeYTD - yoy.netIncomeYTD);
+      isEstimate = false;
+    }else{
+      ttmNetIncome = (latest.netIncomeYTD / p0.q) * 4;
+      isEstimate = true;
+    }
+
+    const shares = latest.sharesOutstanding;
+    const equity = latest.totalEquity;
+    const eps = shares ? ttmNetIncome / shares : null;
+    const per = (eps != null && eps > 0 && livePrice != null) ? livePrice / eps : null;
+    const roe = equity ? ttmNetIncome / equity : null;
+    const pbv = (equity && shares && livePrice != null) ? (livePrice * shares) / equity : null;
+
+    const epsGrowthYoY = (yoy && yoy.netIncomeYTD) ? ((latest.netIncomeYTD - yoy.netIncomeYTD) / Math.abs(yoy.netIncomeYTD)) : null;
+    const revenueGrowthYoY = (yoy && yoy.revenueYTD && latest.revenueYTD != null) ? ((latest.revenueYTD - yoy.revenueYTD) / Math.abs(yoy.revenueYTD)) : null;
+
+    return { latestPeriod: latest.period, pbv, roe, per, isEstimate, epsGrowthYoY, revenueGrowthYoY };
+  }
+
+  // Ranking sederhana: rank percentile PBV rendah (bagus) + rank percentile ROE tinggi (bagus),
+  // ditambah bonus kecil kalau growth YoY positif. Ini bantuan urutan riset, bukan skor mutlak.
+  function rankFundamentalCandidates(rows){
+    const pbvVals = rows.filter(r => r.metrics?.pbv != null).map(r => r.metrics.pbv).sort((a,b) => a-b);
+    const roeVals = rows.filter(r => r.metrics?.roe != null).map(r => r.metrics.roe).sort((a,b) => a-b);
+    function pctRank(sortedArr, val){
+      if(val == null || !sortedArr.length) return 0;
+      const idx = sortedArr.indexOf(val);
+      return idx / Math.max(1, sortedArr.length - 1);
+    }
+    rows.forEach(r => {
+      const m = r.metrics;
+      if(!m){ r.rankScore = -Infinity; return; }
+      const pbvScore = m.pbv != null ? (1 - pctRank(pbvVals, m.pbv)) : 0;
+      const roeScore = m.roe != null ? pctRank(roeVals, m.roe) : 0;
+      const growthBonus = (m.epsGrowthYoY > 0 ? 0.15 : 0) + (m.revenueGrowthYoY > 0 ? 0.15 : 0);
+      r.rankScore = (pbvScore * 0.45) + (roeScore * 0.45) + growthBonus;
+    });
+    return rows.sort((a, b) => (b.rankScore ?? -Infinity) - (a.rankScore ?? -Infinity));
+  }
+
+  // ---------- Sub-tab: Watchlist Fundamental (ranking) ----------
+  async function loadHoldRanked(){
+    const el = document.getElementById('holdRankedView');
+    el.innerHTML = `<div class="loading-msg">Memuat watchlist fundamental...</div>`;
+    const { collection, getDocs, doc, getDoc } = firestoreFns;
+    try{
+      const fundSnap = await getDocs(collection(db, 'fundamentalData'));
+      if(fundSnap.empty){
+        el.innerHTML = `<div class="empty-state">
+          <div class="big">🏛️</div>
+          <div class="msg">Belum ada saham di Watchlist Fundamental.</div>
+          <div class="sub">Tambah lewat tab "Kandidat dari Radar" atau isi manual di tab "Input / Edit Manual".</div>
+        </div>`;
+        fundamentalDocsCache = [];
+        return;
+      }
+      const { latestDate } = await getTradingDatesIndex();
+      const docs = fundSnap.docs.map(d => ({ id: d.id, ...d.data() }));
+      fundamentalDocsCache = docs;
+
+      const { results } = await runWithConcurrency(docs, 15, async (fd) => {
+        const priceSnap = await getDoc(doc(db, 'dailySummary', latestDate, 'stocks', fd.id));
+        const price = priceSnap.exists() ? (priceSnap.data().close ?? null) : null;
+        const metrics = computeFundamentalMetrics(fd.quarters || [], price);
+        return { ticker: fd.id, companyName: fd.companyName, dividendYield: fd.dividendYield, price, metrics };
+      });
+
+      const ranked = rankFundamentalCandidates(results.filter(Boolean));
+      renderHoldRankedTable(ranked, latestDate);
+    }catch(err){
+      console.error('loadHoldRanked gagal:', err);
+      el.innerHTML = `<div class="msg-box error">✕ Gagal memuat watchlist fundamental: ${err.message}</div>`;
+    }
+  }
+
+  function renderHoldRankedTable(rows, latestDate){
+    const el = document.getElementById('holdRankedView');
+    let html = `<div class="msg-box info">🏆 Ranking otomatis: PBV rendah + ROE tinggi diprioritaskan, growth YoY positif jadi bonus kecil. Ini bantu urutan riset — <b>bukan</b> keputusan beli otomatis, tetap cek manual di Stockbit sebelum entry. Harga pakai closing ${latestDate ?? '-'}.</div>`;
+    html += `<table><thead><tr>
+      <th>Ticker</th><th>Harga</th><th>PBV</th><th>ROE</th><th>PER</th><th>EPS Growth YoY</th><th>Revenue Growth YoY</th><th>Div. Yield</th><th>Kuartal Terakhir</th><th>Aksi</th>
+    </tr></thead><tbody>`;
+    rows.forEach(r => {
+      const m = r.metrics;
+      const estTag = m?.isEstimate ? `<span class="metric-tag" title="Belum ada data kuartal sama tahun lalu + Q4 tahun lalu — dihitung run-rate dari YTD, bukan TTM presisi">estimasi</span>` : '';
+      html += `<tr>
+        <td class="ticker-cell">${r.ticker}${r.companyName ? `<span class="co-name">${r.companyName}</span>` : ''}</td>
+        <td>${fmtNum(r.price)}</td>
+        <td class="${m?.pbv!=null && m.pbv<1.5 ? 'pos':''}">${m?.pbv!=null ? m.pbv.toFixed(2)+'x' : '-'}</td>
+        <td class="${m?.roe!=null && m.roe>0.1 ? 'pos':''}">${m?.roe!=null ? (m.roe*100).toFixed(1)+'%' : '-'}</td>
+        <td>${m?.per!=null ? m.per.toFixed(1)+'x' : '-'} ${estTag}</td>
+        <td class="${m?.epsGrowthYoY>0?'pos':(m?.epsGrowthYoY<0?'neg':'')}">${m?.epsGrowthYoY!=null ? (m.epsGrowthYoY>=0?'+':'')+(m.epsGrowthYoY*100).toFixed(1)+'%' : '<span class="metric-note">butuh data YoY</span>'}</td>
+        <td class="${m?.revenueGrowthYoY>0?'pos':(m?.revenueGrowthYoY<0?'neg':'')}">${m?.revenueGrowthYoY!=null ? (m.revenueGrowthYoY>=0?'+':'')+(m.revenueGrowthYoY*100).toFixed(1)+'%' : '<span class="metric-note">butuh data YoY</span>'}</td>
+        <td>${r.dividendYield!=null ? r.dividendYield.toFixed(2)+'%' : '-'}</td>
+        <td>${m?.latestPeriod || '-'}</td>
+        <td style="white-space:nowrap;">
+          <button class="watchlist-btn" data-edit-fund="${r.ticker}">✏️ Edit</button>
+          <button class="watchlist-btn" data-del-fund="${r.ticker}" style="border-color:rgba(242,84,91,0.35); color:var(--negative);">🗑</button>
+        </td>
+      </tr>`;
+    });
+    html += `</tbody></table>`;
+    el.innerHTML = html;
+
+    el.querySelectorAll('[data-edit-fund]').forEach(btn => {
+      btn.addEventListener('click', () => {
+        holdPrefill = { ticker: btn.getAttribute('data-edit-fund') };
+        switchHoldSubview('input');
+      });
+    });
+    el.querySelectorAll('[data-del-fund]').forEach(btn => {
+      btn.addEventListener('click', async () => {
+        const ticker = btn.getAttribute('data-del-fund');
+        if(!confirm(`Hapus semua data fundamental ${ticker} dari Watchlist Fundamental? Data kuartalan yang sudah diinput akan hilang.`)) return;
+        await deleteFundamentalTicker(ticker);
+        loadHoldRanked();
+      });
+    });
+  }
+
+  async function deleteFundamentalTicker(ticker){
+    const { doc, deleteDoc } = firestoreFns;
+    try{
+      await deleteDoc(doc(db, 'fundamentalData', ticker));
+    }catch(err){
+      alert('Gagal menghapus: ' + err.message);
+    }
+  }
+
+  async function deleteFundamentalQuarter(ticker, period){
+    if(!confirm(`Hapus data kuartal ${period} untuk ${ticker}?`)) return;
+    const { doc, getDoc, setDoc } = firestoreFns;
+    try{
+      const ref = doc(db, 'fundamentalData', ticker);
+      const snap = await getDoc(ref);
+      if(!snap.exists()) return;
+      const data = snap.data();
+      const newQuarters = (data.quarters || []).filter(qt => qt.period !== period);
+      await setDoc(ref, { quarters: newQuarters, lastUpdated: new Date().toISOString() }, { merge: true });
+      const idx = fundamentalDocsCache ? fundamentalDocsCache.findIndex(d => d.id === ticker) : -1;
+      if(idx > -1) fundamentalDocsCache[idx] = { ...fundamentalDocsCache[idx], quarters: newQuarters };
+      renderFundInputForm();
+    }catch(err){
+      alert('Gagal menghapus kuartal: ' + err.message);
+    }
+  }
+
+  // ---------- Sub-tab: Input / Edit Manual ----------
+  async function renderFundInputForm(){
+    const el = document.getElementById('holdInputView');
+    el.innerHTML = `<div class="loading-msg">Memuat form...</div>`;
+    const prefillTicker = holdPrefill?.ticker || '';
+    const prefillCompany = holdPrefill?.companyName || '';
+    let existing = null;
+    if(prefillTicker){
+      try{
+        const { doc, getDoc } = firestoreFns;
+        const snap = await getDoc(doc(db, 'fundamentalData', prefillTicker));
+        existing = snap.exists() ? { id: prefillTicker, ...snap.data() } : null;
+      }catch(err){ console.error('Gagal ambil data existing:', err); }
+    }
+
+    el.innerHTML = `
+      <div class="fund-form-panel">
+        <h4>${existing ? `Edit Data Fundamental — ${existing.id}` : 'Tambah Data Fundamental'}</h4>
+        <div class="fp-sub">Input laporan keuangan kuartalan (angka kumulatif YTD sesuai laporan) + dividend yield. PBV, ROE, PER, dan growth YoY dihitung otomatis begitu disimpan.</div>
+        <div class="fund-grid">
+          <div class="fund-field"><label>Ticker</label><input type="text" id="fTicker" value="${prefillTicker}" placeholder="misal BBCA" style="text-transform:uppercase;" ${existing ? 'readonly' : ''}></div>
+          <div class="fund-field"><label>Nama Perusahaan</label><input type="text" id="fCompany" value="${existing?.companyName || prefillCompany || ''}" placeholder="opsional"></div>
+          <div class="fund-field"><label>Dividend Yield (%)</label><input type="number" step="0.01" id="fDivYield" value="${existing?.dividendYield ?? ''}" placeholder="misal 3.5"></div>
+        </div>
+        <div class="table-section-title" style="margin-top:14px;">Tambah / Update Data Kuartal</div>
+        <div class="fund-grid">
+          <div class="fund-field"><label>Tahun</label><input type="number" id="qYear" placeholder="2026" value="${new Date().getFullYear()}"></div>
+          <div class="fund-field"><label>Kuartal</label>
+            <select id="qQuarter">
+              <option value="1">Q1</option><option value="2">Q2</option><option value="3">Q3</option><option value="4">Q4</option>
+            </select>
+          </div>
+          <div class="fund-field"><label>Tanggal Laporan</label><input type="date" id="qReportDate"></div>
+          <div class="fund-field"><label>Laba Bersih YTD (Rp)</label><input type="number" id="qNetIncome" placeholder="misal 15000000000000"></div>
+          <div class="fund-field"><label>Pendapatan YTD (Rp)</label><input type="number" id="qRevenue" placeholder="misal 80000000000000"></div>
+          <div class="fund-field"><label>Total Ekuitas (Rp)</label><input type="number" id="qEquity" placeholder="misal 120000000000000"></div>
+          <div class="fund-field"><label>Jumlah Saham Beredar</label><input type="number" id="qShares" placeholder="misal 24000000000"></div>
+        </div>
+        <div class="table-section-title" style="margin-top:14px;">Kuartal Tersimpan</div>
+        <div id="quarterChips">${renderQuarterChips(existing?.quarters || [])}</div>
+        <div style="display:flex; gap:10px; margin-top:18px;">
+          <button class="btn-apply" style="width:auto; padding:11px 22px;" id="btnSaveFund">Simpan</button>
+          <button class="btn-reset" style="width:auto; padding:11px 22px;" id="btnCancelFund">Batal</button>
+        </div>
+        <div id="fundFormMsg"></div>
+      </div>
+    `;
+
+    document.getElementById('btnSaveFund').addEventListener('click', saveFundamentalData);
+    document.getElementById('btnCancelFund').addEventListener('click', () => { holdPrefill = null; switchHoldSubview('ranked'); });
+    el.querySelectorAll('[data-del-quarter]').forEach(chip => {
+      chip.addEventListener('click', () => deleteFundamentalQuarter(prefillTicker, chip.getAttribute('data-del-quarter')));
+    });
+  }
+
+  function renderQuarterChips(quarters){
+    if(!quarters || !quarters.length) return `<span class="metric-note">Belum ada data kuartal.</span>`;
+    return [...quarters].sort((a,b) => a.period < b.period ? 1 : -1).map(q =>
+      `<span class="quarter-chip">${q.period} <span class="qc-del" data-del-quarter="${q.period}">✕</span></span>`
+    ).join('');
+  }
+
+  async function saveFundamentalData(){
+    const btn = document.getElementById('btnSaveFund');
+    const msgEl = document.getElementById('fundFormMsg');
+    msgEl.innerHTML = '';
+
+    const ticker = document.getElementById('fTicker').value.trim().toUpperCase();
+    const companyName = document.getElementById('fCompany').value.trim();
+    const divYieldRaw = document.getElementById('fDivYield').value.trim();
+
+    const year = parseInt(document.getElementById('qYear').value, 10);
+    const q = parseInt(document.getElementById('qQuarter').value, 10);
+    const reportDate = document.getElementById('qReportDate').value || null;
+    const netIncomeYTD = parseFloat(document.getElementById('qNetIncome').value);
+    const revenueYTD = parseFloat(document.getElementById('qRevenue').value);
+    const totalEquity = parseFloat(document.getElementById('qEquity').value);
+    const sharesOutstanding = parseFloat(document.getElementById('qShares').value);
+
+    if(!ticker){ msgEl.innerHTML = `<div class="msg-box error">✕ Ticker wajib diisi.</div>`; return; }
+
+    const hasQuarterInput = [netIncomeYTD, revenueYTD, totalEquity, sharesOutstanding].some(v => !isNaN(v));
+    if(hasQuarterInput && (isNaN(year) || isNaN(q))){
+      msgEl.innerHTML = `<div class="msg-box error">✕ Tahun &amp; kuartal wajib diisi kalau mau nambah data kuartalan.</div>`;
+      return;
+    }
+
+    btn.disabled = true; btn.textContent = 'Menyimpan...';
+    try{
+      const { doc, getDoc, setDoc } = firestoreFns;
+      const ref = doc(db, 'fundamentalData', ticker);
+      const snap = await getDoc(ref);
+      const existingData = snap.exists() ? snap.data() : {};
+      let quarters = existingData.quarters || [];
+
+      if(hasQuarterInput){
+        const period = periodKey(year, q);
+        const newQuarter = {
+          period, reportDate,
+          netIncomeYTD: isNaN(netIncomeYTD) ? null : netIncomeYTD,
+          revenueYTD: isNaN(revenueYTD) ? null : revenueYTD,
+          totalEquity: isNaN(totalEquity) ? null : totalEquity,
+          sharesOutstanding: isNaN(sharesOutstanding) ? null : sharesOutstanding,
+        };
+        // ganti seluruh array quarters (bukan tulis field dot-notation nested) —
+        // sengaja hindari pola yang pernah bikin bug silent-write di Radar IDX dulu.
+        quarters = [...quarters.filter(qt => qt.period !== period), newQuarter];
+      }
+
+      const dividendYield = (divYieldRaw !== '' && !isNaN(parseFloat(divYieldRaw))) ? parseFloat(divYieldRaw) : (existingData.dividendYield ?? null);
+
+      await setDoc(ref, {
+        companyName: companyName || existingData.companyName || null,
+        dividendYield,
+        quarters,
+        lastUpdated: new Date().toISOString(),
+      });
+
+      msgEl.innerHTML = `<div class="msg-box success">✓ Data ${ticker} tersimpan.</div>`;
+      fundamentalDocsCache = null;
+      holdPrefill = { ticker };
+      setTimeout(() => switchHoldSubview('ranked'), 700);
+    }catch(err){
+      msgEl.innerHTML = `<div class="msg-box error">✕ Gagal menyimpan: ${err.message}</div>`;
+      btn.disabled = false; btn.textContent = 'Simpan';
     }
   }
 </script>
