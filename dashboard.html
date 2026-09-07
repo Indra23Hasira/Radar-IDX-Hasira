@@ -1766,7 +1766,7 @@
     try{
       const [rsSnap, fundSnap] = await Promise.all([
         getDocs(query(collection(db, 'tickerRollingStats'), where('matchCount', '>=', 1))),
-        getDocs(collection(db, 'tickerFundamental')),
+        getDocs(collection(db, 'holdFundamentalData')),
       ]);
       const already = new Set(fundSnap.docs.map(d => d.id));
       const candidates = rsSnap.docs
@@ -1891,7 +1891,7 @@
     el.innerHTML = `<div class="loading-msg">Memuat watchlist fundamental...</div>`;
     const { collection, getDocs, doc, getDoc } = firestoreFns;
     try{
-      const fundSnap = await getDocs(collection(db, 'tickerFundamental'));
+      const fundSnap = await getDocs(collection(db, 'holdFundamentalData'));
       if(fundSnap.empty){
         el.innerHTML = `<div class="empty-state">
           <div class="big">🏛️</div>
@@ -1967,7 +1967,7 @@
   async function deleteFundamentalTicker(ticker){
     const { doc, deleteDoc } = firestoreFns;
     try{
-      await deleteDoc(doc(db, 'tickerFundamental', ticker));
+      await deleteDoc(doc(db, 'holdFundamentalData', ticker));
     }catch(err){
       alert('Gagal menghapus: ' + err.message);
     }
@@ -1977,7 +1977,7 @@
     if(!confirm(`Hapus data kuartal ${period} untuk ${ticker}?`)) return;
     const { doc, getDoc, setDoc } = firestoreFns;
     try{
-      const ref = doc(db, 'tickerFundamental', ticker);
+      const ref = doc(db, 'holdFundamentalData', ticker);
       const snap = await getDoc(ref);
       if(!snap.exists()) return;
       const data = snap.data();
@@ -2001,7 +2001,7 @@
     if(prefillTicker){
       try{
         const { doc, getDoc } = firestoreFns;
-        const snap = await getDoc(doc(db, 'tickerFundamental', prefillTicker));
+        const snap = await getDoc(doc(db, 'holdFundamentalData', prefillTicker));
         existing = snap.exists() ? { id: prefillTicker, ...snap.data() } : null;
       }catch(err){ console.error('Gagal ambil data existing:', err); }
     }
@@ -2132,7 +2132,7 @@
     btn.disabled = true; btn.textContent = 'Menyimpan...';
     try{
       const { doc, getDoc, setDoc } = firestoreFns;
-      const ref = doc(db, 'tickerFundamental', ticker);
+      const ref = doc(db, 'holdFundamentalData', ticker);
       const snap = await getDoc(ref);
       const existingData = snap.exists() ? snap.data() : {};
       let quarters = existingData.quarters || [];
