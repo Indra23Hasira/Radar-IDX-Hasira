@@ -311,6 +311,7 @@
   <button class="tab-btn" id="tabWatchlistBtn">⭐ Watchlist <span id="watchlistCountBadge"></span></button>
   <button class="tab-btn" id="tabStatsBtn">📊 Statistik</button>
   <button class="tab-btn" id="tabHoldBtn">🏛️ Hold Jk. Panjang</button>
+  <button class="tab-btn" id="tabTopBtn">🎯 Top 3</button>
 </div>
 
 <div class="layout" id="mainLayout">
@@ -360,6 +361,7 @@
           <div class="view-toggle">
             <button class="active" id="sortMatchBtn">Kategori Dulu</button>
             <button id="sortScoreBtn">Score Dulu</button>
+            <button id="sortBLBtn" title="Urutkan: range hari ini kecil, kenaikan kecil, volatilitas rendah, foreign tinggi">Belum Lari Dulu</button>
           </div>
           <div class="view-toggle">
             <button class="active" id="viewCardsBtn">Kartu</button>
@@ -368,6 +370,7 @@
         </div>
       </div>
 
+      <div id="top3Callout"></div>
       <div id="dashboardContent"><div class="loading-msg">Memuat data...</div></div>
     </div>
 
@@ -383,6 +386,16 @@
         </div>
       </div>
       <div id="watchlistContent"><div class="loading-msg">Memuat watchlist...</div></div>
+    </div>
+
+    <div id="topSection" style="display:none;">
+      <div class="main-header">
+        <div>
+          <div class="main-title">Top 3 Harian — Uji ke Depan</div>
+          <div class="main-desc">Tiap hari, 3 saham paling "belum lari" dicatat otomatis lalu dilacak hasil 1-3 hari bursa berikutnya. Ini bukti jujur apakah aturannya benar-benar lebih baik dari memilih acak.</div>
+        </div>
+      </div>
+      <div id="topContent"><div class="loading-msg">Memuat...</div></div>
     </div>
 
     <div id="statsSection" style="display:none;">
@@ -524,20 +537,22 @@
     return Math.floor((new Date(toDate) - new Date(fromDate)) / 864e5); // fallback kalender
   }
 
-  document.getElementById('sortMatchBtn').addEventListener('click', () => {
-    sortMode = 'match';
-    document.getElementById('sortMatchBtn').classList.add('active');
-    document.getElementById('sortScoreBtn').classList.remove('active');
-    document.getElementById('mainDesc').textContent = 'Ranking berdasar jumlah kategori terpenuhi, lalu Total Score sebagai tie-breaker — makin banyak sinyal independen setuju, makin diprioritaskan.';
+  const SORT_DESC = {
+    match: 'Ranking berdasar jumlah kategori terpenuhi, lalu Total Score sebagai tie-breaker — makin banyak sinyal independen setuju, makin diprioritaskan.',
+    score: 'Ranking murni berdasar Total Score (Liquidity+Foreign+Technical digabung) — tidak peduli jumlah kategori, asal masih lolos batas minimal di kiri.',
+    bl: 'Ranking "Belum Lari": range hari ini kecil, kenaikan hari ini kecil, volatilitas (ATR10) rendah, foreign net tinggi — dibanding seluruh kandidat radar hari ini. Bantuan memilih, BELUM terbukti (lihat tab 🎯 Top 3).'
+  };
+  function setSortMode(mode){
+    sortMode = mode;
+    document.getElementById('sortMatchBtn').classList.toggle('active', mode === 'match');
+    document.getElementById('sortScoreBtn').classList.toggle('active', mode === 'score');
+    document.getElementById('sortBLBtn').classList.toggle('active', mode === 'bl');
+    document.getElementById('mainDesc').textContent = SORT_DESC[mode];
     renderDashboard(lastRenderedData);
-  });
-  document.getElementById('sortScoreBtn').addEventListener('click', () => {
-    sortMode = 'score';
-    document.getElementById('sortScoreBtn').classList.add('active');
-    document.getElementById('sortMatchBtn').classList.remove('active');
-    document.getElementById('mainDesc').textContent = 'Ranking murni berdasar Total Score (Liquidity+Foreign+Technical digabung) — tidak peduli jumlah kategori, asal masih lolos batas minimal di kiri.';
-    renderDashboard(lastRenderedData);
-  });
+  }
+  document.getElementById('sortMatchBtn').addEventListener('click', () => setSortMode('match'));
+  document.getElementById('sortScoreBtn').addEventListener('click', () => setSortMode('score'));
+  document.getElementById('sortBLBtn').addEventListener('click', () => setSortMode('bl'));
 
   // match kategori buttons
   document.querySelectorAll('.match-btn').forEach(btn => {
@@ -614,6 +629,304 @@
   }
 
   // ============================================================
+  // SKOR "BELUM LARI" + PELACAK TOP 3 HARIAN
+  // Dasar: tabel 8 di panel Diagnosa (Import Data). Saham radar yang range hari
+  // ini kecil, kenaikan hari ini kecil, volatilitas (ATR10) rendah, dan foreign
+  // net/volume tinggi cenderung lebih baik 1-3 hari berikutnya dibanding yang
+  // sudah "lari" duluan. Ini BARU arah (28 hari data, belum lolos uji 2x galat),
+  // jadi ditampilkan sebagai bantuan memilih + dilacak ke depan, BUKAN sinyal pasti.
+  // Murni tampilan/pencatatan: tidak mengubah deteksi kategori, skor, maupun Watchlist.
+  // ============================================================
+  const BL_FEE_PCT = 0.4; // perkiraan fee beli + jual
+  const BL_MIN_POOL = 6;  // hari dengan kandidat < 6 tidak dihitung di statistik
+
+  function blRanksAvg(vals){
+    const idx = vals.map((v,i)=>[v,i]).sort((a,b)=>a[0]-b[0]);
+    const r = new Array(vals.length);
+    let i = 0;
+    while(i < idx.length){
+      let j = i; while(j+1 < idx.length && idx[j+1][0] === idx[i][0]) j++;
+      const avg = (i+j)/2 + 1; for(let k=i;k<=j;k++) r[idx[k][1]] = avg;
+      i = j+1;
+    }
+    return r;
+  }
+
+  // hist = dokumen tickerHistory [terbaru..lama]; dipakai rumus yang SAMA dengan panel Diagnosa
+  function blFeatures(hist, latestDate){
+    if(!hist || !hist.length || hist[0].date !== latestDate) return null;
+    const d = hist[0];
+    if(!(d.close > 0) || !(d.volume > 0)) return null;
+    const rangeD = ((d.high||0) - (d.low||0)) / d.close * 100;
+    const chgD = d.changePct || 0;
+    const frD = (((d.foreignBuy||0) - (d.foreignSell||0)) / d.volume) * 100;
+    if(hist.length < 10) return null;
+    const win10 = hist.slice(0,10).reverse(); // lama -> baru
+    const trs = win10.map((x,i)=>{
+      const pc = i>0 ? win10[i-1].close : (x.prevClose || x.close);
+      return Math.max((x.high||0)-(x.low||0), Math.abs((x.high||0)-pc), Math.abs((x.low||0)-pc));
+    });
+    const atrPct = (trs.reduce((a,b)=>a+b,0)/trs.length) / d.close * 100;
+    const f = { rangeD, atrPct, chgD, frD };
+    return Object.values(f).every(isFinite) ? f : null;
+  }
+
+  // items: [{ticker, bl:{...}}]. Hasil: array {ticker, score (0-100, makin tinggi makin "belum lari"),
+  // rank (1=terbaik), sudahLari (20% paling "sudah lari")} — peringkat dihitung DI DALAM kelompok yang diberikan.
+  function blRankItems(items){
+    const valid = items.filter(x => x.bl);
+    const n = valid.length;
+    if(!n) return [];
+    const rr = blRanksAvg(valid.map(x=>x.bl.rangeD));
+    const ra = blRanksAvg(valid.map(x=>x.bl.atrPct));
+    const rc = blRanksAvg(valid.map(x=>x.bl.chgD));
+    const rf = blRanksAvg(valid.map(x=>x.bl.frD));
+    const comp3All = valid.map((x,i)=> (rr[i] + ra[i] + rc[i]) / 3); // makin besar makin "sudah lari"
+    const rk3 = blRanksAvg(comp3All);
+    const out = valid.map((x,i)=>{
+      const comp4 = (rr[i] + ra[i] + rc[i] + (n + 1 - rf[i])) / 4; // makin kecil makin baik
+      return { ticker: x.ticker, comp4,
+        score: n>1 ? Math.round(100*(1 - (comp4-1)/(n-1))) : 50,
+        sudahLari: n>=5 && ((rk3[i]-1)/(n-1)) >= 0.8 };
+    });
+    const order = out.map((o,i)=>[o.comp4, i]).sort((a,b)=>a[0]-b[0]);
+    order.forEach(([,i],pos)=>{ out[i].rank = pos+1; });
+    return out;
+  }
+
+  // ---- hasil nyata satu ticker: entry OPEN hari bursa berikutnya setelah tanggal sinyal ----
+  function blOutcome(rowsByDate, dates, si){
+    const ds = [1,2,3].map(k => dates[si+k]);
+    const rows = ds.map(d => d ? rowsByDate[d] : null);
+    const r1 = rows[0];
+    if(!ds[0]) return { state:'pending', done:0 };
+    if(!r1 || !(r1.open > 0)) return { state:'invalid' };
+    const entry = r1.open;
+    const o = { state:'ok', h1:null, h2:null, h3:null, maxUp:null, minDn:null, done:0 };
+    let hi = -Infinity, lo = Infinity;
+    for(let k=0;k<3;k++){
+      const r = rows[k];
+      if(!ds[k]){ break; }
+      if(!r || !(r.close>0 && r.high>0 && r.low>0)) return { state:'invalid' };
+      o['h'+(k+1)] = (r.close/entry - 1)*100;
+      hi = Math.max(hi, r.high); lo = Math.min(lo, r.low);
+      o.done = k+1;
+    }
+    o.maxUp = (hi/entry - 1)*100; o.minDn = (lo/entry - 1)*100;
+    return o;
+  }
+
+  // dayRecords: [{date, mode, picks:[outcome], pool:[outcome], poolSize}]
+  function blAggregate(dayRecords){
+    const mean = a => a.length ? a.reduce((x,y)=>x+y,0)/a.length : null;
+    const sd = a => { if(a.length<2) return null; const m=mean(a); return Math.sqrt(a.reduce((s,x)=>s+(x-m)**2,0)/(a.length-1)); };
+    const days = dayRecords.filter(d => d.poolSize >= BL_MIN_POOL && d.picks.some(p=>p.state==='ok' && p.done===3));
+    const dm = (d, key, grp) => mean(d[grp].filter(p=>p.state==='ok' && p.done===3).map(p=>p[key]));
+    const pickH = k => mean(days.map(d=>dm(d,k,'picks')).filter(v=>v!=null));
+    const diffs = days.map(d => { const a=dm(d,'h3','picks'), b=dm(d,'h3','pool'); return (a!=null && b!=null) ? a-b : null; }).filter(v=>v!=null);
+    const allPicks = days.flatMap(d => d.picks.filter(p=>p.state==='ok' && p.done===3));
+    const s = sd(diffs);
+    return {
+      nDays: days.length, nPicks: allPicks.length,
+      h1: pickH('h1'), h2: pickH('h2'), h3: pickH('h3'),
+      poolH3: mean(days.map(d=>dm(d,'h3','pool')).filter(v=>v!=null)),
+      diff: mean(diffs), se: s!=null ? s/Math.sqrt(diffs.length) : null,
+      up3: allPicks.length ? allPicks.filter(p=>p.maxUp>=3).length/allPicks.length*100 : null,
+      dn3: allPicks.length ? allPicks.filter(p=>p.minDn<=-3).length/allPicks.length*100 : null,
+      win3: allPicks.length ? allPicks.filter(p=>p.h3>0).length/allPicks.length*100 : null,
+    };
+  }
+
+  // ---------- state & cache ----------
+  let lastTopPicks = null;      // dokumen topPicks hari ini (atau hasil hitung lokal)
+  let lastTopPicksNote = '';    // pesan kalau pencatatan gagal
+  function blCacheGet(key){ try{ const s = localStorage.getItem(key); return s ? JSON.parse(s) : null; }catch(e){ return null; } }
+  function blCacheSet(key, val){ try{ localStorage.setItem(key, JSON.stringify(val)); }catch(e){} }
+  function blCachePrune(prefix, keepKey){
+    try{ Object.keys(localStorage).filter(k => k.startsWith(prefix) && k !== keepKey).forEach(k => localStorage.removeItem(k)); }catch(e){}
+  }
+
+  // Hitung fitur "belum lari" tiap kandidat radar (10 hari terakhir dari tickerHistory) lalu beri peringkat.
+  // Hasil ditempel ke tiap baris: r.bl, r.blScore, r.blRank, r.sudahLari. Tidak menyentuh field deteksi.
+  async function enrichBL(list, latestDate){
+    const { collection, getDocs, query, orderBy, limit } = firestoreFns;
+    const cacheKey = 'blFeat_' + latestDate;
+    const cache = blCacheGet(cacheKey) || {};
+    const need = list.filter(r => !(r.ticker in cache));
+    await runWithConcurrency(need, 15, async (r) => {
+      const snap = await getDocs(query(collection(db, 'tickerHistory', r.ticker, 'days'), orderBy('date', 'desc'), limit(10)));
+      const hist = snap.docs.map(d => d.data());
+      cache[r.ticker] = blFeatures(hist, latestDate); // null kalau data kurang
+    });
+    blCacheSet(cacheKey, cache);
+    blCachePrune('blFeat_', cacheKey);
+    list.forEach(r => { r.bl = cache[r.ticker] || null; r.blScore = null; r.blRank = null; r.sudahLari = false; });
+    const ranked = blRankItems(list.map(r => ({ ticker: r.ticker, bl: r.bl })));
+    const byT = new Map(ranked.map(x => [x.ticker, x]));
+    list.forEach(r => { const x = byT.get(r.ticker); if(x){ r.blScore = x.score; r.blRank = x.rank; r.sudahLari = x.sudahLari; } });
+  }
+
+  // Catat Top 3 hari ini SEKALI per tanggal (aturan dikunci: compF-v1), supaya bisa diuji ke depan tanpa bias.
+  async function ensureTopPicks(latestDate, list){
+    const { doc, getDoc, setDoc } = firestoreFns;
+    lastTopPicks = null; lastTopPicksNote = '';
+    const ref = doc(db, 'topPicks', latestDate);
+    let existing = null;
+    try{
+      const s = await getDoc(ref);
+      if(s.exists()) existing = s.data();
+    }catch(e){
+      lastTopPicksNote = 'Tidak bisa membaca koleksi topPicks (cek Firestore rules): ' + e.message;
+    }
+    if(existing){ lastTopPicks = existing; return; }
+
+    // snapshot hari bursa sebelumnya (kalau ada) -> tentukan kandidat "baru"
+    const { dates, indexOf } = await getTradingDatesIndex();
+    const i = indexOf.get(latestDate);
+    const prevDate = (i != null && i > 0) ? dates[i-1] : null;
+    let prevRadar = null;
+    if(prevDate){
+      try{ const ps = await getDoc(doc(db, 'topPicks', prevDate)); if(ps.exists()) prevRadar = ps.data().radar || null; }catch(e){}
+    }
+    const radar = {}; list.forEach(r => { radar[r.ticker] = r.matchCount; });
+    let mode = 'semua';
+    let cand = list.filter(r => r.bl);
+    if(prevRadar){
+      const fresh = cand.filter(r => (r.matchCount || 0) > (prevRadar[r.ticker] || 0));
+      if(fresh.length >= BL_MIN_POOL){ cand = fresh; mode = 'baru'; }
+    }
+    if(cand.length < BL_MIN_POOL){
+      lastTopPicksNote = `Kandidat dengan data lengkap hanya ${cand.length} (<${BL_MIN_POOL}), Top 3 hari ini tidak dicatat.`;
+      return;
+    }
+    const ranked = blRankItems(cand.map(r => ({ ticker: r.ticker, bl: r.bl }))).sort((a,b) => a.rank - b.rank);
+    const picks = ranked.slice(0,3).map(x => ({ ticker: x.ticker, rank: x.rank, score: x.score }));
+    const docData = {
+      date: latestDate, mode, rule: 'compF-v1', poolSize: cand.length,
+      candidates: cand.map(r => r.ticker), picks, radar, createdAt: new Date().toISOString(),
+    };
+    lastTopPicks = docData;
+    try{ await setDoc(ref, docData); }
+    catch(e){ lastTopPicksNote = 'Top 3 dihitung tapi GAGAL disimpan ke koleksi topPicks (cek Firestore rules): ' + e.message; }
+  }
+
+  function renderTop3Callout(){
+    const el = document.getElementById('top3Callout');
+    if(!el) return;
+    if(!lastTopPicks){
+      el.innerHTML = lastTopPicksNote ? `<div class="msg-box warning">${lastTopPicksNote}</div>` : '';
+      return;
+    }
+    const tp = lastTopPicks;
+    const chips = tp.picks.map((p,i) => {
+      const r = lastRenderedData.find(x => x.ticker === p.ticker);
+      const ch = r?.price?.changePct;
+      return `<span style="display:inline-block; margin:2px 10px 2px 0;"><b style="color:var(--gold);">#${i+1} ${p.ticker}</b> <span style="color:var(--text-faint); font-size:11px;">skor ${p.score}${ch!=null ? ' · hari ini ' + (ch>=0?'+':'') + ch.toFixed(2) + '%' : ''}</span></span>`;
+    }).join('');
+    el.innerHTML = `<div class="msg-box info" style="flex-direction:column; gap:4px;">
+      <div><b>🎯 Top 3 "Belum Lari" · ${tp.date}</b> <span style="opacity:.8;">(${tp.mode === 'baru' ? 'dari sinyal baru' : 'dari semua kandidat'}, ${tp.poolSize} saham)</span></div>
+      <div>${chips}</div>
+      <div style="font-size:11px; opacity:.85;">Bantuan memilih, <b>belum terbukti</b> — sedang diuji ke depan di tab 🎯 Top 3. Entry realistis = harga buka hari bursa berikutnya.${lastTopPicksNote ? '<br>⚠ ' + lastTopPicksNote : ''}</div>
+    </div>`;
+  }
+
+  // ---------- TAB TOP 3 ----------
+  async function fetchRowsAfter(ticker, date){
+    const { collection, getDocs, query, where, orderBy, limit } = firestoreFns;
+    const snap = await getDocs(query(collection(db, 'tickerHistory', ticker, 'days'), where('date', '>', date), orderBy('date', 'asc'), limit(3)));
+    const m = {}; snap.docs.forEach(d => { const x = d.data(); m[x.date] = x; });
+    return m;
+  }
+
+  async function loadTopPicksTab(){
+    const box = document.getElementById('topContent');
+    box.innerHTML = `<div class="loading-msg">Menghitung hasil Top 3...</div>`;
+    const { collection, getDocs } = firestoreFns;
+    try{
+      const { dates, indexOf } = await getTradingDatesIndex();
+      const latestIdx = dates.length - 1;
+      let snap;
+      try{ snap = await getDocs(collection(db, 'topPicks')); }
+      catch(e){ box.innerHTML = `<div class="msg-box warning">Tidak bisa membaca koleksi topPicks (cek Firestore rules): ${e.message}</div>`; return; }
+      const docs = snap.docs.map(d => d.data()).sort((a,b) => a.date < b.date ? 1 : -1); // terbaru dulu
+      if(!docs.length){
+        box.innerHTML = `<div class="empty-state"><div class="big">🎯</div><div class="msg">Belum ada Top 3 tercatat.</div><div class="sub">Buka tab Radar setelah data hari ini diimpor — Top 3 dicatat otomatis sekali per hari.</div></div>`;
+        return;
+      }
+      const cacheKey = 'blTopRes_v1';
+      const cache = blCacheGet(cacheKey) || {};
+      const records = [];
+      for(const d of docs){
+        const si = indexOf.get(d.date);
+        const avail = si == null ? 0 : latestIdx - si;
+        const rec = { date: d.date, mode: d.mode, poolSize: d.poolSize, picks: [], pool: [], pickTickers: d.picks.map(p => p.ticker), avail };
+        if(avail < 1){ rec.picks = d.picks.map(() => ({ state:'pending', done:0 })); records.push(rec); continue; }
+        if(avail >= 3 && cache[d.date]){ rec.picks = cache[d.date].picks; rec.pool = cache[d.date].pool; records.push(rec); continue; }
+        const outFor = async (t) => { const rows = await fetchRowsAfter(t, d.date); return blOutcome(rows, dates, si); };
+        const pk = await runWithConcurrency(d.picks.map(p => p.ticker), 6, outFor);
+        rec.picks = pk.results.map(x => x || { state:'invalid' });
+        if(avail >= 3){
+          const pl = await runWithConcurrency(d.candidates || [], 15, outFor);
+          rec.pool = pl.results.map(x => x || { state:'invalid' });
+          cache[d.date] = { picks: rec.picks, pool: rec.pool };
+        }
+        records.push(rec);
+      }
+      blCacheSet(cacheKey, cache);
+      const agg = blAggregate(records);
+      box.innerHTML = renderTopTab(records, agg);
+    }catch(err){
+      console.error('loadTopPicksTab gagal:', err);
+      box.innerHTML = `<div class="empty-state"><div class="big">⚠</div><div class="msg">Gagal menghitung.</div><div class="sub">${err.message}</div></div>`;
+    }
+  }
+
+  function renderTopTab(records, agg){
+    const pct = v => v == null ? '-' : (v>=0?'+':'') + v.toFixed(2) + '%';
+    const cls = v => v == null ? '' : (v >= 0 ? 'pos' : 'neg');
+    const MIN_DAYS = 15;
+    let verdict;
+    if(agg.nDays < MIN_DAYS){
+      verdict = `<div class="msg-box info">⏳ Belum cukup data untuk menilai: <b>${agg.nDays}/${MIN_DAYS}</b> hari selesai (butuh 3 hari bursa setelah tanggal pencatatan). Jangan ambil kesimpulan dulu.</div>`;
+    }else if(agg.diff >= 0.5 && agg.se != null && agg.diff > 2*agg.se && agg.h3 - BL_FEE_PCT > 0){
+      verdict = `<div class="msg-box success">✅ Aturan Top 3 lolos uji awal: selisih vs acak ${pct(agg.diff)} (&gt; 2× galat ${agg.se.toFixed(2)}) dan H3 setelah fee masih positif. Tetap analisa sebelum entry.</div>`;
+    }else{
+      verdict = `<div class="msg-box warning">⚠ Belum terbukti: selisih vs acak ${pct(agg.diff)} (galat ±${agg.se!=null?agg.se.toFixed(2):'-'}), H3 − fee ${pct(agg.h3 - BL_FEE_PCT)}. Perlu selisih ≥ +0,5 poin, &gt; 2× galat, dan H3 setelah fee positif.</div>`;
+    }
+    let html = `<div class="msg-box info" style="margin-top:0;">Uji ke depan: tiap hari 3 saham "paling belum lari" dicatat otomatis (aturan dikunci). Entry = harga <b>buka</b> hari bursa berikutnya, hasil = penutupan hari ke-1/2/3. Pembanding = rata-rata semua kandidat hari yang sama. Fee ±${BL_FEE_PCT}% belum dikurangkan di angka bawah kecuali disebut.</div>`;
+    html += verdict;
+    html += `<div class="stats-grid">
+      <div class="stats-card"><div class="sc-label">Hari selesai</div><div class="sc-val">${agg.nDays}</div><div class="sc-sub">${agg.nPicks} pick</div></div>
+      <div class="stats-card"><div class="sc-label">Rata-rata H1</div><div class="sc-val ${cls(agg.h1)}">${pct(agg.h1)}</div></div>
+      <div class="stats-card"><div class="sc-label">Rata-rata H2</div><div class="sc-val ${cls(agg.h2)}">${pct(agg.h2)}</div></div>
+      <div class="stats-card"><div class="sc-label">Rata-rata H3</div><div class="sc-val ${cls(agg.h3)}">${pct(agg.h3)}</div><div class="sc-sub">setelah fee: ${agg.h3!=null ? pct(agg.h3 - BL_FEE_PCT) : '-'}</div></div>
+      <div class="stats-card"><div class="sc-label">Semua kandidat (H3)</div><div class="sc-val ${cls(agg.poolH3)}">${pct(agg.poolH3)}</div></div>
+      <div class="stats-card"><div class="sc-label">Selisih vs acak</div><div class="sc-val ${cls(agg.diff)}">${pct(agg.diff)}</div><div class="sc-sub">± ${agg.se!=null?agg.se.toFixed(2):'-'} (galat)</div></div>
+      <div class="stats-card"><div class="sc-label">Pernah ≥ +3% (3 hari)</div><div class="sc-val">${agg.up3!=null?agg.up3.toFixed(0)+'%':'-'}</div></div>
+      <div class="stats-card"><div class="sc-label">Pernah ≤ −3% (3 hari)</div><div class="sc-val">${agg.dn3!=null?agg.dn3.toFixed(0)+'%':'-'}</div></div>
+      <div class="stats-card"><div class="sc-label">Close H3 &gt; entry</div><div class="sc-val">${agg.win3!=null?agg.win3.toFixed(0)+'%':'-'}</div></div>
+    </div>`;
+    html += `<div class="table-section-title">Per Tanggal</div><table><thead><tr><th>Tanggal</th><th>Mode</th><th>Kandidat</th><th>Pick (H3)</th><th>Rata H3 pick</th><th>Rata H3 semua</th><th>Selisih</th></tr></thead><tbody>`;
+    records.forEach(rec => {
+      const cells = rec.pickTickers.map((t,i) => {
+        const o = rec.picks[i] || {};
+        let txt;
+        if(o.state === 'pending' || (o.state === 'ok' && o.done < 3)) txt = o.state==='ok' ? `H${o.done} ${pct(o['h'+o.done])}` : 'menunggu';
+        else if(o.state === 'invalid') txt = 'data tdk valid';
+        else txt = pct(o.h3);
+        return `<b>${t}</b> <span class="${o.state==='ok' && o.done===3 ? cls(o.h3) : ''}">${txt}</span>`;
+      }).join(' &nbsp;·&nbsp; ');
+      const mean = a => a.length ? a.reduce((x,y)=>x+y,0)/a.length : null;
+      const pm = mean(rec.picks.filter(p=>p.state==='ok' && p.done===3).map(p=>p.h3));
+      const lm = mean(rec.pool.filter(p=>p.state==='ok' && p.done===3).map(p=>p.h3));
+      const df = (pm!=null && lm!=null) ? pm - lm : null;
+      html += `<tr><td>${rec.date}</td><td>${rec.mode === 'baru' ? 'sinyal baru' : 'semua'}</td><td>${rec.poolSize ?? '-'}</td><td style="font-family:'Inter'; font-size:12px;">${cells}</td><td class="${cls(pm)}">${pct(pm)}</td><td class="${cls(lm)}">${pct(lm)}</td><td class="${cls(df)}">${pct(df)}</td></tr>`;
+    });
+    html += `</tbody></table>`;
+    return html;
+  }
+
+  // ============================================================
   // LOAD DATA
   // ============================================================
   async function loadDashboard(){
@@ -671,6 +984,16 @@
 
       lastRenderedData = results.filter(Boolean);
 
+      // 2b. skor "belum lari" + catat Top 3 harian (tampilan/pencatatan saja, deteksi tidak berubah)
+      try{
+        await enrichBL(lastRenderedData, latestDate);
+        await ensureTopPicks(latestDate, lastRenderedData);
+      }catch(blErr){
+        console.warn('Skor Belum Lari gagal:', blErr);
+        lastTopPicksNote = 'Skor Belum Lari gagal dihitung: ' + blErr.message;
+      }
+      renderTop3Callout();
+
       // 3. status freshness
       const metaSnap = await getDoc(doc(db, 'systemMeta', 'technicalIndicators'));
       const indMeta = metaSnap.exists() ? metaSnap.data() : null;
@@ -706,6 +1029,7 @@
   document.getElementById('tabWatchlistBtn').addEventListener('click', () => switchTab('watchlist'));
   document.getElementById('tabStatsBtn').addEventListener('click', () => switchTab('stats'));
   document.getElementById('tabHoldBtn').addEventListener('click', () => switchTab('hold'));
+  document.getElementById('tabTopBtn').addEventListener('click', () => switchTab('top'));
 
   function switchTab(tab){
     currentTab = tab;
@@ -713,14 +1037,17 @@
     document.getElementById('tabWatchlistBtn').classList.toggle('active', tab === 'watchlist');
     document.getElementById('tabStatsBtn').classList.toggle('active', tab === 'stats');
     document.getElementById('tabHoldBtn').classList.toggle('active', tab === 'hold');
+    document.getElementById('tabTopBtn').classList.toggle('active', tab === 'top');
     document.getElementById('radarSection').style.display = tab === 'radar' ? 'block' : 'none';
     document.getElementById('watchlistSection').style.display = tab === 'watchlist' ? 'block' : 'none';
     document.getElementById('statsSection').style.display = tab === 'stats' ? 'block' : 'none';
     document.getElementById('holdSection').style.display = tab === 'hold' ? 'block' : 'none';
-    document.getElementById('mainLayout').classList.toggle('watchlist-mode', tab === 'watchlist' || tab === 'stats' || tab === 'hold');
+    document.getElementById('topSection').style.display = tab === 'top' ? 'block' : 'none';
+    document.getElementById('mainLayout').classList.toggle('watchlist-mode', tab === 'watchlist' || tab === 'stats' || tab === 'hold' || tab === 'top');
     if(tab === 'watchlist') loadWatchlist();
     if(tab === 'stats') loadStats();
     if(tab === 'hold') loadHoldSection();
+    if(tab === 'top') loadTopPicksTab();
   }
 
   function updateWatchlistCountBadge(n){
@@ -1496,11 +1823,20 @@
     return 'Rp ' + fmtNum(v);
   }
 
+  function blBadges(r){
+    if(r.blScore == null) return '';
+    let h = `<span class="cat-badge" title="Skor 0-100: makin tinggi makin 'belum lari' (range kecil, kenaikan kecil, ATR rendah, foreign tinggi) dibanding kandidat radar lain hari ini. Peringkat #${r.blRank}. BELUM terbukti.">🧭 Belum Lari ${r.blScore}</span>`;
+    if(r.sudahLari) h += `<span class="phase-badge risk" title="Termasuk 20% kandidat yang paling sudah bergerak/volatil hari ini — di data uji, kelompok ini paling buruk untuk entry 1-3 hari.">⚠ Sudah Lari</span>`;
+    return h;
+  }
+
   function renderDashboard(data){
     const content = document.getElementById('dashboardContent');
     const sortFn = sortMode === 'match'
       ? (a,b) => (b.matchCount - a.matchCount) || ((b.liveScore||0) - (a.liveScore||0))
-      : (a,b) => ((b.liveScore||0) - (a.liveScore||0)) || (b.matchCount - a.matchCount);
+      : sortMode === 'bl'
+        ? (a,b) => ((b.blScore ?? -1) - (a.blScore ?? -1)) || (b.matchCount - a.matchCount) || ((b.liveScore||0) - (a.liveScore||0))
+        : (a,b) => ((b.liveScore||0) - (a.liveScore||0)) || (b.matchCount - a.matchCount);
     const filtered = data
       .filter(r => r.matchCount >= matchThreshold)
       .map(r => ({ ...r, liveScore: computeLiveScore(r) }))
@@ -1551,7 +1887,7 @@
               <button class="watchlist-btn ${watchlistTickers.has(r.ticker)?'saved':''}" data-ticker="${r.ticker}" style="margin-top:6px;">${watchlistTickers.has(r.ticker) ? '★ Tersimpan' : '☆ Watchlist'}</button>
             </div>
           </div>
-          <div class="cat-badges">${tags.map(t => `<span class="cat-badge">${t}</span>`).join('')}${phaseTags.map(p => `<span class="phase-badge ${p.cls}" title="${p.note.replace(/"/g,'&quot;')}">${p.label}</span>`).join('')}${r.distributionWarning ? `<span class="distribution-badge">⚠ Distribusi</span>` : ''}</div>
+          <div class="cat-badges">${tags.map(t => `<span class="cat-badge">${t}</span>`).join('')}${phaseTags.map(p => `<span class="phase-badge ${p.cls}" title="${p.note.replace(/"/g,'&quot;')}">${p.label}</span>`).join('')}${r.distributionWarning ? `<span class="distribution-badge">⚠ Distribusi</span>` : ''}${blBadges(r)}</div>
           ${phaseTags.filter(p=>p.cls==='risk').map(p => `<div class="risk-banner">🟠 ${p.note}</div>`).join('')}
           ${phaseTags.filter(p=>p.cls==='reversal').map(p => `<div class="reversal-banner">🔄 ${p.note}</div>`).join('')}
           ${phaseTags.filter(p=>p.cls==='momentum').map(p => `<div class="momentum-banner">🔵 ${p.note}</div>`).join('')}
@@ -1614,7 +1950,8 @@
         const phaseTags = computeSignalPhase(r);
         const warningCell = [
           ...phaseTags.map(p => `<span class="phase-badge ${p.cls}" title="${p.note.replace(/"/g,'&quot;')}">${p.label}</span>`),
-          r.distributionWarning ? '<span class="distribution-badge">⚠ Distribusi</span>' : ''
+          r.distributionWarning ? '<span class="distribution-badge">⚠ Distribusi</span>' : '',
+          blBadges(r)
         ].filter(Boolean).join(' ');
         html += `<tr>
           <td class="ticker-cell">${r.ticker}<span class="co-name">${r.companyName || ''}</span></td>
