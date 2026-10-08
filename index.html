@@ -2150,8 +2150,8 @@
     if(j+3 >= a.length) return null;
     const di = dateIdx.get(a[j].date);
     if(dateIdx.get(a[j+1].date)!==di+1 || dateIdx.get(a[j+2].date)!==di+2 || dateIdx.get(a[j+3].date)!==di+3) return null;
+    for(let k=1;k<=3;k++){ const r=a[j+k]; if(!(r.open>0 && r.high>0 && r.low>0 && r.close>0)) return null; }
     const entry = a[j+1].open;
-    if(!(entry > 0)) return null;
     const ret = k => (a[j+k].close/entry - 1)*100;
     let tpslRet = null, tpslTag = 'time';
     for(let k=1;k<=3;k++){
@@ -2301,8 +2301,11 @@
     // entry limit (pasang order di bawah close sinyal, berlaku 2 hari)
     function limitSim(level){
       const filled = [], unfilled = [];
+      let considered = 0;
       usable.forEach(e=>{
         const a = seriesAsc[e.ticker], i = e.idx;
+        if([1,2,3].some(k=>!(a[i+k].open>0 && a[i+k].high>0 && a[i+k].low>0 && a[i+k].close>0))) return;
+        considered++;
         const L = a[i].close*(1+level/100);
         let res = null;
         for(let k=1;k<=2 && !res;k++){
@@ -2323,8 +2326,8 @@
         if(res) filled.push(res); else unfilled.push(e);
       });
       return {
-        level, total: usable.length, nFilled: filled.length,
-        fillRate: usable.length ? filled.length/usable.length*100 : null,
+        level, total: considered, nFilled: filled.length,
+        fillRate: considered ? filled.length/considered*100 : null,
         ret3: diagMean(filled.map(f=>f.ret3)),
         win: filled.length ? filled.filter(f=>f.tpsl>0).length/filled.length*100 : null,
         tpsl: diagMean(filled.map(f=>f.tpsl)),
@@ -2333,7 +2336,7 @@
         nUnfilled: unfilled.length,
         unfilledOpenRet3: diagMean(unfilled.map(e=>e.ret3)),
         unfilledOpenTpsl: diagMean(unfilled.map(e=>e.tpslRet)),
-        base: filled.length ? baseOf(filled.map(f=>f.ev)) : null,
+        base: null,
       };
     }
     const limits = [0,-1,-2].map(limitSim);
@@ -2619,7 +2622,7 @@
   function renderExtras(ex, built){
     const pc = (v, d=2) => v==null ? '-' : (v>=0?'+':'') + v.toFixed(d) + '%';
     const cls = v => v==null ? '' : (v>=0 ? 'pos' : 'neg');
-    const withBase = (v, b) => v==null ? '<td>-</td>' : `<td class="${cls(v)}">${pc(v)}<br><span style="font-size:10px;color:var(--text-muted);">acak ${pc(b)}</span></td>`;
+    const withBase = (v, b) => v==null ? '<td>-</td>' : b==null ? `<td class="${cls(v)}">${pc(v)}</td>` : `<td class="${cls(v)}">${pc(v)}<br><span style="font-size:10px;color:var(--text-muted);">acak ${pc(b)}</span></td>`;
     const tp = built.tp, sl = built.sl;
 
     let h = `<div class="table-section-title" style="margin-top:28px;">5. Kapan sebaiknya jual? (entry di open besok)</div>
@@ -2642,7 +2645,7 @@
       `</tbody></table></div>`;
 
     const cands = [
-      ...ex.limits.filter(r=>r.nFilled>=30 && r.base).map(r=>({t:lvlTxt(r.level), n:r.nFilled, ret:r.ret3, base:r.base.ret3, tpsl:r.tpsl})),
+      
       ...ex.pullbacks.filter(r=>r.n>=30 && r.baseRet3!=null).map(r=>({t:`Masuk saat koreksi ≥${r.p}%`, n:r.n, ret:r.ret3, base:r.baseRet3, tpsl:r.tpsl})),
     ].filter(c=>c.ret>0 && c.tpsl>0 && c.ret - c.base >= 0.5).sort((a,b)=>(b.ret-b.base)-(a.ret-a.base));
     h += cands.length
