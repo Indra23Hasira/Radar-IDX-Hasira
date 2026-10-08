@@ -338,7 +338,7 @@
       <div class="step-num">🎯</div>
       <div class="step-title">Utilitas: Diagnosa Pemenang vs Pecundang (entry realistis)</div>
     </div>
-    <div class="msg-box info">ℹ Menjawab: <b>faktor apa yang membedakan saham radar yang naik 2-3 hari dari yang merah?</b> Entry dihitung di <b>open hari berikutnya</b> (harga paling awal yang benar-benar bisa kamu beli), lalu dicari filter yang tetap bekerja di data yang tidak dipakai untuk mencarinya. Murni analisis: tidak mengubah deteksi, Watchlist, atau data apa pun.</div>
+    <div class="msg-box info">ℹ Menjawab: <b>faktor apa yang membedakan saham radar yang naik 2-3 hari dari yang merah?</b> Entry dihitung di <b>open hari berikutnya</b> (harga paling awal yang benar-benar bisa kamu beli), lalu dicari filter yang tetap bekerja di data yang tidak dipakai untuk mencarinya. Versi 2 juga menguji kapan jual, pasang limit beli, dan masuk saat koreksi, dibandingkan dengan saham acak yang volatilitasnya sama. Murni analisis: tidak mengubah deteksi, Watchlist, atau data apa pun.</div>
     <div style="display:flex; gap:12px; flex-wrap:wrap; margin-top:12px;">
       <div class="field" style="max-width:200px;"><label>Maks hari histori</label><input type="number" id="diagMaxDays" value="80" min="20" max="200" step="10"></div>
       <div class="field" style="max-width:140px;"><label>Take Profit (%)</label><input type="number" id="diagTp" value="3" min="0.5" step="0.5"></div>
@@ -2135,6 +2135,38 @@
     return 100 - 100/(1+rs);
   }
 
+  function diagAtrPct(a, i){
+    const win10 = a.slice(i-9, i+1);
+    const trs = win10.map((x,idx)=>{
+      const pc = idx>0 ? win10[idx-1].close : (x.prevClose || x.close);
+      return Math.max((x.high||0)-(x.low||0), Math.abs((x.high||0)-pc), Math.abs((x.low||0)-pc));
+    });
+    return a[i].close>0 ? (diagMean(trs)/a[i].close)*100 : null;
+  }
+
+  // hasil entry di OPEN hari j+1, ditahan sampai close j+3. null kalau 3 hari ke depan
+  // tidak berurutan di kalender bursa / harga tidak valid.
+  function diagOutcome(a, j, tp, sl, dateIdx){
+    if(j+3 >= a.length) return null;
+    const di = dateIdx.get(a[j].date);
+    if(dateIdx.get(a[j+1].date)!==di+1 || dateIdx.get(a[j+2].date)!==di+2 || dateIdx.get(a[j+3].date)!==di+3) return null;
+    const entry = a[j+1].open;
+    if(!(entry > 0)) return null;
+    const ret = k => (a[j+k].close/entry - 1)*100;
+    let tpslRet = null, tpslTag = 'time';
+    for(let k=1;k<=3;k++){
+      if(a[j+k].low  <= entry*(1 - sl/100)){ tpslRet = -sl; tpslTag = 'SL'; break; }
+      if(a[j+k].high >= entry*(1 + tp/100)){ tpslRet = tp;  tpslTag = 'TP'; break; }
+    }
+    const ret3 = ret(3);
+    if(tpslRet === null) tpslRet = ret3;
+    return {
+      entry, ret1: ret(1), ret2: ret(2), ret3, tpslRet, tpslTag,
+      maxUp3: (Math.max(a[j+1].high,a[j+2].high,a[j+3].high)/entry - 1)*100,
+      minDn3: (Math.min(a[j+1].low,a[j+2].low,a[j+3].low)/entry - 1)*100,
+    };
+  }
+
   // historyMap: {ticker: [terbaru..lama]}, eligible: [ticker]
   // opts: { tpPct, slPct }
   function diagBuildEvents(historyMap, eligible, opts){
@@ -2144,11 +2176,9 @@
     const allDates = Array.from(allDatesSet).sort();
     const dateIdx = new Map(allDates.map((d,i)=>[d,i]));
 
-    // series ascending per ticker
     const seriesAsc = {};
     eligible.forEach(t => { seriesAsc[t] = historyMap[t].slice().sort((a,b)=> a.date < b.date ? -1 : 1); });
 
-    // breadth pasar per tanggal
     const breadthByDate = {};
     allDates.forEach(d => breadthByDate[d] = { up:0, n:0 });
     eligible.forEach(t => seriesAsc[t].forEach(r => {
@@ -2156,7 +2186,6 @@
       b.n++; if((r.changePct||0) > 0) b.up++;
     }));
 
-    // daftar net foreign 3 hari per tanggal (buat percentile bigAccum)
     const nets3ByDate = {};
     eligible.forEach(t => {
       const a = seriesAsc[t];
@@ -2167,37 +2196,21 @@
     });
 
     const events = [];
-    const allRows = []; // semua ticker-hari (baseline acak): {date, ret3}
+    const allRows = []; // semua ticker-hari (baseline acak)
     eligible.forEach(t => {
       const a = seriesAsc[t];
       let prevMatch = null;
       for(let i=2;i<a.length;i++){
         const D = a[i];
-        // match window-3 hari ini (dipakai juga utk prevMatch)
         const lo = Math.max(0, i-20);
         const daysDesc = a.slice(lo, i+1).reverse();
         const r3 = detectCategoriesForWindow(daysDesc, 3, D, nets3ByDate[D.date] || []);
         const curMatch = r3 ? r3.matchCount : null;
 
-        // butuh 3 hari ke depan yang BERURUTAN di kalender bursa
-        const di = dateIdx.get(D.date);
-        const okFwd = i+3 < a.length &&
-          dateIdx.get(a[i+1].date)===di+1 && dateIdx.get(a[i+2].date)===di+2 && dateIdx.get(a[i+3].date)===di+3;
-        const entry = okFwd ? a[i+1].open : 0;
-
-        if(okFwd && entry > 0){
-          const ret = k => (a[i+k].close/entry - 1)*100;
-          const ret1 = ret(1), ret2 = ret(2), ret3 = ret(3);
-          // TP/SL
-          let tpslRet = null, tpslTag = 'time';
-          for(let k=1;k<=3;k++){
-            const hitSL = a[i+k].low  <= entry*(1 - sl/100);
-            const hitTP = a[i+k].high >= entry*(1 + tp/100);
-            if(hitSL){ tpslRet = -sl; tpslTag = 'SL'; break; }
-            if(hitTP){ tpslRet = tp;  tpslTag = 'TP'; break; }
-          }
-          if(tpslRet === null) tpslRet = ret3;
-          allRows.push({ date: D.date, ret3 });
+        const oc = diagOutcome(a, i, tp, sl, dateIdx);
+        if(oc){
+          const atr = i >= DIAG_MIN_LOOKBACK ? diagAtrPct(a, i) : null;
+          allRows.push({ date: D.date, ret1: oc.ret1, ret2: oc.ret2, ret3: oc.ret3, maxUp3: oc.maxUp3, minDn3: oc.minDn3, atr });
 
           if(i >= DIAG_MIN_LOOKBACK && curMatch != null && curMatch >= 1 && (prevMatch == null || curMatch > prevMatch)){
             const win10 = a.slice(i-9, i+1);
@@ -2206,31 +2219,26 @@
             const prior = a.slice(Math.max(0,i-20), i);
             const avgVol = diagMean(prior.map(x=>x.volume||0)) || 0;
             const range = (D.high||0)-(D.low||0);
-            const trs = win10.map((x,idx)=>{
-              const pc = idx>0 ? win10[idx-1].close : (x.prevClose || x.close);
-              return Math.max((x.high||0)-(x.low||0), Math.abs((x.high||0)-pc), Math.abs((x.low||0)-pc));
-            });
             const bd = breadthByDate[D.date];
             const bo = (D.bidVolume||0)+(D.offerVolume||0);
             events.push({
-              ticker: t, date: D.date, entry,
-              gapPct: (entry/D.close - 1)*100,
+              ticker: t, date: D.date, idx: i, entry: oc.entry,
+              gapPct: (oc.entry/D.close - 1)*100,
               chgD: D.changePct||0,
               closePos: range>0 ? (D.close-D.low)/range : 0.5,
               volRatio: avgVol>0 ? D.volume/avgVol : null,
               runup5: a[i-5] && a[i-5].close ? (D.close/a[i-5].close - 1)*100 : null,
               ext10: sma10>0 ? (D.close/sma10 - 1)*100 : null,
               rsi9: diagRsi(closes10),
-              atrPct: D.close>0 ? (diagMean(trs)/D.close)*100 : null,
+              atrPct: atr,
               rangeD: D.close>0 ? (range/D.close)*100 : null,
               frD: D.volume>0 ? (((D.foreignBuy||0)-(D.foreignSell||0))/D.volume)*100 : null,
               bidShare: bo>0 ? (D.bidVolume||0)/bo : null,
               breadth: bd && bd.n ? (bd.up/bd.n)*100 : null,
               matchCount: curMatch,
               price: D.close,
-              ret1, ret2, ret3, tpslRet, tpslTag,
-              maxUp3: (Math.max(a[i+1].high,a[i+2].high,a[i+3].high)/entry - 1)*100,
-              minDn3: (Math.min(a[i+1].low,a[i+2].low,a[i+3].low)/entry - 1)*100,
+              ret1: oc.ret1, ret2: oc.ret2, ret3: oc.ret3, tpslRet: oc.tpslRet, tpslTag: oc.tpslTag,
+              maxUp3: oc.maxUp3, minDn3: oc.minDn3,
             });
           }
         }
@@ -2238,7 +2246,6 @@
       }
     });
 
-    // pasar rata-rata per tanggal (buat alpha)
     const mk = {};
     allRows.forEach(r => { (mk[r.date] = mk[r.date] || []).push(r.ret3); });
     const mktRet3 = {};
@@ -2250,7 +2257,118 @@
       avgRet3: diagMean(allRows.map(r=>r.ret3)),
       win3: allRows.length ? allRows.filter(r=>r.ret3>0).length/allRows.length*100 : null,
     };
-    return { events, baseline, allDates, tp, sl };
+    return { events, baseline, allDates, tp, sl, allRows, seriesAsc, dateIdx };
+  }
+
+  // ---- analisis lanjutan: hari jual, entry limit/pullback, pembanding volatilitas sama ----
+  function diagExtras(built){
+    const { events, allRows, seriesAsc, dateIdx, tp, sl } = built;
+    const metrics = ['ret1','ret2','ret3','maxUp3','minDn3'];
+
+    // pembanding acak dengan volatilitas (ATR) sama: 5 kelompok ATR dari semua ticker-hari
+    const atrs = allRows.map(r=>r.atr).filter(v=>v!=null && isFinite(v)).sort((x,y)=>x-y);
+    const edges = [0.2,0.4,0.6,0.8].map(p=>diagQuantile(atrs,p));
+    const binOf = v => edges.filter(e=>v>e).length;
+    const binMeans = [0,1,2,3,4].map(b=>{
+      const rows = allRows.filter(r=>r.atr!=null && isFinite(r.atr) && binOf(r.atr)===b);
+      const o = { n: rows.length };
+      metrics.forEach(m=> o[m] = diagMean(rows.map(r=>r[m])));
+      o.win3 = rows.length ? rows.filter(r=>r.ret3>0).length/rows.length*100 : null;
+      return o;
+    });
+    const baseOf = list => {
+      const o = {};
+      metrics.forEach(m=> o[m] = diagMean(list.map(e=>binMeans[binOf(e.atrPct)][m])));
+      o.win3 = diagMean(list.map(e=>binMeans[binOf(e.atrPct)].win3));
+      return o;
+    };
+    const usable = events.filter(e=>e.atrPct!=null && isFinite(e.atrPct));
+
+    function exitRow(label, list){
+      if(!list.length) return { label, n:0 };
+      const o = { label, n: list.length, base: baseOf(list) };
+      metrics.forEach(m=> o[m] = diagMean(list.map(e=>e[m])));
+      o.win3 = list.filter(e=>e.ret3>0).length/list.length*100;
+      o.up3pct = list.filter(e=>e.maxUp3>=3).length/list.length*100;
+      o.dn3pct = list.filter(e=>e.minDn3<=-3).length/list.length*100;
+      return o;
+    }
+    const exits = [exitRow('Semua sinyal radar', usable)];
+    ['≥3','2','1'].forEach(k=>{
+      exits.push(exitRow('Kategori cocok: '+k, usable.filter(e=> (e.matchCount>=3 ? '≥3' : String(e.matchCount))===k)));
+    });
+
+    // entry limit (pasang order di bawah close sinyal, berlaku 2 hari)
+    function limitSim(level){
+      const filled = [], unfilled = [];
+      usable.forEach(e=>{
+        const a = seriesAsc[e.ticker], i = e.idx;
+        const L = a[i].close*(1+level/100);
+        let res = null;
+        for(let k=1;k<=2 && !res;k++){
+          const r = a[i+k];
+          if(r.low <= L){
+            const openFill = r.open <= L;
+            const fill = openFill ? r.open : L;
+            let rr = null, tag='time';
+            for(let m=k;m<=3;m++){
+              const x = a[i+m];
+              if(x.low <= fill*(1-sl/100)){ rr=-sl; tag='SL'; break; }
+              if((m>k || openFill) && x.high >= fill*(1+tp/100)){ rr=tp; tag='TP'; break; }
+            }
+            const ret3 = (a[i+3].close/fill - 1)*100;
+            res = { ev:e, ret3, tpsl: rr===null ? ret3 : rr, tag };
+          }
+        }
+        if(res) filled.push(res); else unfilled.push(e);
+      });
+      return {
+        level, total: usable.length, nFilled: filled.length,
+        fillRate: usable.length ? filled.length/usable.length*100 : null,
+        ret3: diagMean(filled.map(f=>f.ret3)),
+        win: filled.length ? filled.filter(f=>f.tpsl>0).length/filled.length*100 : null,
+        tpsl: diagMean(filled.map(f=>f.tpsl)),
+        sameOpenRet3: diagMean(filled.map(f=>f.ev.ret3)),
+        sameOpenTpsl: diagMean(filled.map(f=>f.ev.tpslRet)),
+        nUnfilled: unfilled.length,
+        unfilledOpenRet3: diagMean(unfilled.map(e=>e.ret3)),
+        unfilledOpenTpsl: diagMean(unfilled.map(e=>e.tpslRet)),
+        base: filled.length ? baseOf(filled.map(f=>f.ev)) : null,
+      };
+    }
+    const limits = [0,-1,-2].map(limitSim);
+
+    // masuk saat koreksi: saham yang sudah muncul di radar, lalu 1-3 hari kemudian
+    // close-nya turun >= p% dari puncak close sejak sinyal -> entry open hari berikutnya
+    function pullbackSim(p){
+      const picks = [];
+      let noPull = 0;
+      usable.forEach(e=>{
+        const a = seriesAsc[e.ticker], i = e.idx;
+        let peak = a[i].close, found = null;
+        for(let j=i+1;j<=i+3 && j<a.length;j++){
+          peak = Math.max(peak, a[j].close);
+          const dd = (peak/a[j].close - 1)*100;
+          if(dd >= p && dd <= 12){ found = j; break; }
+        }
+        if(found===null){ noPull++; return; }
+        const oc = diagOutcome(a, found, tp, sl, dateIdx);
+        if(oc) picks.push({ ev:e, oc, daysAfter: found-i });
+      });
+      const list = picks.map(x=>x.ev);
+      return {
+        p, n: picks.length, noPull,
+        ret3: diagMean(picks.map(x=>x.oc.ret3)),
+        win: picks.length ? picks.filter(x=>x.oc.tpslRet>0).length/picks.length*100 : null,
+        tpsl: diagMean(picks.map(x=>x.oc.tpslRet)),
+        tpRate: picks.length ? picks.filter(x=>x.oc.tpslTag==='TP').length/picks.length*100 : null,
+        slRate: picks.length ? picks.filter(x=>x.oc.tpslTag==='SL').length/picks.length*100 : null,
+        baseRet3: picks.length ? baseOf(list).ret3 : null,
+        avgDays: diagMean(picks.map(x=>x.daysAfter)),
+      };
+    }
+    const pullbacks = [2,4,6].map(pullbackSim);
+    return { exits, limits, pullbacks, nUsable: usable.length };
   }
 
   function diagRanks(vals){ // rank rata-rata utk korelasi Spearman
@@ -2432,7 +2550,8 @@
         return;
       }
       const an = diagAnalyze(built.events);
-      out.innerHTML = renderDiagnosa(an, built);
+      const ex = diagExtras(built);
+      out.innerHTML = renderDiagnosa(an, built) + renderExtras(ex, built);
     }catch(err){
       console.error(err);
       out.innerHTML = `<div class="msg-box error">✕ Gagal menjalankan diagnosa: ${err.message}</div>`;
@@ -2494,6 +2613,41 @@
     h += passed.length
       ? `<div class="msg-box success" style="margin-top:12px;">✅ ${passed.length} aturan lolos uji. Kandidat terkuat: <b>${passed.sort((a,b)=>b.st.avg-a.st.avg)[0].t}</b>. Ini kandidat untuk dicoba lot kecil, bukan bukti final: jalankan ulang tiap beberapa hari dan lihat apakah aturan yang sama tetap lolos.</div>`
       : `<div class="msg-box warning" style="margin-top:12px;">⚠ Belum ada aturan yang lolos uji di data uji. Artinya dengan histori sekarang belum ada filter tunggal/ganda yang terbukti, bukan berarti tidak ada. Lihat tabel 2 dan 3 untuk arah, dan ulangi setelah histori bertambah.</div>`;
+    return h;
+  }
+
+  function renderExtras(ex, built){
+    const pc = (v, d=2) => v==null ? '-' : (v>=0?'+':'') + v.toFixed(d) + '%';
+    const cls = v => v==null ? '' : (v>=0 ? 'pos' : 'neg');
+    const withBase = (v, b) => v==null ? '<td>-</td>' : `<td class="${cls(v)}">${pc(v)}<br><span style="font-size:10px;color:var(--text-muted);">acak ${pc(b)}</span></td>`;
+    const tp = built.tp, sl = built.sl;
+
+    let h = `<div class="table-section-title" style="margin-top:28px;">5. Kapan sebaiknya jual? (entry di open besok)</div>
+      <div class="msg-box info" style="margin-bottom:10px;">ℹ Angka kecil abu-abu = saham acak dengan <b>volatilitas yang sama</b> (adil, karena saham radar memang lebih liar dari rata-rata). "Puncak" = harga tertinggi yang sempat tersentuh dalam 3 hari (bukan harga jual yang pasti didapat); "titik terendah" = harga terendah yang sempat tersentuh.</div>
+      <div class="preview-table-wrap"><table><thead><tr><th>Kelompok</th><th>n</th><th>Jual close H1</th><th>Jual close H2</th><th>Jual close H3</th><th>Rata2 puncak 3 hari</th><th>Rata2 titik terendah</th><th>Pernah ≥ +3%</th><th>Pernah ≤ −3%</th></tr></thead><tbody>` +
+      ex.exits.map(r => r.n ? `<tr><td>${r.label}</td><td>${r.n}</td>${withBase(r.ret1,r.base.ret1)}${withBase(r.ret2,r.base.ret2)}${withBase(r.ret3,r.base.ret3)}${withBase(r.maxUp3,r.base.maxUp3)}${withBase(r.minDn3,r.base.minDn3)}<td>${r.up3pct.toFixed(0)}%</td><td>${r.dn3pct.toFixed(0)}%</td></tr>` : `<tr><td>${r.label}</td><td>0</td><td colspan="7">-</td></tr>`).join('') +
+      `</tbody></table></div>`;
+
+    const lvlTxt = l => l===0 ? 'Limit di harga close sinyal' : `Limit ${Math.abs(l)}% di bawah close sinyal`;
+    h += `<div class="table-section-title">6. Pasang limit beli (tunggu turun), bukan beli di open besok</div>
+      <div class="msg-box info" style="margin-bottom:10px;">ℹ Order limit berlaku 2 hari bursa; kalau harga tidak pernah turun ke level itu, order tidak terisi. Kalau terisi, ditahan sampai close hari ke-3 dengan TP +${tp}% / SL −${sl}% (hari terisi hanya dicek SL, supaya konservatif). Bandingkan "terisi" dengan "tidak terisi": kalau yang tidak terisi hasilnya jelek, limit berhasil menyaring saham yang langsung lari lalu turun.</div>
+      <div class="preview-table-wrap"><table><thead><tr><th>Order</th><th>Terisi</th><th>Return H3 (limit)</th><th>Menang</th><th>Hasil TP/SL</th><th>Kejadian sama kalau beli di open</th><th>Tidak terisi: n</th><th>Tidak terisi: kalau beli di open</th></tr></thead><tbody>` +
+      ex.limits.map(r => `<tr><td>${lvlTxt(r.level)}</td><td>${r.nFilled} dari ${r.total} (${r.fillRate!=null?r.fillRate.toFixed(0):'-'}%)</td>${withBase(r.ret3, r.base?r.base.ret3:null)}<td>${r.win!=null?r.win.toFixed(0)+'%':'-'}</td><td class="${cls(r.tpsl)}">${pc(r.tpsl)}</td><td class="${cls(r.sameOpenRet3)}">${pc(r.sameOpenRet3)}</td><td>${r.nUnfilled}</td><td class="${cls(r.unfilledOpenRet3)}">${pc(r.unfilledOpenRet3)}</td></tr>`).join('') +
+      `</tbody></table></div>`;
+
+    h += `<div class="table-section-title">7. Masuk saat koreksi setelah muncul di radar</div>
+      <div class="msg-box info" style="margin-bottom:10px;">ℹ Saham yang sudah muncul di radar, lalu dalam 1-3 hari close-nya turun minimal X% dari puncak close sejak sinyal (maksimal turun 12%, supaya bukan saham ambruk). Entry di open hari berikutnya, ditahan sampai close hari ke-3 sejak entry.</div>
+      <div class="preview-table-wrap"><table><thead><tr><th>Koreksi minimal</th><th>n</th><th>Rata2 hari setelah sinyal</th><th>Return H3</th><th>Menang</th><th>TP tercapai</th><th>SL tercapai</th><th>Sinyal tanpa koreksi</th></tr></thead><tbody>` +
+      ex.pullbacks.map(r => `<tr><td>${r.p}%</td><td>${r.n}</td><td>${r.avgDays!=null?r.avgDays.toFixed(1):'-'}</td>${withBase(r.ret3, r.baseRet3)}<td>${r.win!=null?r.win.toFixed(0)+'%':'-'}</td><td>${r.tpRate!=null?r.tpRate.toFixed(0)+'%':'-'}</td><td>${r.slRate!=null?r.slRate.toFixed(0)+'%':'-'}</td><td>${r.noPull}</td></tr>`).join('') +
+      `</tbody></table></div>`;
+
+    const cands = [
+      ...ex.limits.filter(r=>r.nFilled>=30 && r.base).map(r=>({t:lvlTxt(r.level), n:r.nFilled, ret:r.ret3, base:r.base.ret3, tpsl:r.tpsl})),
+      ...ex.pullbacks.filter(r=>r.n>=30 && r.baseRet3!=null).map(r=>({t:`Masuk saat koreksi ≥${r.p}%`, n:r.n, ret:r.ret3, base:r.baseRet3, tpsl:r.tpsl})),
+    ].filter(c=>c.ret>0 && c.tpsl>0 && c.ret - c.base >= 0.5).sort((a,b)=>(b.ret-b.base)-(a.ret-a.base));
+    h += cands.length
+      ? `<div class="msg-box success" style="margin-top:12px;">✅ Kandidat terbaik: <b>${cands[0].t}</b> (n=${cands[0].n}, return H3 ${pc(cands[0].ret)} vs acak ${pc(cands[0].base)}). Ini baru lolos syarat dasar (n≥30, positif, unggul ≥0,5 poin dari acak sevolatilitas), bukan bukti final: uji lot kecil dan jalankan ulang tiap beberapa hari.</div>`
+      : `<div class="msg-box warning" style="margin-top:12px;">⚠ Belum ada cara masuk di tabel 6-7 yang unggul jelas (n≥30, positif, ≥0,5 poin di atas acak sevolatilitas). Baca tabel 5 untuk melihat apakah ada ruang profit di hari ke-1 atau ke-2.</div>`;
     return h;
   }
 
