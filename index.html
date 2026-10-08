@@ -332,6 +332,26 @@
     <div id="backtestWindowResult"></div>
   </div>
 
+  <!-- UTILITAS: DIAGNOSA PEMENANG vs PECUNDANG -->
+  <div class="step-card" id="stepCardDiag">
+    <div class="step-head">
+      <div class="step-num">🎯</div>
+      <div class="step-title">Utilitas: Diagnosa Pemenang vs Pecundang (entry realistis)</div>
+    </div>
+    <div class="msg-box info">ℹ Menjawab: <b>faktor apa yang membedakan saham radar yang naik 2-3 hari dari yang merah?</b> Entry dihitung di <b>open hari berikutnya</b> (harga paling awal yang benar-benar bisa kamu beli), lalu dicari filter yang tetap bekerja di data yang tidak dipakai untuk mencarinya. Murni analisis: tidak mengubah deteksi, Watchlist, atau data apa pun.</div>
+    <div style="display:flex; gap:12px; flex-wrap:wrap; margin-top:12px;">
+      <div class="field" style="max-width:200px;"><label>Maks hari histori</label><input type="number" id="diagMaxDays" value="80" min="20" max="200" step="10"></div>
+      <div class="field" style="max-width:140px;"><label>Take Profit (%)</label><input type="number" id="diagTp" value="3" min="0.5" step="0.5"></div>
+      <div class="field" style="max-width:140px;"><label>Stop Loss (%)</label><input type="number" id="diagSl" value="3" min="0.5" step="0.5"></div>
+    </div>
+    <button class="btn btn-ghost" id="btnRunDiag" style="margin-top:4px;">🎯 Jalankan Diagnosa</button>
+    <div class="progress-wrap" id="progressWrapDiag">
+      <div class="progress-bar-outer"><div class="progress-bar-inner" id="progressBarDiag"></div></div>
+      <div class="progress-label" id="progressLabelDiag">Memproses 0 / 0 saham...</div>
+    </div>
+    <div id="diagResult"></div>
+  </div>
+
   <!-- HISTORY -->
   <div class="history-section">
     <div class="history-title">Riwayat Upload Terakhir</div>
@@ -2065,6 +2085,416 @@
     }finally{
       document.getElementById('btnRunBacktestWindow').disabled = false;
     }
+  }
+
+  // ============================================================
+  // UTILITAS: DIAGNOSA PEMENANG vs PECUNDANG (entry realistis)
+  // Tujuan: cari faktor yang BENAR-BENAR memisahkan sinyal yang naik 2-3 hari
+  // dari sinyal yang merah, memakai histori tickerHistory yang sudah ada.
+  //
+  // Beda dengan backtest window 2v3:
+  // - Entry = harga OPEN hari bursa BERIKUTNYA setelah sinyal (file RS baru ada
+  //   setelah market tutup, jadi itu harga paling awal yang bisa dibeli), bukan
+  //   close hari sinyal.
+  // - Hasil = return sampai close hari ke-3 + simulasi TP/SL (konservatif: kalau
+  //   TP & SL kesentuh di hari yang sama, dianggap SL dulu).
+  // - Dicari faktor pemisah, lalu ATURAN diuji di data yang TIDAK dipakai
+  //   mencarinya (60% tanggal awal = latihan, 40% tanggal akhir = uji).
+  // Murni analisis: tidak mengubah formula deteksi / Watchlist / data apa pun.
+  // ============================================================
+  const DIAG_MIN_LOOKBACK = 10;
+  const DIAG_FEATURES = [
+    { key:'gapPct',   label:'Gap open besok vs close sinyal (%)', hint:'bisa dicek pagi hari sebelum beli' },
+    { key:'chgD',     label:'Kenaikan di hari sinyal (%)' },
+    { key:'closePos', label:'Posisi close di range hari sinyal (0-1)' },
+    { key:'volRatio', label:'Volume Ratio hari sinyal (x rata-rata)' },
+    { key:'runup5',   label:'Kenaikan 5 hari SEBELUM sinyal (%)' },
+    { key:'ext10',    label:'Jarak close ke rata-rata 10 hari (%)' },
+    { key:'rsi9',     label:'RSI(9)' },
+    { key:'atrPct',   label:'Volatilitas ATR10 (% harga)' },
+    { key:'rangeD',   label:'Range hari sinyal (% harga)' },
+    { key:'frD',      label:'Foreign net / volume hari sinyal (%)' },
+    { key:'bidShare', label:'Porsi Bid vs (Bid+Offer) volume (0-1)' },
+    { key:'breadth',  label:'Breadth pasar hari sinyal (% saham naik)' },
+    { key:'matchCount', label:'Jumlah kategori cocok (window 3)' },
+    { key:'price',    label:'Harga saham (Rp)' },
+  ];
+
+  function diagMean(a){ return a.length ? a.reduce((x,y)=>x+y,0)/a.length : null; }
+
+  function diagRsi(closes){ // closes ascending, Wilder-sederhana (rata-rata biasa)
+    let g=0, l=0;
+    for(let i=1;i<closes.length;i++){
+      const d = closes[i]-closes[i-1];
+      if(d>0) g+=d; else l-=d;
+    }
+    const n = closes.length-1;
+    if(n<=0) return null;
+    if(l===0) return g===0 ? 50 : 100;
+    const rs = (g/n)/(l/n);
+    return 100 - 100/(1+rs);
+  }
+
+  // historyMap: {ticker: [terbaru..lama]}, eligible: [ticker]
+  // opts: { tpPct, slPct }
+  function diagBuildEvents(historyMap, eligible, opts){
+    const tp = (opts && opts.tpPct) || 3, sl = (opts && opts.slPct) || 3;
+    const allDatesSet = new Set();
+    eligible.forEach(t => historyMap[t].forEach(d => allDatesSet.add(d.date)));
+    const allDates = Array.from(allDatesSet).sort();
+    const dateIdx = new Map(allDates.map((d,i)=>[d,i]));
+
+    // series ascending per ticker
+    const seriesAsc = {};
+    eligible.forEach(t => { seriesAsc[t] = historyMap[t].slice().sort((a,b)=> a.date < b.date ? -1 : 1); });
+
+    // breadth pasar per tanggal
+    const breadthByDate = {};
+    allDates.forEach(d => breadthByDate[d] = { up:0, n:0 });
+    eligible.forEach(t => seriesAsc[t].forEach(r => {
+      const b = breadthByDate[r.date]; if(!b) return;
+      b.n++; if((r.changePct||0) > 0) b.up++;
+    }));
+
+    // daftar net foreign 3 hari per tanggal (buat percentile bigAccum)
+    const nets3ByDate = {};
+    eligible.forEach(t => {
+      const a = seriesAsc[t];
+      for(let i=2;i<a.length;i++){
+        const n3 = [a[i],a[i-1],a[i-2]].reduce((s,x)=>s+((x.foreignBuy||0)-(x.foreignSell||0)),0);
+        (nets3ByDate[a[i].date] = nets3ByDate[a[i].date] || []).push(n3 * (a[i].close||0));
+      }
+    });
+
+    const events = [];
+    const allRows = []; // semua ticker-hari (baseline acak): {date, ret3}
+    eligible.forEach(t => {
+      const a = seriesAsc[t];
+      let prevMatch = null;
+      for(let i=2;i<a.length;i++){
+        const D = a[i];
+        // match window-3 hari ini (dipakai juga utk prevMatch)
+        const lo = Math.max(0, i-20);
+        const daysDesc = a.slice(lo, i+1).reverse();
+        const r3 = detectCategoriesForWindow(daysDesc, 3, D, nets3ByDate[D.date] || []);
+        const curMatch = r3 ? r3.matchCount : null;
+
+        // butuh 3 hari ke depan yang BERURUTAN di kalender bursa
+        const di = dateIdx.get(D.date);
+        const okFwd = i+3 < a.length &&
+          dateIdx.get(a[i+1].date)===di+1 && dateIdx.get(a[i+2].date)===di+2 && dateIdx.get(a[i+3].date)===di+3;
+        const entry = okFwd ? a[i+1].open : 0;
+
+        if(okFwd && entry > 0){
+          const ret = k => (a[i+k].close/entry - 1)*100;
+          const ret1 = ret(1), ret2 = ret(2), ret3 = ret(3);
+          // TP/SL
+          let tpslRet = null, tpslTag = 'time';
+          for(let k=1;k<=3;k++){
+            const hitSL = a[i+k].low  <= entry*(1 - sl/100);
+            const hitTP = a[i+k].high >= entry*(1 + tp/100);
+            if(hitSL){ tpslRet = -sl; tpslTag = 'SL'; break; }
+            if(hitTP){ tpslRet = tp;  tpslTag = 'TP'; break; }
+          }
+          if(tpslRet === null) tpslRet = ret3;
+          allRows.push({ date: D.date, ret3 });
+
+          if(i >= DIAG_MIN_LOOKBACK && curMatch != null && curMatch >= 1 && (prevMatch == null || curMatch > prevMatch)){
+            const win10 = a.slice(i-9, i+1);
+            const closes10 = win10.map(x=>x.close||0);
+            const sma10 = diagMean(closes10);
+            const prior = a.slice(Math.max(0,i-20), i);
+            const avgVol = diagMean(prior.map(x=>x.volume||0)) || 0;
+            const range = (D.high||0)-(D.low||0);
+            const trs = win10.map((x,idx)=>{
+              const pc = idx>0 ? win10[idx-1].close : (x.prevClose || x.close);
+              return Math.max((x.high||0)-(x.low||0), Math.abs((x.high||0)-pc), Math.abs((x.low||0)-pc));
+            });
+            const bd = breadthByDate[D.date];
+            const bo = (D.bidVolume||0)+(D.offerVolume||0);
+            events.push({
+              ticker: t, date: D.date, entry,
+              gapPct: (entry/D.close - 1)*100,
+              chgD: D.changePct||0,
+              closePos: range>0 ? (D.close-D.low)/range : 0.5,
+              volRatio: avgVol>0 ? D.volume/avgVol : null,
+              runup5: a[i-5] && a[i-5].close ? (D.close/a[i-5].close - 1)*100 : null,
+              ext10: sma10>0 ? (D.close/sma10 - 1)*100 : null,
+              rsi9: diagRsi(closes10),
+              atrPct: D.close>0 ? (diagMean(trs)/D.close)*100 : null,
+              rangeD: D.close>0 ? (range/D.close)*100 : null,
+              frD: D.volume>0 ? (((D.foreignBuy||0)-(D.foreignSell||0))/D.volume)*100 : null,
+              bidShare: bo>0 ? (D.bidVolume||0)/bo : null,
+              breadth: bd && bd.n ? (bd.up/bd.n)*100 : null,
+              matchCount: curMatch,
+              price: D.close,
+              ret1, ret2, ret3, tpslRet, tpslTag,
+              maxUp3: (Math.max(a[i+1].high,a[i+2].high,a[i+3].high)/entry - 1)*100,
+              minDn3: (Math.min(a[i+1].low,a[i+2].low,a[i+3].low)/entry - 1)*100,
+            });
+          }
+        }
+        prevMatch = curMatch;
+      }
+    });
+
+    // pasar rata-rata per tanggal (buat alpha)
+    const mk = {};
+    allRows.forEach(r => { (mk[r.date] = mk[r.date] || []).push(r.ret3); });
+    const mktRet3 = {};
+    Object.keys(mk).forEach(d => mktRet3[d] = diagMean(mk[d]));
+    events.forEach(e => { e.alpha3 = e.ret3 - (mktRet3[e.date] || 0); });
+
+    const baseline = {
+      n: allRows.length,
+      avgRet3: diagMean(allRows.map(r=>r.ret3)),
+      win3: allRows.length ? allRows.filter(r=>r.ret3>0).length/allRows.length*100 : null,
+    };
+    return { events, baseline, allDates, tp, sl };
+  }
+
+  function diagRanks(vals){ // rank rata-rata utk korelasi Spearman
+    const idx = vals.map((v,i)=>[v,i]).sort((a,b)=>a[0]-b[0]);
+    const r = new Array(vals.length);
+    let i=0;
+    while(i<idx.length){
+      let j=i; while(j+1<idx.length && idx[j+1][0]===idx[i][0]) j++;
+      const avg=(i+j)/2+1; for(let k=i;k<=j;k++) r[idx[k][1]]=avg;
+      i=j+1;
+    }
+    return r;
+  }
+  function diagSpearman(x,y){
+    if(x.length<5) return null;
+    const rx=diagRanks(x), ry=diagRanks(y), mx=diagMean(rx), my=diagMean(ry);
+    let sxy=0,sxx=0,syy=0;
+    for(let i=0;i<rx.length;i++){ sxy+=(rx[i]-mx)*(ry[i]-my); sxx+=(rx[i]-mx)**2; syy+=(ry[i]-my)**2; }
+    return sxx>0&&syy>0 ? sxy/Math.sqrt(sxx*syy) : null;
+  }
+  function diagQuantile(sortedAsc, p){
+    if(!sortedAsc.length) return null;
+    const pos=(sortedAsc.length-1)*p, lo=Math.floor(pos), hi=Math.ceil(pos);
+    return sortedAsc[lo] + (sortedAsc[hi]-sortedAsc[lo])*(pos-lo);
+  }
+  function diagStats(list){
+    if(!list.length) return { n:0, avg:null, win:null, avgRet3:null, tpRate:null, slRate:null };
+    return {
+      n: list.length,
+      avg: diagMean(list.map(e=>e.tpslRet)),
+      avgRet3: diagMean(list.map(e=>e.ret3)),
+      win: list.filter(e=>e.tpslRet>0).length/list.length*100,
+      tpRate: list.filter(e=>e.tpslTag==='TP').length/list.length*100,
+      slRate: list.filter(e=>e.tpslTag==='SL').length/list.length*100,
+    };
+  }
+
+  function diagAnalyze(events){
+    const valid = events.filter(e=>isFinite(e.ret3));
+    const dates = Array.from(new Set(valid.map(e=>e.date))).sort();
+    const cut = Math.max(1, Math.floor(dates.length*0.6));
+    const trainDates = new Set(dates.slice(0,cut));
+    const train = valid.filter(e=>trainDates.has(e.date));
+    const test  = valid.filter(e=>!trainDates.has(e.date));
+
+    // 1. korelasi + tersil per fitur (semua event)
+    const featRows = DIAG_FEATURES.map(f=>{
+      const items = valid.filter(e=>e[f.key]!=null && isFinite(e[f.key]));
+      const xs = items.map(e=>e[f.key]);
+      const rho = diagSpearman(xs, items.map(e=>e.tpslRet));
+      const sorted = items.slice().sort((a,b)=>a[f.key]-b[f.key]);
+      const k = Math.floor(sorted.length/3);
+      const low = sorted.slice(0,k), mid = sorted.slice(k, sorted.length-k), high = sorted.slice(sorted.length-k);
+      return {
+        f, n: items.length, rho,
+        low: diagStats(low), mid: diagStats(mid), high: diagStats(high),
+        lowMax: low.length? low[low.length-1][f.key] : null,
+        highMin: high.length? high[0][f.key] : null,
+      };
+    }).sort((a,b)=> Math.abs(b.rho||0) - Math.abs(a.rho||0));
+
+    // 2. rata-rata fitur: pemenang (TP duluan) vs pecundang (SL duluan)
+    const winners = valid.filter(e=>e.tpslTag==='TP'), losers = valid.filter(e=>e.tpslTag==='SL');
+    const wl = DIAG_FEATURES.map(f=>({
+      f,
+      win: diagMean(winners.map(e=>e[f.key]).filter(v=>v!=null&&isFinite(v))),
+      lose: diagMean(losers.map(e=>e[f.key]).filter(v=>v!=null&&isFinite(v))),
+    }));
+
+    // 3. cari aturan di TRAIN, uji di TEST
+    const minTrain = Math.max(25, Math.round(train.length*0.08));
+    function ruleMatch(e, r){
+      const v = e[r.key]; if(v==null || !isFinite(v)) return false;
+      return r.dir === '>=' ? v >= r.cut : v <= r.cut;
+    }
+    const bestRules = [];
+    DIAG_FEATURES.forEach(f=>{
+      const vals = train.map(e=>e[f.key]).filter(v=>v!=null&&isFinite(v)).sort((a,b)=>a-b);
+      if(vals.length < minTrain*2) return;
+      let best = null;
+      [0.2,0.3,0.4,0.5,0.6,0.7,0.8].forEach(p=>{
+        const cut = diagQuantile(vals, p);
+        ['>=','<='].forEach(dir=>{
+          const r = { key:f.key, label:f.label, dir, cut };
+          const st = diagStats(train.filter(e=>ruleMatch(e,r)));
+          if(st.n >= minTrain && (best===null || st.avg > best.trainSt.avg)) best = { ...r, trainSt: st };
+        });
+      });
+      if(best) bestRules.push(best);
+    });
+    bestRules.sort((a,b)=>b.trainSt.avg - a.trainSt.avg);
+    bestRules.forEach(r=>{ r.testSt = diagStats(test.filter(e=>ruleMatch(e,r))); });
+
+    // 4. kombinasi 2 aturan dari 5 aturan terbaik (AND)
+    const top = bestRules.slice(0,5);
+    const combos = [];
+    for(let i=0;i<top.length;i++) for(let j=i+1;j<top.length;j++){
+      if(top[i].key===top[j].key) continue;
+      const fn = e => ruleMatch(e,top[i]) && ruleMatch(e,top[j]);
+      const tr = diagStats(train.filter(fn));
+      if(tr.n >= Math.max(15, Math.round(train.length*0.04))){
+        combos.push({ a:top[i], b:top[j], trainSt: tr, testSt: diagStats(test.filter(fn)) });
+      }
+    }
+    combos.sort((x,y)=>y.trainSt.avg - x.trainSt.avg);
+
+    // 5. per bucket matchCount (entry realistis)
+    const byMatch = {};
+    valid.forEach(e=>{ const k = e.matchCount>=3 ? '≥3' : String(e.matchCount); (byMatch[k]=byMatch[k]||[]).push(e); });
+    const matchRows = Object.keys(byMatch).sort((a,b)=> (b==='≥3'?99:+b) - (a==='≥3'?99:+a)).map(k=>({
+      bucket:k, st: diagStats(byMatch[k]),
+      gap: diagMean(byMatch[k].map(e=>e.gapPct)),
+      alpha: diagMean(byMatch[k].map(e=>e.alpha3)),
+    }));
+
+    return {
+      total: valid.length, train: train.length, test: test.length,
+      trainRange: [dates[0], dates[cut-1]], testRange: [dates[cut], dates[dates.length-1]],
+      all: diagStats(valid), trainAll: diagStats(train), testAll: diagStats(test),
+      alphaAll: diagMean(valid.map(e=>e.alpha3)),
+      featRows, wl, bestRules, combos, matchRows,
+      nWin: winners.length, nLose: losers.length,
+    };
+  }
+
+  document.getElementById('btnRunDiag').addEventListener('click', runDiagnosa);
+
+  function updateProgressDiag(done, total, label){
+    const pct = total ? Math.round((done/total)*100) : 0;
+    document.getElementById('progressBarDiag').style.width = pct + '%';
+    document.getElementById('progressLabelDiag').textContent = `${label || 'Memproses'} ${done} / ${total} saham... (${pct}%)`;
+  }
+
+  async function runDiagnosa(){
+    if(!firebaseReady) return;
+    const { collection, query, orderBy, limit, getDocs } = firestoreFns;
+    const out = document.getElementById('diagResult');
+    out.innerHTML = '';
+    document.getElementById('progressWrapDiag').style.display = 'block';
+    document.getElementById('btnRunDiag').disabled = true;
+    try{
+      const maxDays = parseInt(document.getElementById('diagMaxDays').value, 10) || 80;
+      const tpPct = parseFloat(document.getElementById('diagTp').value) || 3;
+      const slPct = parseFloat(document.getElementById('diagSl').value) || 3;
+
+      const metaSnap = await getDocs(query(collection(db, 'dailySummary'), orderBy('tradingDate', 'desc'), limit(1)));
+      if(metaSnap.empty){ out.innerHTML = `<div class="msg-box error">✕ Belum ada data dailySummary.</div>`; return; }
+      const latestDate = metaSnap.docs[0].data().tradingDate;
+      const stocksSnap = await getDocs(collection(db, 'dailySummary', latestDate, 'stocks'));
+      const minPrice = parseFloat(document.getElementById('minPriceFilter').value) || 0;
+      const minAvgValue = parseFloat(document.getElementById('minAvgValueFilter').value) || 0;
+      const minAvgFreq = parseFloat(document.getElementById('minAvgFreqFilter').value) || 0;
+      const universe = stocksSnap.docs.map(d => d.data()).filter(r => r.isActive && r.close >= minPrice);
+      if(!universe.length){ out.innerHTML = `<div class="msg-box error">✕ Tidak ada saham di universe.</div>`; return; }
+
+      updateProgressDiag(0, universe.length, 'Mengambil histori');
+      let fetched = 0;
+      const { results } = await runWithConcurrency(universe, 15, async (row) => {
+        const snap = await getDocs(query(collection(db, 'tickerHistory', row.ticker, 'days'), orderBy('date', 'desc'), limit(maxDays)));
+        fetched++;
+        updateProgressDiag(fetched, universe.length, 'Mengambil histori');
+        return { ticker: row.ticker, days: snap.docs.map(d => d.data()) };
+      });
+      const historyMap = {};
+      results.forEach(h => { if(h && h.days.length) historyMap[h.ticker] = h.days; });
+      const eligible = Object.keys(historyMap).filter(t => {
+        const days = historyMap[t];
+        const avgVal = days.reduce((a,d)=>a+(d.value||0),0) / days.length;
+        const avgFreq = days.reduce((a,d)=>a+(d.frequency||0),0) / days.length;
+        return avgVal >= minAvgValue && avgFreq >= minAvgFreq;
+      });
+      if(!eligible.length){ out.innerHTML = `<div class="msg-box error">✕ Tidak ada ticker yang lolos filter likuiditas.</div>`; return; }
+
+      updateProgressDiag(universe.length, universe.length, 'Menganalisis');
+      await sleep(30);
+      const built = diagBuildEvents(historyMap, eligible, { tpPct, slPct });
+      if(built.events.length < 30){
+        out.innerHTML = `<div class="msg-box warning">⚠ Baru ${built.events.length} sinyal yang punya 3 hari ke depan dan histori awal cukup (butuh ≥30). Histori tersedia: ${built.allDates.length} hari. Naikkan "Maks hari histori" atau tunggu histori bertambah.</div>`;
+        return;
+      }
+      const an = diagAnalyze(built.events);
+      out.innerHTML = renderDiagnosa(an, built);
+    }catch(err){
+      console.error(err);
+      out.innerHTML = `<div class="msg-box error">✕ Gagal menjalankan diagnosa: ${err.message}</div>`;
+    }finally{
+      document.getElementById('btnRunDiag').disabled = false;
+    }
+  }
+
+  function renderDiagnosa(an, built){
+    const pc = (v, d=2) => v==null ? '-' : (v>=0?'+':'') + v.toFixed(d) + '%';
+    const cls = v => v==null ? '' : (v>=0 ? 'pos' : 'neg');
+    const num = (v, d=2) => v==null ? '-' : v.toFixed(d);
+    const cell = st => st.n ? `<td>${st.n}</td><td class="${cls(st.avg)}">${pc(st.avg)}</td><td>${st.win.toFixed(0)}%</td>` : `<td>0</td><td>-</td><td>-</td>`;
+    const ruleTxt = r => `${r.label} ${r.dir} ${num(r.cut)}`;
+    const tp = built.tp, sl = built.sl;
+
+    let h = `<div class="msg-box info">ℹ Rentang histori: ${built.allDates[0]} s/d ${built.allDates[built.allDates.length-1]} (${built.allDates.length} hari bursa). Sampel = hari pertama saham MASUK radar (kategori window-3 naik dari hari sebelumnya), entry di <b>OPEN hari berikutnya</b>, ditahan sampai close hari ke-3, dengan TP +${tp}% / SL −${sl}% (kalau TP & SL kesentuh di hari yang sama dihitung SL). <b>${an.total} sinyal</b>, dibagi: latihan ${an.train} sinyal (${an.trainRange[0]} → ${an.trainRange[1]}), uji ${an.test} sinyal (${an.testRange[0]} → ${an.testRange[1]}).</div>`;
+
+    // A. ringkasan
+    h += `<div class="table-section-title">1. Seberapa bagus sinyal radar dengan entry realistis?</div>
+      <div class="preview-table-wrap"><table><thead><tr><th>Kelompok</th><th>n</th><th>Rata2 return hari-3 (dari open)</th><th>Menang (return&gt;0)</th><th>Hasil TP/SL rata2</th><th>TP tercapai</th><th>SL tercapai</th></tr></thead><tbody>
+      <tr><td>Semua saham, semua hari (acak)</td><td>${built.baseline.n}</td><td class="${cls(built.baseline.avgRet3)}">${pc(built.baseline.avgRet3)}</td><td>${built.baseline.win3.toFixed(0)}%</td><td>-</td><td>-</td><td>-</td></tr>
+      <tr><td><b>Sinyal radar (semua)</b></td><td>${an.all.n}</td><td class="${cls(an.all.avgRet3)}">${pc(an.all.avgRet3)}</td><td>${(an.all.n? an.all.win:0).toFixed(0)}%*</td><td class="${cls(an.all.avg)}">${pc(an.all.avg)}</td><td>${an.all.tpRate.toFixed(0)}%</td><td>${an.all.slRate.toFixed(0)}%</td></tr>
+      </tbody></table></div>
+      <p style="font-size:11px; color:var(--text-muted); margin-top:6px;">*Win rate di kolom ini = persen sinyal dengan hasil TP/SL &gt; 0. Selisih terhadap pasar rata-rata di hari yang sama (alpha): <b class="${cls(an.alphaAll)}">${pc(an.alphaAll)}</b>. Kalau alpha ≈ 0 atau negatif, radar belum lebih baik dari sekadar beli saham acak di hari yang sama.</p>`;
+
+    h += `<div class="preview-table-wrap" style="margin-top:10px;"><table><thead><tr><th>Bucket Match</th><th>n</th><th>Gap open rata2</th><th>Return hari-3</th><th>Alpha vs pasar</th><th>Hasil TP/SL</th><th>Menang</th></tr></thead><tbody>` +
+      an.matchRows.map(m=>`<tr><td>${m.bucket}</td><td>${m.st.n}</td><td>${pc(m.gap)}</td><td class="${cls(m.st.avgRet3)}">${pc(m.st.avgRet3)}</td><td class="${cls(m.alpha)}">${pc(m.alpha)}</td><td class="${cls(m.st.avg)}">${pc(m.st.avg)}</td><td>${m.st.win.toFixed(0)}%</td></tr>`).join('') +
+      `</tbody></table></div>`;
+
+    // B. faktor
+    h += `<div class="table-section-title">2. Faktor mana yang memisahkan menang vs kalah?</div>
+      <div class="msg-box info" style="margin-bottom:10px;">ℹ Semua sinyal dibagi 3 kelompok sama besar per faktor (Rendah / Tengah / Tinggi). Kolom hijau-merah = rata-rata hasil TP/SL. Korelasi (−1…+1) dihitung terhadap hasil TP/SL: makin jauh dari 0 makin kuat; dengan sampel sekecil ini, di bawah ±0,10 anggap noise.</div>
+      <div class="preview-table-wrap"><table><thead><tr><th>Faktor</th><th>Korelasi</th><th colspan="3">Rendah (≤ batas)</th><th colspan="3">Tengah</th><th colspan="3">Tinggi (≥ batas)</th></tr>
+      <tr><th></th><th></th><th>n</th><th>Hasil</th><th>Menang</th><th>n</th><th>Hasil</th><th>Menang</th><th>n</th><th>Hasil</th><th>Menang</th></tr></thead><tbody>` +
+      an.featRows.map(r=>`<tr><td>${r.f.label}${r.f.hint?`<br><span style="font-size:10px;color:var(--text-muted);">${r.f.hint}</span>`:''}</td><td class="${cls(r.rho)}">${num(r.rho,2)}</td>
+        ${cell(r.low).replace('<td>', '<td title="≤ '+num(r.lowMax)+'">')}${cell(r.mid)}${cell(r.high).replace('<td>', '<td title="≥ '+num(r.highMin)+'">')}</tr>`).join('') +
+      `</tbody></table></div>
+      <p style="font-size:11px; color:var(--text-muted); margin-top:6px;">Arahkan kursor ke kolom n untuk melihat batas Rendah/Tinggi.</p>`;
+
+    // C. pemenang vs pecundang
+    h += `<div class="table-section-title">3. Rata-rata faktor: sinyal kena TP duluan vs kena SL duluan</div>
+      <div class="preview-table-wrap"><table><thead><tr><th>Faktor</th><th>Pemenang (n=${an.nWin})</th><th>Pecundang (n=${an.nLose})</th></tr></thead><tbody>` +
+      an.wl.map(r=>`<tr><td>${r.f.label}</td><td>${num(r.win)}</td><td>${num(r.lose)}</td></tr>`).join('') +
+      `</tbody></table></div>`;
+
+    // D. aturan
+    const verdict = st => (st.n >= 15 && st.avg > 0 && st.avg > an.testAll.avg + 0.3) ? '✅ lolos' : (st.n < 15 ? '⚠ n kecil' : '✕ gagal');
+    h += `<div class="table-section-title">4. Aturan filter: dicari di data latihan, diuji di data uji</div>
+      <div class="msg-box warning" style="margin-bottom:10px;">⚠ Aturan terbaik di latihan sering cuma kebetulan. Yang dihitung hanya kolom <b>Uji</b>: ✅ kalau n ≥ 15, hasil rata-rata positif, dan lebih baik dari semua sinyal tanpa filter (${pc(an.testAll.avg)} di data uji) minimal 0,3 poin.</div>
+      <div class="preview-table-wrap"><table><thead><tr><th>Aturan (hanya ambil sinyal jika…)</th><th colspan="3">Latihan</th><th colspan="3">Uji</th><th>Vonis</th></tr>
+      <tr><th></th><th>n</th><th>Hasil</th><th>Menang</th><th>n</th><th>Hasil</th><th>Menang</th><th></th></tr></thead><tbody>
+      <tr><td><i>Tanpa filter (semua sinyal)</i></td>${cell(an.trainAll)}${cell(an.testAll)}<td>-</td></tr>` +
+      an.bestRules.map(r=>`<tr><td>${ruleTxt(r)}</td>${cell(r.trainSt)}${cell(r.testSt)}<td>${verdict(r.testSt)}</td></tr>`).join('') +
+      an.combos.slice(0,6).map(c=>`<tr><td>${ruleTxt(c.a)}<br><b>DAN</b> ${ruleTxt(c.b)}</td>${cell(c.trainSt)}${cell(c.testSt)}<td>${verdict(c.testSt)}</td></tr>`).join('') +
+      `</tbody></table></div>`;
+
+    const passed = [...an.bestRules.map(r=>({t:ruleTxt(r),st:r.testSt})), ...an.combos.map(c=>({t:ruleTxt(c.a)+' DAN '+ruleTxt(c.b),st:c.testSt}))].filter(x=>verdict(x.st)==='✅ lolos');
+    h += passed.length
+      ? `<div class="msg-box success" style="margin-top:12px;">✅ ${passed.length} aturan lolos uji. Kandidat terkuat: <b>${passed.sort((a,b)=>b.st.avg-a.st.avg)[0].t}</b>. Ini kandidat untuk dicoba lot kecil, bukan bukti final: jalankan ulang tiap beberapa hari dan lihat apakah aturan yang sama tetap lolos.</div>`
+      : `<div class="msg-box warning" style="margin-top:12px;">⚠ Belum ada aturan yang lolos uji di data uji. Artinya dengan histori sekarang belum ada filter tunggal/ganda yang terbukti, bukan berarti tidak ada. Lihat tabel 2 dan 3 untuk arah, dan ulangi setelah histori bertambah.</div>`;
+    return h;
   }
 
   function sleep(ms){ return new Promise(resolve => setTimeout(resolve, ms)); }
