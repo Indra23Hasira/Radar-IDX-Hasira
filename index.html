@@ -338,7 +338,7 @@
       <div class="step-num">🎯</div>
       <div class="step-title">Utilitas: Diagnosa Pemenang vs Pecundang (entry realistis)</div>
     </div>
-    <div class="msg-box info">ℹ Menjawab: <b>faktor apa yang membedakan saham radar yang naik 2-3 hari dari yang merah?</b> Entry dihitung di <b>open hari berikutnya</b> (harga paling awal yang benar-benar bisa kamu beli), lalu dicari filter yang tetap bekerja di data yang tidak dipakai untuk mencarinya. Versi 2 juga menguji kapan jual, pasang limit beli, dan masuk saat koreksi, dibandingkan dengan saham acak yang volatilitasnya sama. Murni analisis: tidak mengubah deteksi, Watchlist, atau data apa pun.</div>
+    <div class="msg-box info">ℹ Menjawab: <b>faktor apa yang membedakan saham radar yang naik 2-3 hari dari yang merah?</b> Entry dihitung di <b>open hari berikutnya</b> (harga paling awal yang benar-benar bisa kamu beli), lalu dicari filter yang tetap bekerja di data yang tidak dipakai untuk mencarinya. Juga menguji uji pilih Top 3/Top 5 per hari (tabel 8), kapan jual, pasang limit beli, dan masuk saat koreksi, dibandingkan dengan saham acak yang volatilitasnya sama. Murni analisis: tidak mengubah deteksi, Watchlist, atau data apa pun.</div>
     <div style="display:flex; gap:12px; flex-wrap:wrap; margin-top:12px;">
       <div class="field" style="max-width:200px;"><label>Maks hari histori</label><input type="number" id="diagMaxDays" value="80" min="20" max="200" step="10"></div>
       <div class="field" style="max-width:140px;"><label>Take Profit (%)</label><input type="number" id="diagTp" value="3" min="0.5" step="0.5"></div>
@@ -2374,6 +2374,68 @@
     return { exits, limits, pullbacks, nUsable: usable.length };
   }
 
+  // ---- uji cara pakai sebenarnya: pilih TOP-N saham per hari dari daftar radar ----
+  function diagHash(s){ let h=2166136261; for(let i=0;i<s.length;i++){ h^=s.charCodeAt(i); h=Math.imul(h,16777619); } return ((h>>>0)%100000)/1e9; }
+  function diagSd(a){ if(a.length<2) return null; const m=diagMean(a); return Math.sqrt(a.reduce((s,x)=>s+(x-m)**2,0)/(a.length-1)); }
+
+  function diagTopN(built, N){
+    const evs = built.events.filter(e => e.rangeD!=null && e.atrPct!=null && e.frD!=null &&
+      [e.ret1,e.ret2,e.ret3,e.maxUp3,e.minDn3,e.rangeD,e.atrPct,e.frD,e.chgD].every(isFinite));
+    const byDate = {};
+    evs.forEach(e => { (byDate[e.date] = byDate[e.date] || []).push(e); });
+    const dates = Object.keys(byDate).sort().filter(d => byDate[d].length >= N*2);
+
+    const strategies = [
+      { key:'match', label:'Radar apa adanya: kategori cocok terbanyak', score:(i,c)=> -c.match[i] + c.tie[i] },
+      { key:'range', label:'Range hari sinyal terkecil', score:(i,c)=> c.range[i] },
+      { key:'atr',   label:'Volatilitas (ATR10) terkecil', score:(i,c)=> c.atr[i] },
+      { key:'chg',   label:'Kenaikan hari sinyal terkecil', score:(i,c)=> c.chg[i] },
+      { key:'comp',  label:'Gabungan "belum lari" (range + ATR + kenaikan terkecil)', score:(i,c)=> (c.range[i]+c.atr[i]+c.chg[i])/3 },
+      { key:'compF', label:'Gabungan "belum lari" + foreign net tinggi', score:(i,c)=> (c.range[i]+c.atr[i]+c.chg[i]+(c.n+1-c.fr[i]))/4 },
+      { key:'worst', label:'Kebalikan: paling "sudah lari" (pembanding)', score:(i,c)=> -(c.range[i]+c.atr[i]+c.chg[i])/3 },
+    ];
+    const half = Math.floor(dates.length/2);
+    const M = ['ret1','ret2','ret3','maxUp3','minDn3'];
+    const acc = {};
+    strategies.forEach(s => acc[s.key] = { picks: [], diff3: [], diff3a: [], diff3b: [] });
+    const allPicked = [];
+
+    dates.forEach((d, di) => {
+      const arr = byDate[d];
+      const c = {
+        n: arr.length,
+        range: diagRanks(arr.map(e=>e.rangeD)), atr: diagRanks(arr.map(e=>e.atrPct)),
+        chg: diagRanks(arr.map(e=>e.chgD)), fr: diagRanks(arr.map(e=>e.frD)),
+        match: arr.map(e=>e.matchCount), tie: arr.map(e=>diagHash(e.ticker+d)),
+      };
+      const dayMean3 = diagMean(arr.map(e=>e.ret3));
+      arr.forEach(e => allPicked.push(e));
+      strategies.forEach(s => {
+        const order = arr.map((e,i)=>({e, sc:s.score(i,c)})).sort((a,b)=>a.sc-b.sc).slice(0,N).map(x=>x.e);
+        const a = acc[s.key];
+        order.forEach(e => a.picks.push(e));
+        const df = diagMean(order.map(e=>e.ret3)) - dayMean3;
+        a.diff3.push(df);
+        (di < half ? a.diff3a : a.diff3b).push(df);
+      });
+    });
+
+    const summarize = list => {
+      const o = { n: list.length };
+      M.forEach(m => o[m] = diagMean(list.map(e=>e[m])));
+      o.up3pct = list.length ? list.filter(e=>e.maxUp3>=3).length/list.length*100 : null;
+      o.dn3pct = list.length ? list.filter(e=>e.minDn3<=-3).length/list.length*100 : null;
+      return o;
+    };
+    const rows = strategies.map(s => {
+      const a = acc[s.key], sm = summarize(a.picks), sd = diagSd(a.diff3);
+      return { key:s.key, label:s.label, ...sm,
+        diff3: diagMean(a.diff3), se: sd!=null ? sd/Math.sqrt(a.diff3.length) : null,
+        diffA: diagMean(a.diff3a), diffB: diagMean(a.diff3b) };
+    });
+    return { N, nDays: dates.length, base: summarize(allPicked), rows };
+  }
+
   function diagRanks(vals){ // rank rata-rata utk korelasi Spearman
     const idx = vals.map((v,i)=>[v,i]).sort((a,b)=>a[0]-b[0]);
     const r = new Array(vals.length);
@@ -2554,7 +2616,7 @@
       }
       const an = diagAnalyze(built.events);
       const ex = diagExtras(built);
-      out.innerHTML = renderDiagnosa(an, built) + renderExtras(ex, built);
+      out.innerHTML = renderDiagnosa(an, built) + renderExtras(ex, built) + renderTopN(diagTopN(built,3), diagTopN(built,5));
     }catch(err){
       console.error(err);
       out.innerHTML = `<div class="msg-box error">✕ Gagal menjalankan diagnosa: ${err.message}</div>`;
@@ -2651,6 +2713,31 @@
     h += cands.length
       ? `<div class="msg-box success" style="margin-top:12px;">✅ Kandidat terbaik: <b>${cands[0].t}</b> (n=${cands[0].n}, return H3 ${pc(cands[0].ret)} vs acak ${pc(cands[0].base)}). Ini baru lolos syarat dasar (n≥30, positif, unggul ≥0,5 poin dari acak sevolatilitas), bukan bukti final: uji lot kecil dan jalankan ulang tiap beberapa hari.</div>`
       : `<div class="msg-box warning" style="margin-top:12px;">⚠ Belum ada cara masuk di tabel 6-7 yang unggul jelas (n≥30, positif, ≥0,5 poin di atas acak sevolatilitas). Baca tabel 5 untuk melihat apakah ada ruang profit di hari ke-1 atau ke-2.</div>`;
+    return h;
+  }
+
+  function renderTopN(t3, t5){
+    const pc = (v, d=2) => v==null ? '-' : (v>=0?'+':'') + v.toFixed(d) + '%';
+    const cls = v => v==null ? '' : (v>=0 ? 'pos' : 'neg');
+    const FEE = 0.4;
+    function table(t){
+      if(!t.nDays) return `<div class="msg-box warning">⚠ Belum ada hari dengan cukup sinyal untuk Top ${t.N}.</div>`;
+      const b = t.base;
+      let h = `<div class="preview-table-wrap"><table><thead><tr><th>Cara memilih (Top ${t.N} per hari, ${t.nDays} hari)</th><th>Pilihan</th><th>Jual H1</th><th>Jual H2</th><th>Jual H3</th><th>H3 setelah fee ${FEE}%</th><th>Selisih H3 vs acak (± galat)</th><th>Paruh awal / akhir</th><th>Pernah ≥ +3%</th><th>Pernah ≤ −3%</th></tr></thead><tbody>
+        <tr><td><i>Acak dari daftar radar hari itu</i></td><td>${b.n}</td><td class="${cls(b.ret1)}">${pc(b.ret1)}</td><td class="${cls(b.ret2)}">${pc(b.ret2)}</td><td class="${cls(b.ret3)}">${pc(b.ret3)}</td><td class="${cls(b.ret3-FEE)}">${pc(b.ret3-FEE)}</td><td>-</td><td>-</td><td>${b.up3pct.toFixed(0)}%</td><td>${b.dn3pct.toFixed(0)}%</td></tr>`;
+      t.rows.forEach(r => {
+        h += `<tr><td>${r.label}</td><td>${r.n}</td><td class="${cls(r.ret1)}">${pc(r.ret1)}</td><td class="${cls(r.ret2)}">${pc(r.ret2)}</td><td class="${cls(r.ret3)}">${pc(r.ret3)}</td><td class="${cls(r.ret3-FEE)}">${pc(r.ret3-FEE)}</td><td class="${cls(r.diff3)}">${pc(r.diff3)} <span style="font-size:10px;color:var(--text-muted);">± ${r.se!=null?r.se.toFixed(2):'-'}</span></td><td><span class="${cls(r.diffA)}">${pc(r.diffA)}</span> / <span class="${cls(r.diffB)}">${pc(r.diffB)}</span></td><td>${r.up3pct.toFixed(0)}%</td><td>${r.dn3pct.toFixed(0)}%</td></tr>`;
+      });
+      return h + '</tbody></table></div>';
+    }
+    let h = `<div class="table-section-title" style="margin-top:28px;">8. Uji cara pakai sebenarnya: pilih Top 3 / Top 5 per hari</div>
+      <div class="msg-box info" style="margin-bottom:10px;">ℹ Tiap hari, dari saham yang baru masuk radar, diambil Top N menurut satu cara memilih, entry di open besok, dibandingkan dengan memilih acak dari daftar yang sama di hari yang sama (jadi kondisi pasar ikut terimbang). <b>Selisih H3</b> = rata-rata keunggulan per hari; <b>± galat</b> = ketidakpastiannya (kalau selisih lebih kecil dari 2× galat, anggap kebetulan). <b>Paruh awal / akhir</b> = selisih yang sama dihitung terpisah di separuh hari pertama dan separuh hari terakhir; keunggulan sungguhan harus positif di keduanya. Baris "kebalikan" sengaja dipasang sebagai pembanding: kalau cara memilih benar, baris ini harus lebih buruk dari acak. Fee ${FEE}% = perkiraan fee beli + jual.</div>
+      <div class="table-section-title" style="font-size:13px;">Top 3 per hari</div>${table(t3)}
+      <div class="table-section-title" style="font-size:13px; margin-top:14px;">Top 5 per hari</div>${table(t5)}`;
+    const good = [...t3.rows, ...t5.rows].filter(r => r.key!=='worst' && r.diff3!=null && r.se!=null && r.diff3 >= 0.5 && r.diff3 > 2*r.se && r.diffA > 0 && r.diffB > 0 && r.ret3 - FEE > 0);
+    h += good.length
+      ? `<div class="msg-box success" style="margin-top:12px;">✅ Cara memilih yang lolos semua syarat (selisih ≥ 0,5 poin, lebih besar dari 2× galat, positif di kedua paruh, dan H3 setelah fee masih positif): <b>${good.map(r=>r.label).filter((v,i,a)=>a.indexOf(v)===i).join('; ')}</b>. Ini kandidat untuk dicoba lot kecil dan diuji ulang tiap beberapa hari.</div>`
+      : `<div class="msg-box warning" style="margin-top:12px;">⚠ Belum ada cara memilih yang lolos semua syarat (selisih ≥ 0,5 poin, lebih besar dari 2× galat, positif di kedua paruh, H3 setelah fee positif). Baca kolom "Selisih H3": kalau cara "belum lari" unggul tetapi H3 setelah fee masih negatif, artinya filter ini mengurangi kerugian tapi belum cukup untuk untung.</div>`;
     return h;
   }
 
