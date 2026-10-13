@@ -887,13 +887,13 @@
     const MIN_DAYS = 15;
     let verdict;
     if(agg.nDays < MIN_DAYS){
-      verdict = `<div class="msg-box info">⏳ Belum cukup data untuk menilai: <b>${agg.nDays}/${MIN_DAYS}</b> hari selesai (butuh 3 hari bursa setelah tanggal pencatatan). Jangan ambil kesimpulan dulu.</div>`;
+      verdict = `<div class="msg-box info"><div>⏳ Belum cukup data untuk menilai: <b>${agg.nDays}/${MIN_DAYS}</b> hari selesai (butuh 3 hari bursa setelah tanggal pencatatan). Jangan ambil kesimpulan dulu.</div></div>`;
     }else if(agg.diff >= 0.5 && agg.se != null && agg.diff > 2*agg.se && agg.h3 - BL_FEE_PCT > 0){
-      verdict = `<div class="msg-box success">✅ Aturan Top 3 lolos uji awal: selisih vs acak ${pct(agg.diff)} (&gt; 2× galat ${agg.se.toFixed(2)}) dan H3 setelah fee masih positif. Tetap analisa sebelum entry.</div>`;
+      verdict = `<div class="msg-box success"><div>✅ Aturan Top 3 lolos uji awal: selisih vs acak ${pct(agg.diff)} (&gt; 2× galat ${agg.se.toFixed(2)}) dan H3 setelah fee masih positif. Tetap analisa sebelum entry.</div></div>`;
     }else{
-      verdict = `<div class="msg-box warning">⚠ Belum terbukti: selisih vs acak ${pct(agg.diff)} (galat ±${agg.se!=null?agg.se.toFixed(2):'-'}), H3 − fee ${pct(agg.h3 - BL_FEE_PCT)}. Perlu selisih ≥ +0,5 poin, &gt; 2× galat, dan H3 setelah fee positif.</div>`;
+      verdict = `<div class="msg-box warning"><div>⚠ Belum terbukti: selisih vs acak ${pct(agg.diff)} (galat ±${agg.se!=null?agg.se.toFixed(2):'-'}), H3 − fee ${pct(agg.h3 - BL_FEE_PCT)}. Perlu selisih ≥ +0,5 poin, &gt; 2× galat, dan H3 setelah fee positif.</div></div>`;
     }
-    let html = `<div class="msg-box info" style="margin-top:0;">Uji ke depan: tiap hari 3 saham "paling belum lari" dicatat otomatis (aturan dikunci). Entry = harga <b>buka</b> hari bursa berikutnya, hasil = penutupan hari ke-1/2/3. Pembanding = rata-rata semua kandidat hari yang sama. Fee ±${BL_FEE_PCT}% belum dikurangkan di angka bawah kecuali disebut.</div>`;
+    let html = `<div class="msg-box info" style="margin-top:0;"><div>Uji ke depan: tiap hari 3 saham "paling belum lari" dicatat otomatis (aturan dikunci). Entry = harga <b>buka</b> hari bursa berikutnya, hasil = penutupan hari ke-1/2/3. Pembanding = rata-rata semua kandidat hari yang sama. Fee ±${BL_FEE_PCT}% belum dikurangkan di angka bawah kecuali disebut.</div></div>`;
     html += verdict;
     html += `<div class="stats-grid">
       <div class="stats-card"><div class="sc-label">Hari selesai</div><div class="sc-val">${agg.nDays}</div><div class="sc-sub">${agg.nPicks} pick</div></div>
