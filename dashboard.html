@@ -716,30 +716,55 @@
     return o;
   }
 
-  // dayRecords: [{date, mode, picks:[outcome], pool:[outcome], poolSize}]
+  // dayRecords: [{date, si, light, mode, picks:[outcome], pool:[outcome], poolSize}]
   function blAggregate(dayRecords){
     const mean = a => a.length ? a.reduce((x,y)=>x+y,0)/a.length : null;
     const sd = a => { if(a.length<2) return null; const m=mean(a); return Math.sqrt(a.reduce((s,x)=>s+(x-m)**2,0)/(a.length-1)); };
     const days = dayRecords.filter(d => d.poolSize >= BL_MIN_POOL && d.picks.some(p=>p.state==='ok' && p.done===3));
     const dm = (d, key, grp) => mean(d[grp].filter(p=>p.state==='ok' && p.done===3).map(p=>p[key]));
     const pickH = k => mean(days.map(d=>dm(d,k,'picks')).filter(v=>v!=null));
-    const diffs = days.map(d => { const a=dm(d,'h3','picks'), b=dm(d,'h3','pool'); return (a!=null && b!=null) ? a-b : null; }).filter(v=>v!=null);
+    const dayDiff = days.map(d => { const a=dm(d,'h3','picks'), b=dm(d,'h3','pool'); return (a!=null && b!=null) ? { d, a, b, diff: a-b } : null; }).filter(Boolean);
+    const diffs = dayDiff.map(x => x.diff);
     const allPicks = days.flatMap(d => d.picks.filter(p=>p.state==='ok' && p.done===3));
     const s = sd(diffs);
+    const se = s!=null ? s/Math.sqrt(diffs.length) : null;
+    // galat yang memperhitungkan tumpang tindih: hari sinyal yang berjarak 1-2 hari bursa
+    // berbagi sebagian periode 3 harinya, jadi tidak independen (Newey-West, bobot 2/3 & 1/3)
+    let seNW = null;
+    if(diffs.length >= 2){
+      const m = mean(diffs), n = diffs.length;
+      const e = dayDiff.map(x => ({ si: x.d.si, v: x.diff - m }));
+      let g0 = e.reduce((a,x)=>a+x.v*x.v,0)/n, g1 = 0, g2 = 0;
+      for(let i=0;i<n;i++) for(let j=i+1;j<n;j++){
+        if(e[i].si == null || e[j].si == null) continue;
+        const gap = Math.abs(e[i].si - e[j].si);
+        if(gap === 1) g1 += e[i].v*e[j].v; else if(gap === 2) g2 += e[i].v*e[j].v;
+      }
+      const v = g0 + 2*((2/3)*(g1/n) + (1/3)*(g2/n));
+      seNW = Math.sqrt(Math.max(v, 0) / n);
+    }
+    const seHonest = (se!=null || seNW!=null) ? Math.max(se||0, seNW||0) : null;
+    const grp = list => list.length ? { days: list.length, pick: mean(list.map(x=>x.a)), pool: mean(list.map(x=>x.b)), diff: mean(list.map(x=>x.diff)) } : { days: 0 };
+    const byMarket = { up: grp(dayDiff.filter(x => x.b > 0)), down: grp(dayDiff.filter(x => x.b <= 0)) };
+    const byLight = {};
+    ['hijau','kuning','merah',null].forEach(L => { byLight[L || 'none'] = grp(dayDiff.filter(x => (x.d.light || null) === L)); });
     return {
       nDays: days.length, nPicks: allPicks.length,
       h1: pickH('h1'), h2: pickH('h2'), h3: pickH('h3'),
       poolH3: mean(days.map(d=>dm(d,'h3','pool')).filter(v=>v!=null)),
-      diff: mean(diffs), se: s!=null ? s/Math.sqrt(diffs.length) : null,
+      diff: mean(diffs), se, seNW, seHonest,
+      posDays: diffs.filter(v=>v>0).length,
       up3: allPicks.length ? allPicks.filter(p=>p.maxUp>=3).length/allPicks.length*100 : null,
       dn3: allPicks.length ? allPicks.filter(p=>p.minDn<=-3).length/allPicks.length*100 : null,
       win3: allPicks.length ? allPicks.filter(p=>p.h3>0).length/allPicks.length*100 : null,
+      byMarket, byLight,
     };
   }
 
   // ---------- state & cache ----------
   let lastTopPicks = null;      // dokumen topPicks hari ini (atau hasil hitung lokal)
   let lastTopPicksNote = '';    // pesan kalau pencatatan gagal
+  let lastMarket = null;        // systemMeta/marketRegime (lampu pasar, dihitung di Step 4)
   function blCacheGet(key){ try{ const s = localStorage.getItem(key); return s ? JSON.parse(s) : null; }catch(e){ return null; } }
   function blCacheSet(key, val){ try{ localStorage.setItem(key, JSON.stringify(val)); }catch(e){} }
   function blCachePrune(prefix, keepKey){
@@ -803,8 +828,9 @@
     const picks = ranked.slice(0,3).map(x => ({ ticker: x.ticker, rank: x.rank, score: x.score }));
     const docData = {
       date: latestDate, mode, rule: 'compF-v1', poolSize: cand.length,
-      candidates: cand.map(r => r.ticker), picks, radar, createdAt: new Date().toISOString(),
+      candidates: cand.map(r => r.ticker), picks, radar, createdAt: new Date().toISOString(), source: 'dashboard',
     };
+    if(lastMarket && lastMarket.date === latestDate){ const { date, updatedAt, ...m } = lastMarket; docData.market = m; }
     lastTopPicks = docData;
     try{ await setDoc(ref, docData); }
     catch(e){ lastTopPicksNote = 'Top 3 dihitung tapi GAGAL disimpan ke koleksi topPicks (cek Firestore rules): ' + e.message; }
@@ -818,6 +844,10 @@
       return;
     }
     const tp = lastTopPicks;
+    const mk = (tp.market && tp.market.light) ? tp.market : (lastMarket && lastMarket.date === tp.date ? lastMarket : null);
+    const mkLine = mk
+      ? `<div>🚦 Kondisi pasar: <b>${mktLightLabel(mk.light)}</b>${mk.above20!=null ? ` <span style="opacity:.8;">(indeks vs rata-rata 10 hari ${mk.idxVsMa10>=0?'+':''}${mk.idxVsMa10.toFixed(2)}%, ${mk.above20.toFixed(0)}% saham di atas MA20)</span>` : ''} — informasi, belum terbukti (uji di tabel 9 Diagnosa).${mk.light === 'merah' ? ' <b>Pasar sedang lemah: Top 3 bulan lalu rata-rata rugi saat pasar turun.</b>' : ''}</div>`
+      : `<div style="opacity:.8;">🚦 Kondisi pasar: belum dihitung — jalankan Step 4 (index.html versi baru) setelah import.</div>`;
     const chips = tp.picks.map((p,i) => {
       const r = lastRenderedData.find(x => x.ticker === p.ticker);
       const ch = r?.price?.changePct;
@@ -826,6 +856,7 @@
     el.innerHTML = `<div class="msg-box info" style="flex-direction:column; gap:4px;">
       <div><b>🎯 Top 3 "Belum Lari" · ${tp.date}</b> <span style="opacity:.8;">(${tp.mode === 'baru' ? 'dari sinyal baru' : 'dari semua kandidat'}, ${tp.poolSize} saham)</span></div>
       <div>${chips}</div>
+      ${mkLine}
       <div style="font-size:11px; opacity:.85;">Bantuan memilih, <b>belum terbukti</b> — sedang diuji ke depan di tab 🎯 Top 3. Entry realistis = harga buka hari bursa berikutnya.${lastTopPicksNote ? '<br>⚠ ' + lastTopPicksNote : ''}</div>
     </div>`;
   }
@@ -859,7 +890,7 @@
       for(const d of docs){
         const si = indexOf.get(d.date);
         const avail = si == null ? 0 : latestIdx - si;
-        const rec = { date: d.date, mode: d.mode, poolSize: d.poolSize, picks: [], pool: [], pickTickers: d.picks.map(p => p.ticker), avail };
+        const rec = { date: d.date, si, light: d.market ? d.market.light : null, mode: d.mode, poolSize: d.poolSize, picks: [], pool: [], pickTickers: d.picks.map(p => p.ticker), avail };
         if(avail < 1){ rec.picks = d.picks.map(() => ({ state:'pending', done:0 })); records.push(rec); continue; }
         if(avail >= 3 && cache[d.date]){ rec.picks = cache[d.date].picks; rec.pool = cache[d.date].pool; records.push(rec); continue; }
         const outFor = async (t) => { const rows = await fetchRowsAfter(t, d.date); return blOutcome(rows, dates, si); };
@@ -881,17 +912,23 @@
     }
   }
 
+  function mktLightLabel(l){
+    return l === 'hijau' ? '🟢 Hijau' : l === 'kuning' ? '🟡 Kuning' : l === 'merah' ? '🔴 Merah' : '⚪ Belum tercatat';
+  }
+
   function renderTopTab(records, agg){
     const pct = v => v == null ? '-' : (v>=0?'+':'') + v.toFixed(2) + '%';
     const cls = v => v == null ? '' : (v >= 0 ? 'pos' : 'neg');
     const MIN_DAYS = 15;
+    const seH = agg.seHonest;
     let verdict;
     if(agg.nDays < MIN_DAYS){
       verdict = `<div class="msg-box info"><div>⏳ Belum cukup data untuk menilai: <b>${agg.nDays}/${MIN_DAYS}</b> hari selesai (butuh 3 hari bursa setelah tanggal pencatatan). Jangan ambil kesimpulan dulu.</div></div>`;
-    }else if(agg.diff >= 0.5 && agg.se != null && agg.diff > 2*agg.se && agg.h3 - BL_FEE_PCT > 0){
-      verdict = `<div class="msg-box success"><div>✅ Aturan Top 3 lolos uji awal: selisih vs acak ${pct(agg.diff)} (&gt; 2× galat ${agg.se.toFixed(2)}) dan H3 setelah fee masih positif. Tetap analisa sebelum entry.</div></div>`;
+    }else if(agg.diff >= 0.5 && seH != null && agg.diff > 2*seH && agg.h3 - BL_FEE_PCT > 0){
+      verdict = `<div class="msg-box success"><div>✅ Aturan Top 3 lolos uji: selisih vs acak ${pct(agg.diff)} (&gt; 2× galat ${seH.toFixed(2)}) dan H3 setelah fee masih positif. Tetap analisa sebelum entry.</div></div>`;
     }else{
-      verdict = `<div class="msg-box warning"><div>⚠ Belum terbukti: selisih vs acak ${pct(agg.diff)} (galat ±${agg.se!=null?agg.se.toFixed(2):'-'}), H3 − fee ${pct(agg.h3 - BL_FEE_PCT)}. Perlu selisih ≥ +0,5 poin, &gt; 2× galat, dan H3 setelah fee positif.</div></div>`;
+      const relOk = agg.diff >= 0.5 && seH != null && agg.diff > 2*seH;
+      verdict = `<div class="msg-box warning"><div>⚠ Belum layak jadi sinyal beli: selisih vs acak ${pct(agg.diff)} (galat ±${seH!=null?seH.toFixed(2):'-'}${relOk ? ', <b>lolos</b>' : ', belum lolos'}), H3 − fee ${pct(agg.h3 - BL_FEE_PCT)}${agg.h3 - BL_FEE_PCT > 0 ? '' : ' (<b>rugi</b>)'}. ${relOk ? 'Artinya: Top 3 memang lebih tahan banting dari kandidat lain, tapi kalau dibeli tetap rugi pada periode ini — lihat tabel kondisi pasar di bawah.' : 'Perlu selisih ≥ +0,5 poin, &gt; 2× galat, dan H3 setelah fee positif.'}</div></div>`;
     }
     let html = `<div class="msg-box info" style="margin-top:0;"><div>Uji ke depan: tiap hari 3 saham "paling belum lari" dicatat otomatis (aturan dikunci). Entry = harga <b>buka</b> hari bursa berikutnya, hasil = penutupan hari ke-1/2/3. Pembanding = rata-rata semua kandidat hari yang sama. Fee ±${BL_FEE_PCT}% belum dikurangkan di angka bawah kecuali disebut.</div></div>`;
     html += verdict;
@@ -901,12 +938,28 @@
       <div class="stats-card"><div class="sc-label">Rata-rata H2</div><div class="sc-val ${cls(agg.h2)}">${pct(agg.h2)}</div></div>
       <div class="stats-card"><div class="sc-label">Rata-rata H3</div><div class="sc-val ${cls(agg.h3)}">${pct(agg.h3)}</div><div class="sc-sub">setelah fee: ${agg.h3!=null ? pct(agg.h3 - BL_FEE_PCT) : '-'}</div></div>
       <div class="stats-card"><div class="sc-label">Semua kandidat (H3)</div><div class="sc-val ${cls(agg.poolH3)}">${pct(agg.poolH3)}</div></div>
-      <div class="stats-card"><div class="sc-label">Selisih vs acak</div><div class="sc-val ${cls(agg.diff)}">${pct(agg.diff)}</div><div class="sc-sub">± ${agg.se!=null?agg.se.toFixed(2):'-'} (galat)</div></div>
+      <div class="stats-card"><div class="sc-label">Selisih vs acak</div><div class="sc-val ${cls(agg.diff)}">${pct(agg.diff)}</div><div class="sc-sub">± ${seH!=null?seH.toFixed(2):'-'} (galat, sudah hitung hari tumpang tindih) · unggul ${agg.posDays}/${agg.nDays} hari</div></div>
       <div class="stats-card"><div class="sc-label">Pernah ≥ +3% (3 hari)</div><div class="sc-val">${agg.up3!=null?agg.up3.toFixed(0)+'%':'-'}</div></div>
       <div class="stats-card"><div class="sc-label">Pernah ≤ −3% (3 hari)</div><div class="sc-val">${agg.dn3!=null?agg.dn3.toFixed(0)+'%':'-'}</div></div>
       <div class="stats-card"><div class="sc-label">Close H3 &gt; entry</div><div class="sc-val">${agg.win3!=null?agg.win3.toFixed(0)+'%':'-'}</div></div>
     </div>`;
-    html += `<div class="table-section-title">Per Tanggal</div><table><thead><tr><th>Tanggal</th><th>Mode</th><th>Kandidat</th><th>Pick (H3)</th><th>Rata H3 pick</th><th>Rata H3 semua</th><th>Selisih</th></tr></thead><tbody>`;
+
+    // --- kondisi pasar ---
+    const row = (label, g, extra) => g.days
+      ? `<tr><td>${label}</td><td>${g.days}</td><td class="${cls(g.pick)}">${pct(g.pick)}</td><td class="${cls(g.pick - BL_FEE_PCT)}">${pct(g.pick - BL_FEE_PCT)}</td><td class="${cls(g.pool)}">${pct(g.pool)}</td><td class="${cls(g.diff)}">${pct(g.diff)}</td>${extra||''}</tr>`
+      : `<tr><td>${label}</td><td>0</td><td colspan="4">-</td>${extra||''}</tr>`;
+    html += `<div class="table-section-title">Hasil menurut kondisi pasar</div>
+      <div class="msg-box info"><div>ℹ <b>Naik/turun</b> dilihat <i>setelah kejadian</i> (rata-rata semua kandidat 3 hari ke depan positif atau tidak) — menjelaskan dari mana untung/rugi datang, tapi tidak bisa dipakai sebelum beli. <b>Lampu pasar</b> diketahui <i>sebelum beli</i> (dihitung saat import, data sampai hari sinyal) — ini yang bisa jadi aturan entry kalau terbukti. Lampu baru tercatat sejak Step 4 versi baru dijalankan; hari sebelumnya tampil "belum tercatat" (hasil lampu untuk hari-hari lama ada di tabel 9 panel Diagnosa).</div></div>
+      <table><thead><tr><th>Kondisi</th><th>Hari</th><th>Rata H3 pick</th><th>Setelah fee</th><th>Rata H3 semua</th><th>Selisih</th></tr></thead><tbody>
+      ${row('📈 Pasar naik (setelah kejadian)', agg.byMarket.up)}
+      ${row('📉 Pasar turun (setelah kejadian)', agg.byMarket.down)}
+      ${row(mktLightLabel('hijau'), agg.byLight.hijau)}
+      ${row(mktLightLabel('kuning'), agg.byLight.kuning)}
+      ${row(mktLightLabel('merah'), agg.byLight.merah)}
+      ${row(mktLightLabel(null), agg.byLight.none)}
+      </tbody></table>`;
+
+    html += `<div class="table-section-title">Per Tanggal</div><table><thead><tr><th>Tanggal</th><th>Lampu</th><th>Mode</th><th>Kandidat</th><th>Pick (H3)</th><th>Rata H3 pick</th><th>Rata H3 semua</th><th>Selisih</th></tr></thead><tbody>`;
     records.forEach(rec => {
       const cells = rec.pickTickers.map((t,i) => {
         const o = rec.picks[i] || {};
@@ -920,7 +973,7 @@
       const pm = mean(rec.picks.filter(p=>p.state==='ok' && p.done===3).map(p=>p.h3));
       const lm = mean(rec.pool.filter(p=>p.state==='ok' && p.done===3).map(p=>p.h3));
       const df = (pm!=null && lm!=null) ? pm - lm : null;
-      html += `<tr><td>${rec.date}</td><td>${rec.mode === 'baru' ? 'sinyal baru' : 'semua'}</td><td>${rec.poolSize ?? '-'}</td><td style="font-family:'Inter'; font-size:12px;">${cells}</td><td class="${cls(pm)}">${pct(pm)}</td><td class="${cls(lm)}">${pct(lm)}</td><td class="${cls(df)}">${pct(df)}</td></tr>`;
+      html += `<tr><td>${rec.date}</td><td style="white-space:nowrap;">${rec.light ? mktLightLabel(rec.light) : '<span style="color:var(--text-faint);">-</span>'}</td><td>${rec.mode === 'baru' ? 'sinyal baru' : 'semua'}</td><td>${rec.poolSize ?? '-'}</td><td style="font-family:'Inter'; font-size:12px;">${cells}</td><td class="${cls(pm)}">${pct(pm)}</td><td class="${cls(lm)}">${pct(lm)}</td><td class="${cls(df)}">${pct(df)}</td></tr>`;
     });
     html += `</tbody></table>`;
     return html;
@@ -986,6 +1039,7 @@
 
       // 2b. skor "belum lari" + catat Top 3 harian (tampilan/pencatatan saja, deteksi tidak berubah)
       try{
+        try{ const ms = await getDoc(doc(db, 'systemMeta', 'marketRegime')); lastMarket = ms.exists() ? ms.data() : null; }catch(e){ lastMarket = null; }
         await enrichBL(lastRenderedData, latestDate);
         await ensureTopPicks(latestDate, lastRenderedData);
       }catch(blErr){
