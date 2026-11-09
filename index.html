@@ -86,7 +86,7 @@
   .stat-box.warn .value{ color:var(--amber-flag); }
   .stat-box.ok .value{ color:var(--positive); }
 
-  .msg-box{ display:flex; gap:9px; padding:10px 12px; border-radius:var(--radius); font-size:12px; margin-top:10px; align-items:flex-start; }
+  .msg-box{ display:block; padding:10px 12px; border-radius:var(--radius); font-size:12px; margin-top:10px; line-height:1.55; }
   .msg-box.error{ background:rgba(242,84,91,0.1); border:1px solid rgba(242,84,91,0.35); color:#FF8B92; }
   .msg-box.warning{ background:rgba(232,163,61,0.1); border:1px solid rgba(232,163,61,0.35); color:var(--amber-flag); }
   .msg-box.info{ background:rgba(79,209,197,0.08); border:1px solid rgba(79,209,197,0.3); color:var(--cyan); }
@@ -297,7 +297,7 @@
     <div class="msg-box info">ℹ Histori harga (untuk hitung EMA/MACD/RSI) ditarik <b>langsung dari Yahoo Finance</b>, bukan dari data upload harian Anda — karena Yahoo sudah punya histori bertahun-tahun, jadi indikator langsung valid tanpa perlu menunggu berbulan-bulan upload. Hanya diambil untuk <b>emiten yang sudah match kategori di Tahap 4</b> (bukan 836 saham), supaya cepat dan hemat.</div>
     <div class="field" style="max-width:260px; margin-top:12px;">
       <label>Ambil untuk saham dengan match kategori minimal</label>
-      <input type="number" id="minMatchThreshold" value="2" min="1" max="4" step="1">
+      <input type="number" id="minMatchThreshold" value="1" min="1" max="4" step="1">
     </div>
     <button class="btn btn-ghost" id="btnUpdateIndicators" style="margin-top:4px;">🔄 Update Indikator Sekarang</button>
     <div class="progress-wrap" id="progressWrap5">
