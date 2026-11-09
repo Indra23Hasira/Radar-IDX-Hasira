@@ -311,7 +311,7 @@
   <button class="tab-btn" id="tabWatchlistBtn">⭐ Watchlist <span id="watchlistCountBadge"></span></button>
   <button class="tab-btn" id="tabStatsBtn">📊 Statistik</button>
   <button class="tab-btn" id="tabHoldBtn">🏛️ Hold Jk. Panjang</button>
-  <button class="tab-btn" id="tabTopBtn">🎯 Top 3</button>
+  <button class="tab-btn" id="tabTopBtn">🎯 Rapor Skema</button>
 </div>
 
 <div class="layout" id="mainLayout">
@@ -382,7 +382,7 @@
         </div>
         <div style="display:flex; gap:8px;">
           <button class="btn-remove-watchlist" id="btnResetPeakTracking" style="white-space:nowrap; border-color:rgba(212,168,87,0.35); color:var(--gold);">🔁 Reset Tracking Harga</button>
-          <button class="btn-remove-watchlist" id="btnCleanWatchlist" style="white-space:nowrap;">🧹 Bersihkan (Auto, Match &lt;3)</button>
+          <button class="btn-remove-watchlist" id="btnCleanWatchlist" style="white-space:nowrap;">🧹 Hapus Data Skema Lama</button>
         </div>
       </div>
       <div id="watchlistContent"><div class="loading-msg">Memuat watchlist...</div></div>
@@ -391,8 +391,8 @@
     <div id="topSection" style="display:none;">
       <div class="main-header">
         <div>
-          <div class="main-title">Top 3 Harian — Uji ke Depan</div>
-          <div class="main-desc">Tiap hari, 3 saham paling "belum lari" dicatat otomatis lalu dilacak hasil 1-3 hari bursa berikutnya. Ini bukti jujur apakah aturannya benar-benar lebih baik dari memilih acak.</div>
+          <div class="main-title">Rapor Skema Baru — Top 3 &amp; Bandar Accum</div>
+          <div class="main-desc">Hasil nyata dua aturan swing yang dicatat tiap hari: Top 3 "belum lari" dan Bandar Accum yang baru muncul — dibandingkan dengan pasar di hari yang sama, ditahan 1 sampai 10 hari bursa.</div>
         </div>
       </div>
       <div id="topContent"><div class="loading-msg">Memuat...</div></div>
@@ -402,8 +402,9 @@
       <div class="main-header">
         <div>
           <div class="main-title">Statistik Efektivitas Radar</div>
-          <div class="main-desc">Ringkasan gabungan dari semua saham yang pernah masuk Watchlist — buat jawab "radar ini beneran efektif atau tidak" pakai data, bukan tebakan.</div>
+          <div class="main-desc">Ringkasan saham yang masuk Watchlist skema baru (Top 3 + Bandar Accum). Ukuran jujur (entry open besok, H1–H10, dibanding pasar) ada di tab 🎯 Rapor Skema.</div>
         </div>
+        <label style="display:flex; gap:6px; align-items:center; font-size:12px; color:var(--text-dim); white-space:nowrap;"><input type="checkbox" id="statsShowOld"> Tampilkan juga skema lama &amp; manual</label>
       </div>
       <div id="statsContent"><div class="loading-msg">Menghitung statistik...</div></div>
     </div>
@@ -509,7 +510,7 @@
   let lastRenderedData = [];
   let watchlistTickers = new Set(); // ticker yang sudah masuk watchlist, buat status tombol di kartu
   let watchlistAddedDates = new Map(); // ticker -> addedDate, buat hitung "sudah berapa hari sejak pertama terdeteksi"
-  const WATCHLIST_MONITORING_DAYS = 5; // sama dengan yang dipakai di halaman Import (Step 4)
+  const WATCHLIST_MONITORING_DAYS = 10; // swing: sama dengan yang dipakai di halaman Import (Step 4)
   let currentTab = 'radar';
 
   // ============================================================
@@ -540,7 +541,7 @@
   const SORT_DESC = {
     match: 'Ranking berdasar jumlah kategori terpenuhi, lalu Total Score sebagai tie-breaker — makin banyak sinyal independen setuju, makin diprioritaskan.',
     score: 'Ranking murni berdasar Total Score (Liquidity+Foreign+Technical digabung) — tidak peduli jumlah kategori, asal masih lolos batas minimal di kiri.',
-    bl: 'Ranking "Belum Lari": range hari ini kecil, kenaikan hari ini kecil, volatilitas (ATR10) rendah, foreign net tinggi — dibanding seluruh kandidat radar hari ini. Bantuan memilih, BELUM terbukti (lihat tab 🎯 Top 3).'
+    bl: 'Ranking "Belum Lari": range hari ini kecil, kenaikan hari ini kecil, volatilitas (ATR10) rendah, foreign net tinggi — dibanding seluruh kandidat radar hari ini. Bantuan memilih, BELUM terbukti (lihat tab 🎯 Rapor Skema).'
   };
   function setSortMode(mode){
     sortMode = mode;
@@ -827,15 +828,19 @@
       const fresh = cand.filter(r => (r.matchCount || 0) > (prevRadar[r.ticker] || 0));
       if(fresh.length >= BL_MIN_POOL){ cand = fresh; mode = 'baru'; }
     }
-    if(cand.length < BL_MIN_POOL){
-      lastTopPicksNote = `Kandidat dengan data lengkap hanya ${cand.length} (<${BL_MIN_POOL}), Top 3 hari ini tidak dicatat.`;
-      return;
+    let picks = [];
+    if(cand.length >= BL_MIN_POOL){
+      const ranked = blRankItems(cand.map(r => ({ ticker: r.ticker, bl: r.bl }))).sort((a,b) => a.rank - b.rank);
+      picks = ranked.slice(0,3).map(x => ({ ticker: x.ticker, rank: x.rank, score: x.score }));
+    }else{
+      lastTopPicksNote = `Kandidat dengan data lengkap hanya ${cand.length} (<${BL_MIN_POOL}), Top 3 hari ini tidak dipilih.`;
     }
-    const ranked = blRankItems(cand.map(r => ({ ticker: r.ticker, bl: r.bl }))).sort((a,b) => a.rank - b.rank);
-    const picks = ranked.slice(0,3).map(x => ({ ticker: x.ticker, rank: x.rank, score: x.score }));
+    const isNewR = r => prevRadar ? (r.matchCount || 0) > (prevRadar[r.ticker] || 0) : true;
+    const bandar = list.filter(r => r.categories && r.categories.bandarAccum === true && isNewR(r)).map(r => r.ticker);
     const docData = {
       date: latestDate, mode, rule: 'compF-v1', poolSize: cand.length,
       candidates: cand.map(r => r.ticker), picks, radar, createdAt: new Date().toISOString(), source: 'dashboard',
+      bandar, bandarRule: 'bandar-v1', bandarSource: 'dashboard', bandarMode: prevRadar ? 'baru' : 'semua',
     };
     if(lastMarket && lastMarket.date === latestDate){ const { date, updatedAt, ...m } = lastMarket; docData.market = m; }
     lastTopPicks = docData;
@@ -863,129 +868,157 @@
     el.innerHTML = `<div class="msg-box info" style="flex-direction:column; gap:4px;">
       <div><b>🎯 Top 3 "Belum Lari" · ${tp.date}</b> <span style="opacity:.8;">(${tp.mode === 'baru' ? 'dari sinyal baru' : 'dari semua kandidat'}, ${tp.poolSize} saham)</span></div>
       <div>${chips}</div>
+      <div>🧱 Bandar Accum baru hari ini: ${(tp.bandar && tp.bandar.length) ? tp.bandar.map(t => `<b style="color:var(--gold);">${t}</b>`).join(', ') : '<span style="opacity:.8;">tidak ada</span>'} <span style="opacity:.8; font-size:11px;">(calon aturan swing bandar-v1 — paling konsisten di uji swing, belum terbukti live)</span></div>
       ${mkLine}
-      <div style="font-size:11px; opacity:.85;">Bantuan memilih, <b>belum terbukti</b> — sedang diuji ke depan di tab 🎯 Top 3. Entry realistis = harga buka hari bursa berikutnya.${lastTopPicksNote ? '<br>⚠ ' + lastTopPicksNote : ''}</div>
+      <div style="font-size:11px; opacity:.85;">Skema swing (tahan ±5–10 hari), <b>belum terbukti</b> — dinilai di tab 🎯 Rapor Skema. Entry realistis = harga buka hari bursa berikutnya.${lastTopPicksNote ? '<br>⚠ ' + lastTopPicksNote : ''}</div>
     </div>`;
   }
 
-  // ---------- TAB TOP 3 ----------
-  async function fetchRowsAfter(ticker, date){
-    const { collection, getDocs, query, where, orderBy, limit } = firestoreFns;
-    const snap = await getDocs(query(collection(db, 'tickerHistory', ticker, 'days'), where('date', '>', date), orderBy('date', 'asc'), limit(3)));
-    const m = {}; snap.docs.forEach(d => { const x = d.data(); m[x.date] = x; });
-    return m;
+  // ---------- TAB RAPOR SKEMA BARU (Top 3 "belum lari" + Bandar Accum baru) ----------
+  // Sumber data: koleksi topPicks. Hasil H1/H3/H5/H10 (entry = open hari bursa berikutnya)
+  // dihitung di halaman Import Data (Step 4 & Diagnosa "rapikan riwayat"), lalu disimpan di
+  // field res — jadi tab ini cukup membaca, tanpa menarik histori harga lagi.
+  function mktLightLabel(l){
+    return l === 'hijau' ? '🟢 Hijau' : l === 'kuning' ? '🟡 Kuning' : l === 'merah' ? '🔴 Merah' : '⚪ Belum tercatat';
+  }
+  const RAPOR_RULES = [
+    { key:'top3', label:'🎯 Top 3 "belum lari"', code:'compF-v1', lock:'8 Okt 2026',
+      tickers: d => (d.picks || []).map(p => p.ticker), outs: d => (d.res && d.res.picks) || {},
+      isLive: d => d.source !== 'backfill' },
+    { key:'bandar', label:'🧱 Bandar Accum baru', code:'bandar-v1', lock:'9 Nov 2026',
+      tickers: d => d.bandar || [], outs: d => (d.res && d.res.bandar) || {},
+      isLive: d => !!d.bandarSource && d.bandarSource !== 'backfill' },
+  ];
+  const rMean = a => a.length ? a.reduce((x,y)=>x+y,0)/a.length : null;
+  function raporNwSe(series, lag){ // series [{si, v}] satu nilai per hari
+    const n = series.length; if(n < 3) return null;
+    const m = rMean(series.map(x=>x.v));
+    const e = series.map(x => ({ si: x.si, v: x.v - m }));
+    let v = e.reduce((a,x)=>a+x.v*x.v,0)/n;
+    for(let i=0;i<n;i++) for(let j=i+1;j<n;j++){
+      if(e[i].si == null || e[j].si == null) continue;
+      const g = Math.abs(e[i].si - e[j].si);
+      if(g >= 1 && g <= lag) v += 2*(1 - g/(lag+1))*e[i].v*e[j].v/n;
+    }
+    return Math.sqrt(Math.max(v,0)/n);
+  }
+  function raporDays(docs, rule, H){
+    return docs.map(d => {
+      const outs = rule.outs(d);
+      const vals = rule.tickers(d).map(t => outs[t]).filter(o => o && !o.invalid && o['h'+H] != null);
+      if(!vals.length) return null;
+      const m = rMean(vals.map(o => o['h'+H]));
+      const mk = d.res && d.res.mkt ? d.res.mkt['h'+H] : null;
+      const pl = d.res && d.res.pool ? d.res.pool['h'+H] : null;
+      return { date: d.date, si: d.si, mean: m, outs: vals, aMkt: mk != null ? m - mk : null, aPool: pl != null ? m - pl : null };
+    }).filter(Boolean);
+  }
+  function raporSummary(docs, rule){
+    const s = { nDocs: docs.length };
+    [1,3,5,10].forEach(H => { const ds = raporDays(docs, rule, H); s['h'+H] = rMean(ds.map(x=>x.mean)); s['d'+H] = ds.length; if(H === 5) s.a5 = rMean(ds.map(x=>x.aMkt).filter(v=>v!=null)); if(H === 10) s.days10 = ds; });
+    const d10 = (s.days10 || []).slice().sort((a,b) => a.date < b.date ? -1 : 1);
+    const am = d10.filter(x => x.aMkt != null);
+    s.a10 = rMean(am.map(x=>x.aMkt));
+    s.se10 = raporNwSe(am.map(x => ({ si: x.si, v: x.aMkt })), 9);
+    const half = Math.floor(am.length/2);
+    s.aA = rMean(am.slice(0, half).map(x=>x.aMkt)); s.aB = rMean(am.slice(half).map(x=>x.aMkt));
+    s.p10 = rMean(d10.map(x=>x.aPool).filter(v=>v!=null));
+    const picks = d10.flatMap(x => x.outs);
+    s.n10 = picks.length;
+    s.win10 = picks.length ? picks.filter(o=>o.h10>0).length/picks.length*100 : null;
+    s.up5 = picks.length ? picks.filter(o=>o.up10>=5).length/picks.length*100 : null;
+    s.dn5 = picks.length ? picks.filter(o=>o.dn10<=-5).length/picks.length*100 : null;
+    s.rel = d10.length >= 15 && s.a10 >= 1 && s.se10 != null && s.a10 > 2*s.se10 && s.aA > 0 && s.aB > 0;
+    s.pass = s.rel && s.h10 - BL_FEE_PCT > 0;
+    return s;
   }
 
   async function loadTopPicksTab(){
     const box = document.getElementById('topContent');
-    box.innerHTML = `<div class="loading-msg">Menghitung hasil Top 3...</div>`;
+    box.innerHTML = `<div class="loading-msg">Memuat rapor...</div>`;
     const { collection, getDocs } = firestoreFns;
     try{
-      const { dates, indexOf } = await getTradingDatesIndex();
-      const latestIdx = dates.length - 1;
+      const { indexOf } = await getTradingDatesIndex();
       let snap;
       try{ snap = await getDocs(collection(db, 'topPicks')); }
-      catch(e){ box.innerHTML = `<div class="msg-box warning">Tidak bisa membaca koleksi topPicks (cek Firestore rules): ${e.message}</div>`; return; }
-      const docs = snap.docs.map(d => d.data()).sort((a,b) => a.date < b.date ? 1 : -1); // terbaru dulu
+      catch(e){ box.innerHTML = `<div class="msg-box warning"><div>Tidak bisa membaca koleksi topPicks (cek Firestore rules): ${e.message}</div></div>`; return; }
+      const docs = snap.docs.map(d => d.data()).filter(d => d && d.date).map(d => ({ ...d, si: indexOf.get(d.date) }));
       if(!docs.length){
-        box.innerHTML = `<div class="empty-state"><div class="big">🎯</div><div class="msg">Belum ada Top 3 tercatat.</div><div class="sub">Buka tab Radar setelah data hari ini diimpor — Top 3 dicatat otomatis sekali per hari.</div></div>`;
+        box.innerHTML = `<div class="empty-state"><div class="big">🎯</div><div class="msg">Belum ada catatan.</div><div class="sub">Jalankan Step 4 di halaman Import Data, atau Diagnosa dengan "Rapikan riwayat" dicentang.</div></div>`;
         return;
       }
-      const cacheKey = 'blTopRes_v1';
-      const cache = blCacheGet(cacheKey) || {};
-      const records = [];
-      for(const d of docs){
-        const si = indexOf.get(d.date);
-        const avail = si == null ? 0 : latestIdx - si;
-        const rec = { date: d.date, si, light: d.market ? d.market.light : null, mkt5: d.market && d.market.mkt5 != null ? d.market.mkt5 : null, mode: d.mode, poolSize: d.poolSize, picks: [], pool: [], pickTickers: d.picks.map(p => p.ticker), avail };
-        if(avail < 1){ rec.picks = d.picks.map(() => ({ state:'pending', done:0 })); records.push(rec); continue; }
-        if(avail >= 3 && cache[d.date]){ rec.picks = cache[d.date].picks; rec.pool = cache[d.date].pool; records.push(rec); continue; }
-        const outFor = async (t) => { const rows = await fetchRowsAfter(t, d.date); return blOutcome(rows, dates, si); };
-        const pk = await runWithConcurrency(d.picks.map(p => p.ticker), 6, outFor);
-        rec.picks = pk.results.map(x => x || { state:'invalid' });
-        if(avail >= 3){
-          const pl = await runWithConcurrency(d.candidates || [], 15, outFor);
-          rec.pool = pl.results.map(x => x || { state:'invalid' });
-          cache[d.date] = { picks: rec.picks, pool: rec.pool };
-        }
-        records.push(rec);
-      }
-      blCacheSet(cacheKey, cache);
-      const agg = blAggregate(records);
-      box.innerHTML = renderTopTab(records, agg);
+      box.innerHTML = renderRapor(docs);
     }catch(err){
       console.error('loadTopPicksTab gagal:', err);
-      box.innerHTML = `<div class="empty-state"><div class="big">⚠</div><div class="msg">Gagal menghitung.</div><div class="sub">${err.message}</div></div>`;
+      box.innerHTML = `<div class="empty-state"><div class="big">⚠</div><div class="msg">Gagal memuat rapor.</div><div class="sub">${err.message}</div></div>`;
     }
   }
 
-  function mktLightLabel(l){
-    return l === 'hijau' ? '🟢 Hijau' : l === 'kuning' ? '🟡 Kuning' : l === 'merah' ? '🔴 Merah' : '⚪ Belum tercatat';
-  }
-
-  function renderTopTab(records, agg){
-    const pct = v => v == null ? '-' : (v>=0?'+':'') + v.toFixed(2) + '%';
+  function renderRapor(docs){
+    const pct = v => v == null || !isFinite(v) ? '-' : (v>=0?'+':'') + v.toFixed(2) + '%';
     const cls = v => v == null ? '' : (v >= 0 ? 'pos' : 'neg');
-    const MIN_DAYS = 15;
-    const seH = agg.seHonest;
-    let verdict;
-    if(agg.nDays < MIN_DAYS){
-      verdict = `<div class="msg-box info"><div>⏳ Belum cukup data untuk menilai: <b>${agg.nDays}/${MIN_DAYS}</b> hari selesai (butuh 3 hari bursa setelah tanggal pencatatan). Jangan ambil kesimpulan dulu.</div></div>`;
-    }else if(agg.diff >= 0.5 && seH != null && agg.diff > 2*seH && agg.h3 - BL_FEE_PCT > 0){
-      verdict = `<div class="msg-box success"><div>✅ Aturan Top 3 lolos uji: selisih vs acak ${pct(agg.diff)} (&gt; 2× galat ${seH.toFixed(2)}) dan H3 setelah fee masih positif. Tetap analisa sebelum entry.</div></div>`;
-    }else{
-      const relOk = agg.diff >= 0.5 && seH != null && agg.diff > 2*seH;
-      verdict = `<div class="msg-box warning"><div>⚠ Belum layak jadi sinyal beli: selisih vs acak ${pct(agg.diff)} (galat ±${seH!=null?seH.toFixed(2):'-'}${relOk ? ', <b>lolos</b>' : ', belum lolos'}), H3 − fee ${pct(agg.h3 - BL_FEE_PCT)}${agg.h3 - BL_FEE_PCT > 0 ? '' : ' (<b>rugi</b>)'}. ${relOk ? 'Artinya: Top 3 memang lebih tahan banting dari kandidat lain, tapi kalau dibeli tetap rugi pada periode ini — lihat tabel kondisi pasar di bawah.' : 'Perlu selisih ≥ +0,5 poin, &gt; 2× galat, dan H3 setelah fee positif.'}</div></div>`;
-    }
-    let html = `<div class="msg-box info" style="margin-top:0;"><div>Uji ke depan: tiap hari 3 saham "paling belum lari" dicatat otomatis (aturan dikunci). Entry = harga <b>buka</b> hari bursa berikutnya, hasil = penutupan hari ke-1/2/3. Pembanding = rata-rata semua kandidat hari yang sama. Fee ±${BL_FEE_PCT}% belum dikurangkan di angka bawah kecuali disebut.</div></div>`;
-    html += verdict;
-    html += `<div class="stats-grid">
-      <div class="stats-card"><div class="sc-label">Hari selesai</div><div class="sc-val">${agg.nDays}</div><div class="sc-sub">${agg.nPicks} pick</div></div>
-      <div class="stats-card"><div class="sc-label">Rata-rata H1</div><div class="sc-val ${cls(agg.h1)}">${pct(agg.h1)}</div></div>
-      <div class="stats-card"><div class="sc-label">Rata-rata H2</div><div class="sc-val ${cls(agg.h2)}">${pct(agg.h2)}</div></div>
-      <div class="stats-card"><div class="sc-label">Rata-rata H3</div><div class="sc-val ${cls(agg.h3)}">${pct(agg.h3)}</div><div class="sc-sub">setelah fee: ${agg.h3!=null ? pct(agg.h3 - BL_FEE_PCT) : '-'}</div></div>
-      <div class="stats-card"><div class="sc-label">Semua kandidat (H3)</div><div class="sc-val ${cls(agg.poolH3)}">${pct(agg.poolH3)}</div></div>
-      <div class="stats-card"><div class="sc-label">Selisih vs acak</div><div class="sc-val ${cls(agg.diff)}">${pct(agg.diff)}</div><div class="sc-sub">± ${seH!=null?seH.toFixed(2):'-'} (galat, sudah hitung hari tumpang tindih) · unggul ${agg.posDays}/${agg.nDays} hari</div></div>
-      <div class="stats-card"><div class="sc-label">Pernah ≥ +3% (3 hari)</div><div class="sc-val">${agg.up3!=null?agg.up3.toFixed(0)+'%':'-'}</div></div>
-      <div class="stats-card"><div class="sc-label">Pernah ≤ −3% (3 hari)</div><div class="sc-val">${agg.dn3!=null?agg.dn3.toFixed(0)+'%':'-'}</div></div>
-      <div class="stats-card"><div class="sc-label">Close H3 &gt; entry</div><div class="sc-val">${agg.win3!=null?agg.win3.toFixed(0)+'%':'-'}</div></div>
-    </div>`;
+    const p0 = v => v == null ? '-' : v.toFixed(0) + '%';
+    const maxSi = Math.max(...docs.map(d => d.si == null ? -1 : d.si));
+    const noRes = docs.filter(d => !d.res && d.si != null && d.si < maxSi).length; // catatan hari terakhir memang belum punya hasil
+    let html = `<div class="msg-box info" style="margin-top:0;"><div>ℹ <b>Skema baru (v2)</b>: tiap hari dicatat <b>Top 3 "belum lari"</b> dan <b>daftar Bandar Accum yang baru muncul</b>. Entry = harga <b>buka</b> hari bursa berikutnya, hasil = penutupan hari ke-1/3/5/10. <b>Alpha</b> = hasil dikurangi rata-rata semua saham likuid yang "dibeli" di hari yang sama (jadi naik-turunnya pasar terimbang). <b>Live</b> = dicatat pada harinya (uji jujur ke depan); <b>Backtest</b> = direkonstruksi dari histori setelah aturannya dibuat (bahan awal, bukan bukti). Vonis ✅ hanya dari baris Live: minimal 15 hari H10 selesai, alpha H10 ≥ +1 poin dan &gt; 2× galat, positif di kedua paruh, dan H10 setelah fee ${BL_FEE_PCT}% positif.</div></div>`;
+    if(noRes) html += `<div class="msg-box warning"><div>⚠ ${noRes} catatan belum punya hasil. Hasil terisi otomatis saat Step 4 jalan; untuk catatan lama jalankan Diagnosa dengan "Rapikan riwayat" dicentang.</div></div>`;
 
-    // --- kondisi pasar ---
-    const row = (label, g, extra) => g.days
-      ? `<tr><td>${label}</td><td>${g.days}</td><td class="${cls(g.pick1)}">${pct(g.pick1)}</td><td class="${cls(g.pick)}">${pct(g.pick)}</td><td class="${cls(g.pick - BL_FEE_PCT)}">${pct(g.pick - BL_FEE_PCT)}</td><td class="${cls(g.pool)}">${pct(g.pool)}</td><td class="${cls(g.diff)}">${pct(g.diff)}</td>${extra||''}</tr>`
-      : `<tr><td>${label}</td><td>0</td><td colspan="5">-</td>${extra||''}</tr>`;
-    html += `<div class="table-section-title">Hasil menurut kondisi pasar</div>
-      <div class="msg-box info"><div>ℹ <b>Naik/turun</b> dilihat <i>setelah kejadian</i> (rata-rata semua kandidat 3 hari ke depan positif atau tidak) — menjelaskan dari mana untung/rugi datang, tapi tidak bisa dipakai sebelum beli. <b>Lampu pasar</b> diketahui <i>sebelum beli</i> (dihitung saat import, data sampai hari sinyal) — ini yang bisa jadi aturan entry kalau terbukti. Lampu baru tercatat sejak Step 4 versi baru dijalankan; hari sebelumnya tampil "belum tercatat" (hasil lampu untuk hari-hari lama ada di tabel 9 panel Diagnosa).</div></div>
-      <table><thead><tr><th>Kondisi</th><th>Hari</th><th>Rata H1 pick</th><th>Rata H3 pick</th><th>H3 setelah fee</th><th>Rata H3 semua</th><th>Selisih H3</th></tr></thead><tbody>
-      ${row('📈 Pasar naik (setelah kejadian)', agg.byMarket.up)}
-      ${row('📉 Pasar turun (setelah kejadian)', agg.byMarket.down)}
-      ${row(mktLightLabel('hijau'), agg.byLight.hijau)}
-      ${row(mktLightLabel('kuning'), agg.byLight.kuning)}
-      ${row(mktLightLabel('merah'), agg.byLight.merah)}
-      ${row(mktLightLabel(null), agg.byLight.none)}
-      ${row('🔄 Pantulan-v1: indeks 5 hari ≤ −3% (calon aturan)', agg.byBounce.yes)}
-      ${row('Selain itu (indeks 5 hari &gt; −3%)', agg.byBounce.no)}
-      </tbody></table>
-      <div style="font-size:11px; color:var(--text-faint); margin-top:6px;">Tabel 9 Diagnosa (Sep–Nov): lampu hijau <b>tidak</b> lebih baik (justru paling jelek), sedangkan Top 3 paling baik setelah pasar turun dalam. Karena pola pantulan ditemukan setelah melihat data, ia diuji ke depan di sini mulai 9 Nov 2026 — butuh ≥ 15 hari pantulan sebelum dinilai. Hari tanpa data indeks (sebelum Step 4 versi baru) tidak masuk baris pantulan.</div>`;
-
-    html += `<div class="table-section-title">Per Tanggal</div><table><thead><tr><th>Tanggal</th><th>Lampu</th><th>Mode</th><th>Kandidat</th><th>Pick (H3)</th><th>Rata H3 pick</th><th>Rata H3 semua</th><th>Selisih</th></tr></thead><tbody>`;
-    records.forEach(rec => {
-      const cells = rec.pickTickers.map((t,i) => {
-        const o = rec.picks[i] || {};
-        let txt;
-        if(o.state === 'pending' || (o.state === 'ok' && o.done < 3)) txt = o.state==='ok' ? `H${o.done} ${pct(o['h'+o.done])}` : 'menunggu';
-        else if(o.state === 'invalid') txt = 'data tdk valid';
-        else txt = pct(o.h3);
-        return `<b>${t}</b> <span class="${o.state==='ok' && o.done===3 ? cls(o.h3) : ''}">${txt}</span>`;
-      }).join(' &nbsp;·&nbsp; ');
-      const mean = a => a.length ? a.reduce((x,y)=>x+y,0)/a.length : null;
-      const pm = mean(rec.picks.filter(p=>p.state==='ok' && p.done===3).map(p=>p.h3));
-      const lm = mean(rec.pool.filter(p=>p.state==='ok' && p.done===3).map(p=>p.h3));
-      const df = (pm!=null && lm!=null) ? pm - lm : null;
-      html += `<tr><td>${rec.date}</td><td style="white-space:nowrap;">${rec.light ? mktLightLabel(rec.light) : '<span style="color:var(--text-faint);">-</span>'}</td><td>${rec.mode === 'baru' ? 'sinyal baru' : 'semua'}</td><td>${rec.poolSize ?? '-'}</td><td style="font-family:'Inter'; font-size:12px;">${cells}</td><td class="${cls(pm)}">${pct(pm)}</td><td class="${cls(lm)}">${pct(lm)}</td><td class="${cls(df)}">${pct(df)}</td></tr>`;
+    // --- ringkasan per aturan
+    RAPOR_RULES.forEach(rule => {
+      const groups = [
+        { label: 'Live', docs: docs.filter(rule.isLive) },
+        { label: 'Backtest', docs: docs.filter(d => !rule.isLive(d)) },
+        { label: 'Gabungan', docs },
+      ];
+      const sums = groups.map(g => ({ ...g, s: raporSummary(g.docs, rule) }));
+      const live = sums[0].s;
+      let verdict;
+      if(live.d10 < 15) verdict = `<div class="msg-box info"><div>⏳ ${rule.label} (${rule.code}, dikunci ${rule.lock}): data <b>live</b> baru ${live.d10}/15 hari dengan H10 selesai. Lihat baris Backtest sebagai gambaran awal saja.</div></div>`;
+      else if(live.pass) verdict = `<div class="msg-box success"><div>✅ ${rule.label} lolos uji live: alpha H10 ${pct(live.a10)} (± ${live.se10.toFixed(2)}), positif di kedua paruh, H10 setelah fee ${pct(live.h10 - BL_FEE_PCT)}.</div></div>`;
+      else if(live.rel) verdict = `<div class="msg-box warning"><div>⚠ ${rule.label}: unggul dari pasar (alpha H10 ${pct(live.a10)}), tapi H10 setelah fee masih ${pct(live.h10 - BL_FEE_PCT)} — lebih baik dari pasar, belum untung.</div></div>`;
+      else verdict = `<div class="msg-box warning"><div>⚠ ${rule.label}: belum lolos (alpha H10 live ${pct(live.a10)} ± ${live.se10!=null?live.se10.toFixed(2):'-'}, paruh ${pct(live.aA)} / ${pct(live.aB)}).</div></div>`;
+      html += `<div class="table-section-title">${rule.label} <span style="text-transform:none; letter-spacing:0; color:var(--text-faint);">· ${rule.code}</span></div>${verdict}
+        <div class="preview-table-wrap"><table><thead><tr><th>Data</th><th>Hari (H10 selesai)</th><th>Pick H10</th><th>Jual H1</th><th>Jual H3</th><th>Jual H5</th><th>Jual H10</th><th>H10 setelah fee</th><th>Alpha H5</th><th>Alpha H10 (± galat)</th><th>Alpha paruh awal / akhir</th><th>vs semua kandidat</th><th>Close H10 &gt; entry</th><th>Pernah ≥ +5%</th><th>Pernah ≤ −5%</th></tr></thead><tbody>` +
+        sums.map(g => { const s = g.s; return `<tr${g.label==='Gabungan' ? ' style="opacity:.75;"' : ''}><td><b>${g.label}</b></td><td>${s.d10} <span style="font-size:10px;color:var(--text-faint);">dari ${s.nDocs}</span></td><td>${s.n10}</td>
+          <td class="${cls(s.h1)}">${pct(s.h1)}</td><td class="${cls(s.h3)}">${pct(s.h3)}</td><td class="${cls(s.h5)}">${pct(s.h5)}</td><td class="${cls(s.h10)}">${pct(s.h10)}</td><td class="${cls(s.h10!=null?s.h10-BL_FEE_PCT:null)}">${s.h10!=null?pct(s.h10-BL_FEE_PCT):'-'}</td>
+          <td class="${cls(s.a5)}">${pct(s.a5)}</td><td class="${cls(s.a10)}">${pct(s.a10)} <span style="font-size:10px;color:var(--text-faint);">± ${s.se10!=null?s.se10.toFixed(2):'-'}</span></td><td><span class="${cls(s.aA)}">${pct(s.aA)}</span> / <span class="${cls(s.aB)}">${pct(s.aB)}</span></td><td class="${cls(s.p10)}">${pct(s.p10)}</td><td>${p0(s.win10)}</td><td>${p0(s.up5)}</td><td>${p0(s.dn5)}</td></tr>`; }).join('') +
+        `</tbody></table></div>`;
     });
-    html += `</tbody></table>`;
+
+    // --- menurut kondisi pasar (gabungan live + backtest)
+    const conds = [
+      { label: '🔄 Pantulan (indeks 5 hari ≤ −3%)', f: d => d.market && d.market.mkt5 != null && d.market.mkt5 <= BL_BOUNCE_MKT5 },
+      { label: 'Selain pantulan', f: d => d.market && d.market.mkt5 != null && d.market.mkt5 > BL_BOUNCE_MKT5 },
+      { label: mktLightLabel('hijau'), f: d => d.market && d.market.light === 'hijau' },
+      { label: mktLightLabel('kuning'), f: d => d.market && d.market.light === 'kuning' },
+      { label: mktLightLabel('merah'), f: d => d.market && d.market.light === 'merah' },
+    ];
+    const cell = s => s.d10 ? `<td>${s.d10}</td><td class="${cls(s.h5)}">${pct(s.h5)}</td><td class="${cls(s.h10)}">${pct(s.h10)}</td><td class="${cls(s.a10)}">${pct(s.a10)}</td>` : `<td>0</td><td>-</td><td>-</td><td>-</td>`;
+    html += `<div class="table-section-title">Menurut kondisi pasar saat dicatat (live + backtest)</div>
+      <div class="preview-table-wrap"><table><thead><tr><th rowspan="2">Kondisi</th><th colspan="4">🎯 Top 3 "belum lari"</th><th colspan="4">🧱 Bandar Accum baru</th></tr>
+      <tr><th>Hari</th><th>H5</th><th>H10</th><th>Alpha H10</th><th>Hari</th><th>H5</th><th>H10</th><th>Alpha H10</th></tr></thead><tbody>` +
+      conds.map(c => { const sub = docs.filter(c.f); return `<tr><td>${c.label}</td>${cell(raporSummary(sub, RAPOR_RULES[0]))}${cell(raporSummary(sub, RAPOR_RULES[1]))}</tr>`; }).join('') +
+      `</tbody></table></div><div style="font-size:11px; color:var(--text-faint); margin-top:6px;">Hari = jumlah hari dengan H10 selesai. Kondisi pasar hanya ada untuk hari yang punya data indeks (≥ 20 hari histori).</div>`;
+
+    // --- per tanggal
+    const outTxt = o => {
+      if(!o) return '<span style="color:var(--text-faint);">menunggu</span>';
+      if(o.invalid) return '<span style="color:var(--text-faint);">tdk valid</span>';
+      const H = o.h10 != null ? 10 : o.h5 != null ? 5 : o.h3 != null ? 3 : o.h1 != null ? 1 : null;
+      return H == null ? '<span style="color:var(--text-faint);">menunggu</span>' : `<span class="${cls(o['h'+H])}">${H===10?'':'H'+H+' '}${pct(o['h'+H])}</span>`;
+    };
+    const sorted = docs.slice().sort((a,b) => a.date < b.date ? 1 : -1);
+    html += `<div class="table-section-title">Per Tanggal <span style="text-transform:none; letter-spacing:0; color:var(--text-faint);">(angka tanpa label = H10; "H5" dsb. = belum 10 hari)</span></div>
+      <div class="preview-table-wrap"><table><thead><tr><th>Tanggal</th><th>Sumber</th><th>Lampu</th><th>🎯 Top 3</th><th>🧱 Bandar Accum baru</th><th>Pasar H10</th></tr></thead><tbody>` +
+      sorted.map(d => {
+        const po = (d.res && d.res.picks) || {}, bo = (d.res && d.res.bandar) || {};
+        const top = (d.picks || []).length ? d.picks.map(p => `<b>${p.ticker}</b> ${outTxt(po[p.ticker])}`).join(' · ') : '<span style="color:var(--text-faint);">-</span>';
+        const bl = d.bandar || [];
+        const ban = bl.length ? bl.slice(0,8).map(t => `<b>${t}</b> ${outTxt(bo[t])}`).join(' · ') + (bl.length > 8 ? ` · +${bl.length-8} lagi` : '') : '<span style="color:var(--text-faint);">-</span>';
+        const src = d.source === 'backfill' ? '<span style="color:var(--text-faint);">backtest</span>' : 'live';
+        const mk = d.res && d.res.mkt ? d.res.mkt.h10 : null;
+        return `<tr><td>${d.date}</td><td>${src}</td><td style="white-space:nowrap;">${d.market && d.market.light ? mktLightLabel(d.market.light) : '-'}${d.market && d.market.mkt5 != null && d.market.mkt5 <= BL_BOUNCE_MKT5 ? ' 🔄' : ''}</td><td style="font-family:'Inter'; font-size:12px; white-space:normal; min-width:220px;">${top}</td><td style="font-family:'Inter'; font-size:12px; white-space:normal; min-width:260px;">${ban}</td><td class="${cls(mk)}">${pct(mk)}</td></tr>`;
+      }).join('') + `</tbody></table></div>`;
     return html;
   }
 
@@ -1093,6 +1126,7 @@
   document.getElementById('tabWatchlistBtn').addEventListener('click', () => switchTab('watchlist'));
   document.getElementById('tabStatsBtn').addEventListener('click', () => switchTab('stats'));
   document.getElementById('tabHoldBtn').addEventListener('click', () => switchTab('hold'));
+  document.getElementById('statsShowOld').addEventListener('change', () => loadStats());
   document.getElementById('tabTopBtn').addEventListener('click', () => switchTab('top'));
 
   function switchTab(tab){
@@ -1232,38 +1266,39 @@
   async function cleanWatchlist(){
     if(!firebaseReady) return;
     const btn = document.getElementById('btnCleanWatchlist');
-    if(!confirm('Hapus semua entry Watchlist yang auto-masuk tapi tidak pernah match \u22653 kategori (entry manual & match \u22653 tetap aman)?')) return;
+    const { collection, getDocs, doc, deleteDoc, setDoc } = firestoreFns;
     btn.disabled = true;
-    btn.textContent = 'Membersihkan...';
-    const { collection, getDocs, doc, deleteDoc } = firestoreFns;
+    btn.textContent = 'Memeriksa...';
     try{
       const wlSnap = await getDocs(collection(db, 'watchlist'));
-      const toDelete = wlSnap.docs.filter(d => {
-        const data = d.data();
-        const wasAuto = data.autoAdded === true;
-        const snapMatch = data.snapshot?.matchCount ?? 0;
-        return wasAuto && snapMatch < 3;
-      });
-      if(!toDelete.length){
-        alert('Tidak ada entry yang perlu dibersihkan — semua sudah match \u22653 kategori atau ditambahkan manual.');
-      }else{
-        const { errorCount } = await runWithConcurrency(toDelete, 15, async (d) => {
-          await deleteDoc(doc(db, 'watchlist', d.id));
-        });
-        alert(`Selesai — ${toDelete.length - errorCount} entry dibersihkan.${errorCount ? ` ${errorCount} gagal dihapus.` : ''}`);
+      const isV2 = snap => !!(snap && snap.scheme === 'v2');
+      // entry auto yang episode sekarangnya masih skema lama (≥3 kategori) -> dihapus
+      const toDelete = wlSnap.docs.filter(d => { const x = d.data(); return x.autoAdded === true && !isV2(x.snapshot); });
+      // entry skema baru yang masih menyimpan episode lama di riwayatnya -> riwayat lama dibuang
+      const toPrune = wlSnap.docs.filter(d => { const x = d.data(); return isV2(x.snapshot) && (x.episodeHistory || []).some(ep => !isV2(ep.snapshot)); });
+      if(!toDelete.length && !toPrune.length){
+        alert('Tidak ada data skema lama — Watchlist sudah bersih.');
+        return;
       }
+      if(!confirm(`Hapus ${toDelete.length} entry Watchlist skema lama (auto-masuk karena ≥3 kategori) dan buang riwayat episode lama di ${toPrune.length} entry skema baru?\n\nEntry manual dan entry skema baru (Top 3 / Bandar Accum) tetap aman. Penghapusan tidak bisa dibatalkan.`)) return;
+      btn.textContent = 'Membersihkan...';
+      const r1 = await runWithConcurrency(toDelete, 15, async (d) => { await deleteDoc(doc(db, 'watchlist', d.id)); });
+      const r2 = await runWithConcurrency(toPrune, 15, async (d) => {
+        const eps = (d.data().episodeHistory || []).filter(ep => isV2(ep.snapshot));
+        await setDoc(doc(db, 'watchlist', d.id), { episodeHistory: eps }, { merge: true });
+      });
+      const err = r1.errorCount + r2.errorCount;
+      alert(`Selesai — ${toDelete.length - r1.errorCount} entry skema lama dihapus, ${toPrune.length - r2.errorCount} riwayat dirapikan.${err ? ` ${err} gagal.` : ''}`);
       loadWatchlist();
     }catch(err){
       console.error('cleanWatchlist gagal:', err);
       alert('Gagal membersihkan: ' + err.message);
     }finally{
       btn.disabled = false;
-      btn.textContent = '🧹 Bersihkan (Auto, Match <3)';
+      btn.textContent = '🧹 Hapus Data Skema Lama';
     }
   }
 
-  // ============================================================
-  // RENDER WATCHLIST (bandingkan snapshot saat ditambahkan vs kondisi sekarang)
   // ============================================================
   async function loadWatchlist(){
     if(!firebaseReady) return;
@@ -1289,7 +1324,10 @@
       // datanya sudah dibekukan) — supaya tampilan utama tetap rapi & fokus
       const { indexOf: tdIndexOf2, latestDate: tdLatest2 } = await getTradingDatesIndex();
       const activeItems = [], archivedItems = [];
-      allItems.forEach(item => {
+      // skema lama (auto-masuk karena ≥3 kategori) dipisah — tidak dipakai lagi, hanya arsip
+      const isOldScheme = it => it.autoAdded === true && !(it.snapshot && it.snapshot.scheme === 'v2');
+      const oldItems = allItems.filter(isOldScheme);
+      allItems.filter(it => !isOldScheme(it)).forEach(item => {
         const daysSince = item.addedDate ? tradingDaysElapsed(item.addedDate, tdLatest2, tdIndexOf2) : 0;
         if(daysSince <= WATCHLIST_MONITORING_DAYS) activeItems.push(item);
         else archivedItems.push(item);
@@ -1312,14 +1350,15 @@
         return { ...item, current: { ...rs, price, ind } };
       });
 
-      renderWatchlistSections(results.filter(Boolean), archivedItems);
+      renderWatchlistSections(results.filter(Boolean), archivedItems, oldItems);
     }catch(err){
       console.error('loadWatchlist gagal:', err);
       content.innerHTML = `<div class="empty-state"><div class="big">⚠</div><div class="msg">Gagal memuat watchlist.</div><div class="sub">${err.message}</div></div>`;
     }
   }
 
-  function renderWatchlistSections(activeItems, archivedItems){
+  function renderWatchlistSections(activeItems, archivedItems, oldItems){
+    oldItems = oldItems || [];
     const content = document.getElementById('watchlistContent');
     let html = '';
 
@@ -1337,7 +1376,23 @@
       </div>
     </div>`;
 
+    if(oldItems.length){
+      html += `<div style="margin-top:14px;">
+        <button class="btn-remove-watchlist" id="btnToggleOld" style="border-color:var(--border); color:var(--text-faint);">🗄️ ${oldItems.length} Skema lama (auto ≥3 kategori, tidak dipakai lagi) — klik untuk lihat</button>
+        <div id="oldGrid" style="display:none; margin-top:14px;">${buildWatchlistCardGrid(oldItems, true)}</div>
+      </div>`;
+    }
     content.innerHTML = html;
+
+    const toggleOld = document.getElementById('btnToggleOld');
+    if(toggleOld){
+      toggleOld.addEventListener('click', () => {
+        const g = document.getElementById('oldGrid');
+        const hid = g.style.display === 'none';
+        g.style.display = hid ? 'block' : 'none';
+        toggleOld.textContent = `🗄️ ${oldItems.length} Skema lama (auto ≥3 kategori, tidak dipakai lagi) — ${hid ? 'klik untuk sembunyikan' : 'klik untuk lihat'}`;
+      });
+    }
 
     const toggleBtn = document.getElementById('btnToggleArchive');
     if(toggleBtn){
@@ -1516,7 +1571,7 @@
       // ratakan tiap dokumen jadi beberapa "episode" — episode arsip (kejadian lama,
       // sudah lewat window 5 HARI BURSA, SELALU final) + episode aktif sekarang (final
       // cuma kalau sudah lewat 5 hari bursa, kalau belum berarti masih berjalan)
-      const items = [];
+      let items = [];
       rawItems.forEach(item => {
         (item.episodeHistory || []).forEach(ep => {
           items.push({ ticker: item.ticker, companyName: item.companyName, ...ep, isFinal: true });
@@ -1533,11 +1588,13 @@
         });
       });
 
+      const statsShowOld = !!(document.getElementById('statsShowOld') || {}).checked;
+      if(!statsShowOld) items = items.filter(it => it.snapshot && it.snapshot.scheme === 'v2');
       if(!items.length){
         content.innerHTML = `<div class="empty-state">
           <div class="big">📊</div>
-          <div class="msg">Belum ada data untuk dihitung.</div>
-          <div class="sub">Statistik akan muncul begitu ada saham yang masuk Watchlist.</div>
+          <div class="msg">Belum ada data skema baru untuk dihitung.</div>
+          <div class="sub">Statistik terisi begitu Step 4 versi baru memasukkan Top 3 / Bandar Accum ke Watchlist. Centang "Tampilkan juga skema lama" untuk melihat data lama.</div>
         </div>`;
         return;
       }
@@ -1561,7 +1618,10 @@
         // bergerak sama sekali — jangan dihitung menang/kalah dulu, biar tidak
         // menjatuhkan Win Rate secara tidak adil
         const isWin = (maxGainPct != null && daysSinceAdded > 0) ? maxGainPct > 0 : null;
-        const entryPhase = (s.phase && s.phase.length) ? s.phase[0] : (s.categories && s.categories.length ? 'Tanpa Fase Khusus' : '-');
+        const src = s.sources || [];
+        const entryPhase = s.scheme === 'v2'
+          ? (src.includes('top3') && src.includes('bandar') ? 'Top 3 + Bandar Accum' : src.includes('top3') ? 'Top 3 belum lari' : src.includes('bandar') ? 'Bandar Accum baru' : 'Skema baru')
+          : ((s.phase && s.phase.length) ? 'Lama · ' + s.phase[0] : (s.categories && s.categories.length ? 'Lama · Tanpa Fase Khusus' : 'Lama / manual'));
 
         return { ticker: item.ticker, companyName: item.companyName, addedDate: item.addedDate,
           daysToPeak, maxGainPct, maxDrawdownPct, isWin, entryPhase, isFinal: item.isFinal, daysSinceAdded };
@@ -1641,7 +1701,7 @@
       try{
         const trendQ = query(collection(db, 'statsHistory'), orderBy('date', 'asc'));
         const trendSnap = await getDocs(trendQ);
-        const history = trendSnap.docs.map(d => d.data());
+        const history = trendSnap.docs.map(d => d.data()).filter(h => statsShowOld || h.scheme === 'v2');
         if(history.length >= 2){
           html += `<div class="table-section-title">📈 Tren Performa per Fase (dari Waktu ke Waktu)</div>
             <div class="msg-box info" style="margin-bottom:12px;">ℹ ${history.length} snapshot harian, dari ${history[0].date} sampai ${history[history.length-1].date}. Snapshot baru tersimpan otomatis tiap Tahap 5 dijalankan — grafik ini baru mulai berarti setelah beberapa hari data terkumpul.</div>
