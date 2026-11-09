@@ -3008,8 +3008,17 @@
       <div class="preview-table-wrap"><table><thead><tr><th>Ukuran pasar di hari sinyal</th><th colspan="2">Rendah</th><th colspan="2">Tengah</th><th colspan="2">Tinggi</th></tr>
       <tr><th></th><th>Top 3</th><th>Radar</th><th>Top 3</th><th>Radar</th><th>Top 3</th><th>Radar</th></tr></thead><tbody>` +
       rg.terciles.map(t => `<tr><td>${t.m.label}<br><span style="font-size:10px;color:var(--text-muted);">batas: ≤ ${t.cuts[0]!=null?t.cuts[0].toFixed(1):'-'} · ≥ ${t.cuts[1]!=null?t.cuts[1].toFixed(1):'-'} (${t.parts[0].days} hari/kelompok)</span></td>` +
-        t.parts.map(p => `<td class="${cls(p.top3.ret3)}">${p.top3.n ? pc(p.top3.ret3) : '-'}</td><td class="${cls(p.radar.ret3)}">${p.radar.n ? pc(p.radar.ret3) : '-'}</td>`).join('') + `</tr>`).join('') +
+        t.parts.map(p => `<td class="${cls(p.top3.ret3)}">${p.top3.n ? pc(p.top3.ret3) : '-'}${p.top3.n ? `<br><span style="font-size:10px;color:var(--text-muted);">awal ${pc(p.top3.h3a)} / akhir ${pc(p.top3.h3b)}</span>` : ''}</td><td class="${cls(p.radar.ret3)}">${p.radar.n ? pc(p.radar.ret3) : '-'}</td>`).join('') + `</tr>`).join('') +
       `</tbody></table></div>`;
+
+    // pola "pantulan": Top 3 lebih baik di kelompok Rendah (pasar habis turun) di ≥3 dari 4 ukuran?
+    const lowBest = rg.terciles.filter(t => t.parts[0].top3.n && t.parts[1].top3.n && t.parts[2].top3.n &&
+      t.parts[0].top3.ret3 > t.parts[1].top3.ret3 && t.parts[0].top3.ret3 > t.parts[2].top3.ret3).length;
+    if(lowBest >= 3){
+      const m5 = rg.terciles.find(t => t.m.key === 'mkt5');
+      const lo = m5 ? m5.parts[0].top3 : null;
+      h += `<div class="msg-box info" style="margin-top:12px;"><div>🔄 Pola yang terlihat: Top 3 justru paling baik <b>setelah pasar turun</b> (kelompok Rendah lebih baik di ${lowBest} dari 4 ukuran)${lo && lo.n ? ` — saat indeks 5 hari ≤ ${m5.cuts[0].toFixed(1)}%: H3 ${pc(lo.ret3)}, paruh awal ${pc(lo.h3a)} / akhir ${pc(lo.h3b)}` : ''}. Ini pola <b>pantulan</b>, kebalikan dari lampu hijau. Karena ditemukan setelah melihat data, statusnya calon aturan: dilacak ke depan di tab 🎯 Top 3 sebagai "pantulan-v1" (indeks 5 hari ≤ −3%).</div></div>`;
+    }
 
     const g = rg.g, rd = rg.rd;
     if(rg.pass){
