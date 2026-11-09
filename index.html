@@ -270,6 +270,16 @@
       </div>
     </div>
     <div style="font-size:10.5px; color:var(--text-faint); margin-top:-6px; margin-bottom:6px; line-height:1.5;">Batas keras likuiditas — saham dengan rata-rata Value/Frequency di bawah ini dibuang total, walau sinyal kategori lain kuat. Ini beda dari Liquidity Score (yang cuma perbandingan relatif antar kandidat).</div>
+    <div class="field" style="max-width:560px; margin-top:16px;">
+      <label>🚫 Saham Dikecualikan — fundamental jelek (hasil screener Stockbit)</label>
+      <textarea id="fundExcludeInput" rows="4" placeholder="Tempel kode saham hasil screener, pisahkan dengan spasi / koma / baris baru. Contoh: ABCD, EFGH, IJKL" style="width:100%; box-sizing:border-box; background:var(--panel-alt); border:1px solid var(--border); color:var(--text); padding:10px 12px; border-radius:var(--radius); font-family:'IBM Plex Mono', monospace; font-size:12px; resize:vertical;"></textarea>
+      <div style="display:flex; gap:8px; margin-top:8px; flex-wrap:wrap;">
+        <button class="btn btn-ghost" id="btnSaveFundExclude">💾 Simpan Daftar</button>
+        <button class="btn btn-ghost" id="btnClearFundExclude">Kosongkan</button>
+      </div>
+      <div id="fundExcludeStatus" style="font-size:10.5px; color:var(--text-faint); margin-top:8px; line-height:1.5;">Memuat daftar...</div>
+      <div style="font-size:10.5px; color:var(--text-faint); margin-top:6px; line-height:1.5;">Kriteria: Net Income TTM &lt; 1, FCF TTM ≤ 0, DER (Quarter) &gt; 1, Capex TTM &lt; 0, ROE TTM &lt; 10 — semua syarat sekaligus. Saham di daftar ini dibuang dari radar, Watchlist otomatis, dan Top 3 (dihapus setelah skor dihitung, jadi deteksi saham lain tidak berubah). Update tiap kuartal setelah laporan keuangan baru keluar.</div>
+    </div>
     <button class="btn btn-ghost" id="btnRecompute4" style="margin-top:6px;">🔄 Hitung Ulang Sekarang (tanpa upload baru)</button>
     <div class="progress-wrap" id="progressWrap4">
       <div class="progress-bar-outer"><div class="progress-bar-inner" id="progressBar4"></div></div>
@@ -338,12 +348,13 @@
       <div class="step-num">🎯</div>
       <div class="step-title">Utilitas: Diagnosa Pemenang vs Pecundang (entry realistis)</div>
     </div>
-    <div class="msg-box info">ℹ Menjawab: <b>faktor apa yang membedakan saham radar yang naik 2-3 hari dari yang merah?</b> Entry dihitung di <b>open hari berikutnya</b> (harga paling awal yang benar-benar bisa kamu beli), lalu dicari filter yang tetap bekerja di data yang tidak dipakai untuk mencarinya. Juga menguji pilih Top 3/Top 5 per hari (tabel 8), lampu kondisi pasar 🟢/🟡/🔴 (tabel 9), kapan jual, pasang limit beli, dan masuk saat koreksi, dibandingkan dengan saham acak yang volatilitasnya sama. Murni analisis: tidak mengubah deteksi, Watchlist, atau data apa pun.</div>
+    <div class="msg-box info">ℹ Menjawab: <b>faktor apa yang membedakan saham radar yang naik 2-3 hari dari yang merah?</b> Entry dihitung di <b>open hari berikutnya</b> (harga paling awal yang benar-benar bisa kamu beli), lalu dicari filter yang tetap bekerja di data yang tidak dipakai untuk mencarinya. Juga menguji pilih Top 3/Top 5 per hari (tabel 8), lampu kondisi pasar 🟢/🟡/🔴 (tabel 9), tahan swing 5 & 10 hari (tabel 10), kapan jual, pasang limit beli, dan masuk saat koreksi, dibandingkan dengan saham acak yang volatilitasnya sama. Murni analisis: tidak mengubah deteksi, Watchlist, atau data apa pun.</div>
     <div style="display:flex; gap:12px; flex-wrap:wrap; margin-top:12px;">
       <div class="field" style="max-width:200px;"><label>Maks hari histori</label><input type="number" id="diagMaxDays" value="80" min="20" max="200" step="10"></div>
       <div class="field" style="max-width:140px;"><label>Take Profit (%)</label><input type="number" id="diagTp" value="3" min="0.5" step="0.5"></div>
       <div class="field" style="max-width:140px;"><label>Stop Loss (%)</label><input type="number" id="diagSl" value="3" min="0.5" step="0.5"></div>
     </div>
+    <label style="display:flex; gap:8px; align-items:center; font-size:12px; color:var(--text-dim); margin:4px 0 8px;"><input type="checkbox" id="diagExclFund" checked> Kecualikan saham di daftar "Saham Dikecualikan" (fundamental jelek) — sama dengan yang dibuang Step 4</label>
     <button class="btn btn-ghost" id="btnRunDiag" style="margin-top:4px;">🎯 Jalankan Diagnosa</button>
     <div class="progress-wrap" id="progressWrapDiag">
       <div class="progress-bar-outer"><div class="progress-bar-inner" id="progressBarDiag"></div></div>
@@ -410,6 +421,7 @@
           document.getElementById('loginOverlay').style.display = 'none';
           document.getElementById('userEmailLabel').textContent = user.email;
           loadUploadHistory();
+          initFundExcludeUI();
         }else{
           firebaseReady = false;
           document.getElementById('loginOverlay').style.display = 'flex';
@@ -1056,6 +1068,22 @@
       };
     });
 
+    // 7b. FILTER FUNDAMENTAL: buang saham di daftar "Saham Dikecualikan" (screener Stockbit).
+    //     Sengaja SETELAH semua skor/kategori dihitung, supaya Big Accum & skor persentil
+    //     saham lain dihitung dengan pembanding yang sama persis seperti sebelumnya.
+    const rawAll = raw; // dipakai untuk lampu pasar (indeks pasar tetap dari semua saham likuid)
+    let fundExcluded = [];
+    try{
+      const fx = await loadFundExclude(true);
+      if(fx && fx.tickers && fx.tickers.length){
+        const exSet = new Set(fx.tickers);
+        fundExcluded = raw.filter(r => exSet.has(r.ticker)).map(r => r.ticker);
+        raw = raw.filter(r => !exSet.has(r.ticker));
+      }
+    }catch(e){
+      warnings.push(`⚠ Daftar "Saham Dikecualikan" gagal dibaca — filter fundamental TIDAK diterapkan kali ini: ${e.message}`);
+    }
+
     // 8. simpan ke tickerRollingStats/{ticker}
     let saved = 0;
     const { errorCount: saveErrors, firstError: saveFirstError } = await runWithConcurrency(raw, 15, async (r) => {
@@ -1319,7 +1347,7 @@
     let top3Html = '';
     try{
       const seriesAsc = {};
-      raw.forEach(r => {
+      rawAll.forEach(r => {
         const days = historyMap[r.ticker];
         if(days && days.length) seriesAsc[r.ticker] = days.slice().sort((a,b)=> a.date < b.date ? -1 : 1);
       });
@@ -1386,7 +1414,7 @@
       <div class="stat-box ${withHistory3>=candidates.length*0.5?'ok':'warn'}"><div class="label">Histori \u22653 Hari</div><div class="value">${withHistory3}</div></div>
       <div class="stat-box"><div class="label">Match \u22653 Kategori</div><div class="value">${matched3plus.length}</div></div>
     </div>
-    <div class="msg-box info">ℹ ${belowMinPrice} saham dibuang karena harga di bawah Rp${minPrice}/lembar. ${belowLiquidity} saham dibuang karena Value/Frequency rata-rata di bawah batas minimal (dari ${rawBeforeLiquidityFilter} kandidat harga OK, tersisa ${raw.length}).${staleDocs.length ? ` ${staleDocs.length} data lama (sudah tidak lolos filter) dibersihkan dari database.` : ''}${autoAdded ? ` ⭐ ${autoAdded} saham baru otomatis masuk Watchlist (match \u22653 kategori)${autoReactivated ? `, ${autoReactivated} di antaranya kejadian BARU dari ticker yang pernah dipantau (>5 hari lalu, data lama diarsipkan)` : ''}.` : ''}${peakUpdated ? ` 📈 ${peakUpdated} entry Watchlist ter-update tracking harga tertinggi/terendahnya.` : ''}${peakBackfilled ? ` ⏪ ${peakBackfilled} entry berhasil di-backfill histori harganya dari Yahoo Finance.` : ''}</div>`;
+    <div class="msg-box info">ℹ ${belowMinPrice} saham dibuang karena harga di bawah Rp${minPrice}/lembar. ${belowLiquidity} saham dibuang karena Value/Frequency rata-rata di bawah batas minimal (dari ${rawBeforeLiquidityFilter} kandidat harga OK, tersisa ${rawAll.length}).${fundExcluded.length ? ` 🚫 ${fundExcluded.length} saham dibuang karena masuk daftar fundamental jelek (${fundExcluded.slice(0,15).join(', ')}${fundExcluded.length>15?', …':''}), tersisa ${raw.length}.` : ''}${staleDocs.length ? ` ${staleDocs.length} data lama (sudah tidak lolos filter) dibersihkan dari database.` : ''}${autoAdded ? ` ⭐ ${autoAdded} saham baru otomatis masuk Watchlist (match \u22653 kategori)${autoReactivated ? `, ${autoReactivated} di antaranya kejadian BARU dari ticker yang pernah dipantau (>5 hari lalu, data lama diarsipkan)` : ''}.` : ''}${peakUpdated ? ` 📈 ${peakUpdated} entry Watchlist ter-update tracking harga tertinggi/terendahnya.` : ''}${peakBackfilled ? ` ⏪ ${peakBackfilled} entry berhasil di-backfill histori harganya dari Yahoo Finance.` : ''}</div>`;
 
     if(withHistory3 < candidates.length){
       html += `<div class="msg-box warning">⚠ ${candidates.length - withHistory3} saham belum punya histori 3 hari — kategori Foreign Uptrend/Big Accum/Bandar Accum untuk saham itu belum bisa dievaluasi (butuh upload beberapa hari lagi, termasuk backfill kalau ada).</div>`;
@@ -2299,6 +2327,7 @@
               bidShare: bo>0 ? (D.bidVolume||0)/bo : null,
               breadth: bd && bd.n ? (bd.up/bd.n)*100 : null,
               matchCount: curMatch,
+              cats: { vb: !!r3.volumeBreakout, fu: !!r3.foreignUptrend, ba: !!r3.bigAccum, bd: !!r3.bandarAccum },
               price: D.close,
               ret1: oc.ret1, ret2: oc.ret2, ret3: oc.ret3, tpslRet: oc.tpslRet, tpslTag: oc.tpslTag,
               maxUp3: oc.maxUp3, minDn3: oc.minDn3,
@@ -2663,12 +2692,24 @@
       });
       const historyMap = {};
       results.forEach(h => { if(h && h.days.length) historyMap[h.ticker] = h.days; });
-      const eligible = Object.keys(historyMap).filter(t => {
+      let eligible = Object.keys(historyMap).filter(t => {
         const days = historyMap[t];
         const avgVal = days.reduce((a,d)=>a+(d.value||0),0) / days.length;
         const avgFreq = days.reduce((a,d)=>a+(d.frequency||0),0) / days.length;
         return avgVal >= minAvgValue && avgFreq >= minAvgFreq;
       });
+      let diagExclNote = '';
+      if(document.getElementById('diagExclFund').checked){
+        try{
+          const fx = await loadFundExclude(true);
+          if(fx && fx.tickers && fx.tickers.length){
+            const exSet = new Set(fx.tickers);
+            const before = eligible.length;
+            eligible = eligible.filter(t => !exSet.has(t));
+            diagExclNote = `<div class="msg-box info"><div>🚫 ${before - eligible.length} saham dari daftar "Saham Dikecualikan" tidak ikut dianalisis (daftar fundamental saat ini dipakai untuk seluruh histori).</div></div>`;
+          }
+        }catch(e){ diagExclNote = `<div class="msg-box warning"><div>⚠ Daftar "Saham Dikecualikan" gagal dibaca, semua saham ikut dianalisis: ${e.message}</div></div>`; }
+      }
       if(!eligible.length){ out.innerHTML = `<div class="msg-box error">✕ Tidak ada ticker yang lolos filter likuiditas.</div>`; return; }
 
       updateProgressDiag(universe.length, universe.length, 'Menganalisis');
@@ -2682,7 +2723,8 @@
       const ex = diagExtras(built);
       const t3 = diagTopN(built,3), t5 = diagTopN(built,5);
       const rg = diagRegime(built, t3.picksByKey.compF);
-      out.innerHTML = renderDiagnosa(an, built) + renderExtras(ex, built) + renderTopN(t3, t5) + renderRegime(rg);
+      const sw = diagSwing(built, t3);
+      out.innerHTML = diagExclNote + renderDiagnosa(an, built) + renderExtras(ex, built) + renderTopN(t3, t5) + renderRegime(rg) + renderSwing(sw);
     }catch(err){
       console.error(err);
       out.innerHTML = `<div class="msg-box error">✕ Gagal menjalankan diagnosa: ${err.message}</div>`;
@@ -3037,6 +3079,227 @@
     }
     return h;
   }
+
+  // ---- 10. uji SWING: tahan 5 & 10 hari bursa (entry open besok) ----
+  // Pertanyaan: apakah sinyal radar (uang asing/bandar masuk) lebih berguna untuk
+  // ditahan lebih lama, sehingga telat masuk 1 hari tidak terlalu berpengaruh?
+  // H5 = close hari bursa ke-5 sejak hari entry (hari entry = hari ke-1), H10 = ke-10.
+  // Alpha = return saham dikurangi rata-rata return SEMUA saham likuid di tanggal sinyal
+  // yang sama dengan cara hitung yang sama (jadi naik-turunnya pasar ikut terimbang).
+  const SWING_FEE = 0.4;
+  function diagSwingOutcome(a, j, H, dateIdx){
+    if(j+H >= a.length) return null;
+    const di = dateIdx.get(a[j].date);
+    let up = -Infinity, dn = Infinity;
+    for(let k=1;k<=H;k++){
+      const r = a[j+k];
+      if(dateIdx.get(r.date) !== di+k) return null;
+      if(!(r.open>0 && r.high>0 && r.low>0 && r.close>0)) return null;
+      up = Math.max(up, r.high); dn = Math.min(dn, r.low);
+    }
+    const entry = a[j+1].open;
+    return { ret: (a[j+H].close/entry - 1)*100, up: (up/entry - 1)*100, dn: (dn/entry - 1)*100 };
+  }
+  // galat rata-rata harian yang memperhitungkan tumpang tindih periode tahan (Newey-West, bobot Bartlett)
+  function diagNwSe(series, lag){ // series: [{si, v}] satu nilai per tanggal
+    const n = series.length; if(n < 3) return null;
+    const m = diagMean(series.map(x=>x.v));
+    const e = series.map(x => ({ si: x.si, v: x.v - m }));
+    let v = e.reduce((a,x)=>a+x.v*x.v,0)/n;
+    for(let i=0;i<n;i++) for(let j=i+1;j<n;j++){
+      const g = Math.abs(e[i].si - e[j].si);
+      if(g >= 1 && g <= lag) v += 2*(1 - g/(lag+1))*e[i].v*e[j].v/n;
+    }
+    return Math.sqrt(Math.max(v, 0)/n);
+  }
+
+  function diagSwing(built, t3){
+    const { events, seriesAsc, dateIdx } = built;
+    const HS = [5, 10];
+    // rata-rata pasar per tanggal per horizon
+    const mk = { 5:{}, 10:{} };
+    const mkAll = { 5:[], 10:[] };
+    Object.keys(seriesAsc).forEach(t => {
+      const a = seriesAsc[t];
+      for(let j=0;j<a.length;j++){
+        HS.forEach(H => {
+          const o = diagSwingOutcome(a, j, H, dateIdx);
+          if(o){ (mk[H][a[j].date] = mk[H][a[j].date] || []).push(o.ret); mkAll[H].push({ date: a[j].date, ...o, alpha: 0 }); }
+        });
+      }
+    });
+    const mkMean = { 5:{}, 10:{} };
+    HS.forEach(H => Object.keys(mk[H]).forEach(d => { mkMean[H][d] = diagMean(mk[H][d]); }));
+    mkAll[5].forEach(x => x.alpha = x.ret - mkMean[5][x.date]);
+    mkAll[10].forEach(x => x.alpha = x.ret - mkMean[10][x.date]);
+
+    const cache = new Map();
+    const outOf = e => {
+      if(cache.has(e)) return cache.get(e);
+      const a = seriesAsc[e.ticker], o = { date: e.date };
+      HS.forEach(H => {
+        const r = diagSwingOutcome(a, e.idx, H, dateIdx);
+        if(r && mkMean[H][e.date] != null){ o['r'+H] = r.ret; o['a'+H] = r.ret - mkMean[H][e.date]; o['up'+H] = r.up; o['dn'+H] = r.dn; }
+      });
+      cache.set(e, o);
+      return o;
+    };
+
+    const reg = mktRegimeSeries(seriesAsc);
+    const isBounce = d => reg[d] && reg[d].mkt5 != null && reg[d].mkt5 <= -3;
+    const allDates10 = Array.from(new Set(events.map(e=>e.date))).filter(d => mkMean[10][d] != null).sort();
+    const half = new Set(allDates10.slice(0, Math.floor(allDates10.length/2)));
+
+    function summarize(label, list, key){
+      const outs = list.map(outOf);
+      const o10 = outs.filter(x => x.r10 != null), o5 = outs.filter(x => x.r5 != null);
+      const row = { key, label, n5: o5.length, n10: o10.length };
+      if(o5.length){ row.r5 = diagMean(o5.map(x=>x.r5)); row.a5 = diagMean(o5.map(x=>x.a5)); }
+      if(o10.length){
+        row.r10 = diagMean(o10.map(x=>x.r10)); row.a10 = diagMean(o10.map(x=>x.a10));
+        row.win10 = o10.filter(x=>x.r10>0).length/o10.length*100;
+        row.up5 = o10.filter(x=>x.up10>=5).length/o10.length*100;
+        row.dn5 = o10.filter(x=>x.dn10<=-5).length/o10.length*100;
+        // rata-rata alpha per tanggal -> galat & konsistensi paruh
+        const byD = {};
+        o10.forEach(x => { (byD[x.date] = byD[x.date] || []).push(x.a10); });
+        const series = Object.keys(byD).sort().map(d => ({ d, si: dateIdx.get(d), v: diagMean(byD[d]) }));
+        row.days = series.length;
+        row.se10 = diagNwSe(series, 9);
+        row.aA = diagMean(series.filter(x=>half.has(x.d)).map(x=>x.v));
+        row.aB = diagMean(series.filter(x=>!half.has(x.d)).map(x=>x.v));
+        row.pass = row.days >= 15 && row.a10 >= 1 && row.se10 != null && row.a10 > 2*row.se10 && row.aA > 0 && row.aB > 0;
+        row.passAbs = row.pass && row.r10 - SWING_FEE > 0;
+      }
+      return row;
+    }
+    const usable = events.filter(e => e.idx != null);
+    const rows = [];
+    rows.push({ ...summarize('Semua sinyal radar', usable, 'radar'), sep: true });
+    ['1','2','≥3'].forEach(k => rows.push(summarize('Kategori cocok: ' + k, usable.filter(e => (e.matchCount>=3 ? '≥3' : String(e.matchCount)) === k), 'm'+k)));
+    [['vb','Ada Volume Breakout'],['fu','Ada Foreign Uptrend'],['ba','Ada Big Accum'],['bd','Ada Bandar Accum']].forEach(([c,l]) =>
+      rows.push(summarize(l, usable.filter(e => e.cats && e.cats[c]), 'c'+c)));
+    const P = (t3 && t3.picksByKey) || {};
+    rows.push({ ...summarize('Top 3 "belum lari" per hari', P.compF || [], 'top3'), sep: true });
+    rows.push(summarize('Top 3 kategori terbanyak (radar apa adanya)', P.match || [], 'top3match'));
+    rows.push(summarize('Top 3 "sudah lari" (pembanding)', P.worst || [], 'top3worst'));
+    rows.push({ ...summarize('Sinyal radar saat pantulan (indeks 5 hari ≤ −3%)', usable.filter(e => isBounce(e.date)), 'radarBounce'), sep: true });
+    rows.push(summarize('Top 3 "belum lari" saat pantulan', (P.compF || []).filter(e => isBounce(e.date)), 'top3Bounce'));
+
+    const mkt = {
+      n10: mkAll[10].length, r5: diagMean(mkAll[5].map(x=>x.ret)), r10: diagMean(mkAll[10].map(x=>x.ret)),
+      win10: mkAll[10].length ? mkAll[10].filter(x=>x.ret>0).length/mkAll[10].length*100 : null,
+      up5: mkAll[10].length ? mkAll[10].filter(x=>x.up>=5).length/mkAll[10].length*100 : null,
+      dn5: mkAll[10].length ? mkAll[10].filter(x=>x.dn<=-5).length/mkAll[10].length*100 : null,
+    };
+    return { rows, mkt, nDates: allDates10.length, range: [allDates10[0], allDates10[allDates10.length-1]] };
+  }
+
+  function renderSwing(sw){
+    const pc = (v, d=2) => v==null || !isFinite(v) ? '-' : (v>=0?'+':'') + v.toFixed(d) + '%';
+    const cls = v => v==null ? '' : (v>=0 ? 'pos' : 'neg');
+    const pct0 = v => v==null ? '-' : v.toFixed(0) + '%';
+    let h = `<div class="table-section-title" style="margin-top:28px;">10. Uji swing: tahan 5 dan 10 hari bursa</div>
+      <div class="msg-box info" style="margin-bottom:10px;"><div>ℹ Entry tetap di <b>open besok</b> setelah sinyal, lalu dijual di close hari bursa ke-5 (H5) atau ke-10 (H10); hari entry dihitung hari ke-1. <b>Alpha</b> = hasil saham dikurangi rata-rata semua saham likuid yang "dibeli" di hari yang sama dengan cara yang sama — jadi kalau pasar sedang turun, alpha tetap bisa menunjukkan apakah pilihan radar lebih baik dari pasar. Galat sudah memperhitungkan periode tahan yang saling tumpang tindih. Rentang tanggal sinyal yang punya 10 hari ke depan: ${sw.range[0]||'-'} s/d ${sw.range[1]||'-'} (${sw.nDates} hari). ✅ = alpha H10 ≥ +1 poin, &gt; 2× galat, positif di kedua paruh, minimal 15 hari.</div></div>
+      <div class="preview-table-wrap"><table><thead><tr><th>Kelompok</th><th>n (H10)</th><th>Jual H5</th><th>Alpha H5</th><th>Jual H10</th><th>H10 setelah fee</th><th>Alpha H10 (± galat)</th><th>Alpha paruh awal / akhir</th><th>Close H10 &gt; entry</th><th>Pernah ≥ +5%</th><th>Pernah ≤ −5%</th><th>Vonis</th></tr></thead><tbody>
+      <tr><td><i>Semua saham likuid (pasar)</i></td><td>${sw.mkt.n10}</td><td class="${cls(sw.mkt.r5)}">${pc(sw.mkt.r5)}</td><td>0</td><td class="${cls(sw.mkt.r10)}">${pc(sw.mkt.r10)}</td><td class="${cls(sw.mkt.r10-SWING_FEE)}">${pc(sw.mkt.r10-SWING_FEE)}</td><td>0</td><td>-</td><td>${pct0(sw.mkt.win10)}</td><td>${pct0(sw.mkt.up5)}</td><td>${pct0(sw.mkt.dn5)}</td><td>-</td></tr>`;
+    sw.rows.forEach(r => {
+      const tr = r.sep ? '<tr style="border-top:2px solid var(--border);">' : '<tr>';
+      if(!r.n10){ h += `${tr}<td>${r.label}</td><td>0</td><td colspan="10">-</td></tr>`; return; }
+      const v = r.passAbs ? '✅ untung' : r.pass ? '✅ unggul (tapi H10 − fee ≤ 0)' : (r.days < 15 ? '⚠ hari &lt; 15' : '✕');
+      h += `${tr}<td>${r.label}</td><td>${r.n10}<br><span style="font-size:10px;color:var(--text-muted);">${r.days} hari</span></td><td class="${cls(r.r5)}">${pc(r.r5)}</td><td class="${cls(r.a5)}">${pc(r.a5)}</td><td class="${cls(r.r10)}">${pc(r.r10)}</td><td class="${cls(r.r10-SWING_FEE)}">${pc(r.r10-SWING_FEE)}</td><td class="${cls(r.a10)}">${pc(r.a10)} <span style="font-size:10px;color:var(--text-muted);">± ${r.se10!=null?r.se10.toFixed(2):'-'}</span></td><td><span class="${cls(r.aA)}">${pc(r.aA)}</span> / <span class="${cls(r.aB)}">${pc(r.aB)}</span></td><td>${pct0(r.win10)}</td><td>${pct0(r.up5)}</td><td>${pct0(r.dn5)}</td><td>${v}</td></tr>`;
+    });
+    h += `</tbody></table></div>`;
+    const good = sw.rows.filter(r => r.pass);
+    const radar = sw.rows.find(r => r.key === 'radar');
+    if(good.length){
+      const abs = good.filter(r => r.passAbs);
+      h += `<div class="msg-box success" style="margin-top:12px;"><div>✅ Unggul dari pasar dengan tahan 10 hari: <b>${good.map(r=>r.label).join('; ')}</b>.${abs.length ? ` Yang juga untung setelah fee: <b>${abs.map(r=>r.label).join('; ')}</b>.` : ' Belum ada yang untung setelah fee — artinya sinyal ini lebih baik dari pasar, tapi di periode pasar turun tetap ikut rugi.'} Ini kandidat aturan swing; tetap uji ke depan sebelum dipakai penuh.</div></div>`;
+    }else{
+      h += `<div class="msg-box warning" style="margin-top:12px;"><div>⚠ Belum ada kelompok yang lolos (alpha H10 ≥ +1 poin, &gt; 2× galat, positif di kedua paruh). ${radar && radar.a10 != null ? `Semua sinyal radar: alpha H10 ${pc(radar.a10)} ± ${radar.se10!=null?radar.se10.toFixed(2):'-'}.` : ''} Kalau alpha H10 lebih baik dari alpha H3 di tabel 1, berarti tahan lebih lama memang membantu walau belum cukup kuat. Jalankan ulang setelah histori bertambah.</div></div>`;
+    }
+    return h;
+  }
+
+  // ============================================================
+  // FILTER FUNDAMENTAL: daftar saham dikecualikan (hasil screener Stockbit)
+  // Disimpan di systemMeta/fundamentalExclude. Step 4 membuang saham ini dari
+  // radar (tickerRollingStats), Watchlist otomatis, dan Top 3 — SETELAH semua skor
+  // & kategori dihitung, jadi hasil deteksi saham lain tidak berubah sama sekali.
+  // Angka TTM berubah per kuartal, jadi cukup diperbarui tiap laporan keuangan keluar.
+  // ============================================================
+  const FUND_EXCLUDE_CRITERIA = 'Screener Stockbit (semua syarat): Net Income TTM < 1, Free Cash Flow TTM ≤ 0, DER (Quarter) > 1, Capex TTM < 0, ROE TTM < 10';
+  const FUND_STALE_DAYS = 100;
+  let fundExcludeCache = null;
+  async function loadFundExclude(force){
+    if(fundExcludeCache && !force) return fundExcludeCache;
+    const { doc, getDoc } = firestoreFns;
+    const s = await getDoc(doc(db, 'systemMeta', 'fundamentalExclude'));
+    fundExcludeCache = s.exists() ? s.data() : { tickers: [] };
+    return fundExcludeCache;
+  }
+  function renderFundExcludeStatus(info, extra){
+    const el = document.getElementById('fundExcludeStatus');
+    if(!el) return;
+    const n = info && info.tickers ? info.tickers.length : 0;
+    if(!n){ el.innerHTML = `Belum ada daftar — semua saham yang lolos filter harga & likuiditas tetap masuk radar.${extra ? '<br>' + extra : ''}`; return; }
+    const upd = info.updatedAt ? new Date(info.updatedAt) : null;
+    const age = upd ? Math.floor((Date.now() - upd.getTime())/864e5) : null;
+    el.innerHTML = `✓ <b>${n} saham</b> dikecualikan dari radar. Diperbarui ${upd ? upd.toLocaleDateString('id-ID', { day:'numeric', month:'short', year:'numeric' }) : '-'}${age != null ? ` (${age} hari lalu)` : ''}.` +
+      (age != null && age > FUND_STALE_DAYS ? ` <span style="color:var(--amber-flag);">⚠ Sudah lebih dari ${FUND_STALE_DAYS} hari — jalankan ulang screener Stockbit setelah laporan kuartal terbaru keluar.</span>` : '') +
+      `<br><span style="opacity:.8;">Berlaku di Step 4 berikutnya. Mau langsung diterapkan? Klik "Hitung Ulang Sekarang".</span>` + (extra ? '<br>' + extra : '');
+  }
+  async function initFundExcludeUI(){
+    try{
+      const info = await loadFundExclude(true);
+      const ta = document.getElementById('fundExcludeInput');
+      if(ta && info.tickers && info.tickers.length) ta.value = info.tickers.join(', ');
+      renderFundExcludeStatus(info);
+    }catch(e){
+      const el = document.getElementById('fundExcludeStatus');
+      if(el) el.innerHTML = `<span style="color:var(--amber-flag);">⚠ Gagal membaca daftar: ${e.message}</span>`;
+    }
+  }
+  async function saveFundExclude(clear){
+    if(!firebaseReady) return;
+    const { doc, setDoc, collection, query, orderBy, limit, getDocs } = firestoreFns;
+    const el = document.getElementById('fundExcludeStatus');
+    const ta = document.getElementById('fundExcludeInput');
+    const btn = document.getElementById('btnSaveFundExclude');
+    btn.disabled = true;
+    try{
+      let tickers = [], ignored = [];
+      if(!clear){
+        const cleaned = ta.value.replace(/free\s*cash\s*flow|net\s*income|debt\s*to\s*equity|capital\s*expenditure|return\s*on\s*equity/ig, ' ');
+        const tokens = Array.from(new Set((cleaned.toUpperCase().match(/\b[A-Z]{4}\b/g) || [])));
+        if(!tokens.length){ el.innerHTML = `<span style="color:var(--amber-flag);">⚠ Tidak ada kode saham (4 huruf) yang terbaca. Kalau mau mengosongkan daftar, klik "Kosongkan".</span>`; return; }
+        el.textContent = 'Mencocokkan dengan daftar saham di data terbaru...';
+        // cocokkan dengan kode saham yang benar-benar ada, supaya kata biasa (mis. "FREE", "CASH") tidak ikut tersimpan
+        const metaSnap = await getDocs(query(collection(db, 'dailySummary'), orderBy('tradingDate', 'desc'), limit(1)));
+        let known = null;
+        if(!metaSnap.empty){
+          const ld = metaSnap.docs[0].data().tradingDate;
+          const st = await getDocs(collection(db, 'dailySummary', ld, 'stocks'));
+          known = new Set(st.docs.map(d => d.id));
+        }
+        tickers = known ? tokens.filter(t => known.has(t)) : tokens;
+        ignored = known ? tokens.filter(t => !known.has(t)) : [];
+        tickers.sort();
+        if(!tickers.length){ el.innerHTML = `<span style="color:var(--amber-flag);">⚠ Tidak ada kode yang cocok dengan saham di data terbaru. Diabaikan: ${ignored.join(', ')}</span>`; return; }
+      }
+      const data = { tickers, count: tickers.length, criteria: FUND_EXCLUDE_CRITERIA, updatedAt: new Date().toISOString() };
+      await setDoc(doc(db, 'systemMeta', 'fundamentalExclude'), data);
+      fundExcludeCache = data;
+      ta.value = tickers.join(', ');
+      renderFundExcludeStatus(data, ignored.length ? `<span style="color:var(--amber-flag);">Diabaikan (bukan kode saham di data terbaru): ${ignored.join(', ')}</span>` : '');
+    }catch(e){
+      el.innerHTML = `<span style="color:var(--amber-flag);">⚠ Gagal menyimpan: ${e.message}</span>`;
+    }finally{
+      btn.disabled = false;
+    }
+  }
+  document.getElementById('btnSaveFundExclude').addEventListener('click', () => saveFundExclude(false));
+  document.getElementById('btnClearFundExclude').addEventListener('click', () => { document.getElementById('fundExcludeInput').value = ''; saveFundExclude(true); });
 
   function sleep(ms){ return new Promise(resolve => setTimeout(resolve, ms)); }
 
