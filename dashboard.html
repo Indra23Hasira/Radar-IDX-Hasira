@@ -639,6 +639,7 @@
   // ============================================================
   const BL_FEE_PCT = 0.4; // perkiraan fee beli + jual
   const BL_MIN_POOL = 6;  // hari dengan kandidat < 6 tidak dihitung di statistik
+  const BL_BOUNCE_MKT5 = -3; // calon aturan pantulan-v1: indeks pasar 5 hari <= -3%
 
   function blRanksAvg(vals){
     const idx = vals.map((v,i)=>[v,i]).sort((a,b)=>a[0]-b[0]);
@@ -723,7 +724,7 @@
     const days = dayRecords.filter(d => d.poolSize >= BL_MIN_POOL && d.picks.some(p=>p.state==='ok' && p.done===3));
     const dm = (d, key, grp) => mean(d[grp].filter(p=>p.state==='ok' && p.done===3).map(p=>p[key]));
     const pickH = k => mean(days.map(d=>dm(d,k,'picks')).filter(v=>v!=null));
-    const dayDiff = days.map(d => { const a=dm(d,'h3','picks'), b=dm(d,'h3','pool'); return (a!=null && b!=null) ? { d, a, b, diff: a-b } : null; }).filter(Boolean);
+    const dayDiff = days.map(d => { const a=dm(d,'h3','picks'), b=dm(d,'h3','pool'); return (a!=null && b!=null) ? { d, a, b, diff: a-b, a1: dm(d,'h1','picks') } : null; }).filter(Boolean);
     const diffs = dayDiff.map(x => x.diff);
     const allPicks = days.flatMap(d => d.picks.filter(p=>p.state==='ok' && p.done===3));
     const s = sd(diffs);
@@ -744,10 +745,16 @@
       seNW = Math.sqrt(Math.max(v, 0) / n);
     }
     const seHonest = (se!=null || seNW!=null) ? Math.max(se||0, seNW||0) : null;
-    const grp = list => list.length ? { days: list.length, pick: mean(list.map(x=>x.a)), pool: mean(list.map(x=>x.b)), diff: mean(list.map(x=>x.diff)) } : { days: 0 };
+    const grp = list => list.length ? { days: list.length, pick: mean(list.map(x=>x.a)), pick1: mean(list.map(x=>x.a1).filter(v=>v!=null)), pool: mean(list.map(x=>x.b)), diff: mean(list.map(x=>x.diff)) } : { days: 0 };
     const byMarket = { up: grp(dayDiff.filter(x => x.b > 0)), down: grp(dayDiff.filter(x => x.b <= 0)) };
     const byLight = {};
     ['hijau','kuning','merah',null].forEach(L => { byLight[L || 'none'] = grp(dayDiff.filter(x => (x.d.light || null) === L)); });
+    // calon aturan "pantulan-v1": entry hanya setelah indeks pasar 5 hari turun >= 3% (dikunci 9 Nov 2026)
+    const byBounce = {
+      yes: grp(dayDiff.filter(x => x.d.mkt5 != null && x.d.mkt5 <= BL_BOUNCE_MKT5)),
+      no: grp(dayDiff.filter(x => x.d.mkt5 != null && x.d.mkt5 > BL_BOUNCE_MKT5)),
+      none: grp(dayDiff.filter(x => x.d.mkt5 == null)),
+    };
     return {
       nDays: days.length, nPicks: allPicks.length,
       h1: pickH('h1'), h2: pickH('h2'), h3: pickH('h3'),
@@ -757,7 +764,7 @@
       up3: allPicks.length ? allPicks.filter(p=>p.maxUp>=3).length/allPicks.length*100 : null,
       dn3: allPicks.length ? allPicks.filter(p=>p.minDn<=-3).length/allPicks.length*100 : null,
       win3: allPicks.length ? allPicks.filter(p=>p.h3>0).length/allPicks.length*100 : null,
-      byMarket, byLight,
+      byMarket, byLight, byBounce,
     };
   }
 
@@ -846,7 +853,7 @@
     const tp = lastTopPicks;
     const mk = (tp.market && tp.market.light) ? tp.market : (lastMarket && lastMarket.date === tp.date ? lastMarket : null);
     const mkLine = mk
-      ? `<div>🚦 Kondisi pasar: <b>${mktLightLabel(mk.light)}</b>${mk.above20!=null ? ` <span style="opacity:.8;">(indeks vs rata-rata 10 hari ${mk.idxVsMa10>=0?'+':''}${mk.idxVsMa10.toFixed(2)}%, ${mk.above20.toFixed(0)}% saham di atas MA20)</span>` : ''} — informasi, belum terbukti (uji di tabel 9 Diagnosa).${mk.light === 'merah' ? ' <b>Pasar sedang lemah: Top 3 bulan lalu rata-rata rugi saat pasar turun.</b>' : ''}</div>`
+      ? `<div>🚦 Kondisi pasar: <b>${mktLightLabel(mk.light)}</b>${mk.above20!=null ? ` <span style="opacity:.8;">(indeks 5 hari ${mk.mkt5!=null ? (mk.mkt5>=0?'+':'')+mk.mkt5.toFixed(2)+'%' : '-'}, ${mk.above20.toFixed(0)}% saham di atas MA20)</span>` : ''} — sekadar gambaran; di data Sep–Nov lampu hijau <b>tidak</b> terbukti lebih baik.${mk.mkt5 != null && mk.mkt5 <= BL_BOUNCE_MKT5 ? ' <b>🔄 Masuk kondisi "pantulan-v1"</b> (pasar sudah turun ≥ 3% dalam 5 hari) — calon aturan yang sedang diuji, bukan sinyal pasti; kalau mencoba: lot kecil, SL ketat, jangan tahan lama.' : ''}</div>`
       : `<div style="opacity:.8;">🚦 Kondisi pasar: belum dihitung — jalankan Step 4 (index.html versi baru) setelah import.</div>`;
     const chips = tp.picks.map((p,i) => {
       const r = lastRenderedData.find(x => x.ticker === p.ticker);
@@ -890,7 +897,7 @@
       for(const d of docs){
         const si = indexOf.get(d.date);
         const avail = si == null ? 0 : latestIdx - si;
-        const rec = { date: d.date, si, light: d.market ? d.market.light : null, mode: d.mode, poolSize: d.poolSize, picks: [], pool: [], pickTickers: d.picks.map(p => p.ticker), avail };
+        const rec = { date: d.date, si, light: d.market ? d.market.light : null, mkt5: d.market && d.market.mkt5 != null ? d.market.mkt5 : null, mode: d.mode, poolSize: d.poolSize, picks: [], pool: [], pickTickers: d.picks.map(p => p.ticker), avail };
         if(avail < 1){ rec.picks = d.picks.map(() => ({ state:'pending', done:0 })); records.push(rec); continue; }
         if(avail >= 3 && cache[d.date]){ rec.picks = cache[d.date].picks; rec.pool = cache[d.date].pool; records.push(rec); continue; }
         const outFor = async (t) => { const rows = await fetchRowsAfter(t, d.date); return blOutcome(rows, dates, si); };
@@ -946,18 +953,21 @@
 
     // --- kondisi pasar ---
     const row = (label, g, extra) => g.days
-      ? `<tr><td>${label}</td><td>${g.days}</td><td class="${cls(g.pick)}">${pct(g.pick)}</td><td class="${cls(g.pick - BL_FEE_PCT)}">${pct(g.pick - BL_FEE_PCT)}</td><td class="${cls(g.pool)}">${pct(g.pool)}</td><td class="${cls(g.diff)}">${pct(g.diff)}</td>${extra||''}</tr>`
-      : `<tr><td>${label}</td><td>0</td><td colspan="4">-</td>${extra||''}</tr>`;
+      ? `<tr><td>${label}</td><td>${g.days}</td><td class="${cls(g.pick1)}">${pct(g.pick1)}</td><td class="${cls(g.pick)}">${pct(g.pick)}</td><td class="${cls(g.pick - BL_FEE_PCT)}">${pct(g.pick - BL_FEE_PCT)}</td><td class="${cls(g.pool)}">${pct(g.pool)}</td><td class="${cls(g.diff)}">${pct(g.diff)}</td>${extra||''}</tr>`
+      : `<tr><td>${label}</td><td>0</td><td colspan="5">-</td>${extra||''}</tr>`;
     html += `<div class="table-section-title">Hasil menurut kondisi pasar</div>
       <div class="msg-box info"><div>ℹ <b>Naik/turun</b> dilihat <i>setelah kejadian</i> (rata-rata semua kandidat 3 hari ke depan positif atau tidak) — menjelaskan dari mana untung/rugi datang, tapi tidak bisa dipakai sebelum beli. <b>Lampu pasar</b> diketahui <i>sebelum beli</i> (dihitung saat import, data sampai hari sinyal) — ini yang bisa jadi aturan entry kalau terbukti. Lampu baru tercatat sejak Step 4 versi baru dijalankan; hari sebelumnya tampil "belum tercatat" (hasil lampu untuk hari-hari lama ada di tabel 9 panel Diagnosa).</div></div>
-      <table><thead><tr><th>Kondisi</th><th>Hari</th><th>Rata H3 pick</th><th>Setelah fee</th><th>Rata H3 semua</th><th>Selisih</th></tr></thead><tbody>
+      <table><thead><tr><th>Kondisi</th><th>Hari</th><th>Rata H1 pick</th><th>Rata H3 pick</th><th>H3 setelah fee</th><th>Rata H3 semua</th><th>Selisih H3</th></tr></thead><tbody>
       ${row('📈 Pasar naik (setelah kejadian)', agg.byMarket.up)}
       ${row('📉 Pasar turun (setelah kejadian)', agg.byMarket.down)}
       ${row(mktLightLabel('hijau'), agg.byLight.hijau)}
       ${row(mktLightLabel('kuning'), agg.byLight.kuning)}
       ${row(mktLightLabel('merah'), agg.byLight.merah)}
       ${row(mktLightLabel(null), agg.byLight.none)}
-      </tbody></table>`;
+      ${row('🔄 Pantulan-v1: indeks 5 hari ≤ −3% (calon aturan)', agg.byBounce.yes)}
+      ${row('Selain itu (indeks 5 hari &gt; −3%)', agg.byBounce.no)}
+      </tbody></table>
+      <div style="font-size:11px; color:var(--text-faint); margin-top:6px;">Tabel 9 Diagnosa (Sep–Nov): lampu hijau <b>tidak</b> lebih baik (justru paling jelek), sedangkan Top 3 paling baik setelah pasar turun dalam. Karena pola pantulan ditemukan setelah melihat data, ia diuji ke depan di sini mulai 9 Nov 2026 — butuh ≥ 15 hari pantulan sebelum dinilai. Hari tanpa data indeks (sebelum Step 4 versi baru) tidak masuk baris pantulan.</div>`;
 
     html += `<div class="table-section-title">Per Tanggal</div><table><thead><tr><th>Tanggal</th><th>Lampu</th><th>Mode</th><th>Kandidat</th><th>Pick (H3)</th><th>Rata H3 pick</th><th>Rata H3 semua</th><th>Selisih</th></tr></thead><tbody>`;
     records.forEach(rec => {
