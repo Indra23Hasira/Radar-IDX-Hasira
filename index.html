@@ -49,7 +49,7 @@
   }
   .login-box input:focus{ outline:none; border-color:var(--gold-dim); }
 
-  main{ max-width:920px; margin:0 auto; padding:32px 24px 60px; }
+  main{ max-width:none; width:100%; box-sizing:border-box; margin:0 auto; padding:32px 24px 60px; }
   .page-title{ font-family:'Big Shoulders Display', sans-serif; font-size:26px; font-weight:700; margin-bottom:4px; }
   .page-desc{ font-size:12.5px; color:var(--text-dim); margin-bottom:28px; }
 
@@ -346,15 +346,14 @@
   <div class="step-card" id="stepCardDiag">
     <div class="step-head">
       <div class="step-num">🎯</div>
-      <div class="step-title">Utilitas: Diagnosa Pemenang vs Pecundang (entry realistis)</div>
+      <div class="step-title">Utilitas: Diagnosa Skema Baru + Rapikan Riwayat</div>
     </div>
-    <div class="msg-box info">ℹ Menjawab: <b>faktor apa yang membedakan saham radar yang naik 2-3 hari dari yang merah?</b> Entry dihitung di <b>open hari berikutnya</b> (harga paling awal yang benar-benar bisa kamu beli), lalu dicari filter yang tetap bekerja di data yang tidak dipakai untuk mencarinya. Juga menguji pilih Top 3/Top 5 per hari (tabel 8), lampu kondisi pasar 🟢/🟡/🔴 (tabel 9), tahan swing 5 & 10 hari (tabel 10), kapan jual, pasang limit beli, dan masuk saat koreksi, dibandingkan dengan saham acak yang volatilitasnya sama. Murni analisis: tidak mengubah deteksi, Watchlist, atau data apa pun.</div>
+    <div class="msg-box info"><div>ℹ Menguji skema baru dengan histori yang sudah ada: <b>1. lampu kondisi pasar</b> dan <b>2. tahan swing 5 &amp; 10 hari</b> (Top 3 "belum lari", Bandar Accum, dan pembandingnya). Entry selalu di <b>open hari bursa berikutnya</b>. Kalau "Rapikan riwayat" dicentang, hasilnya juga disimpan ke catatan harian (tab 🎯 Rapor di dashboard): tanggal yang bolong direkonstruksi dengan aturan yang sama, dan hasil H1–H10 semua catatan dihitung ulang. Deteksi kategori, skor, dan Watchlist tidak diubah.</div></div>
     <div style="display:flex; gap:12px; flex-wrap:wrap; margin-top:12px;">
-      <div class="field" style="max-width:200px;"><label>Maks hari histori</label><input type="number" id="diagMaxDays" value="80" min="20" max="200" step="10"></div>
-      <div class="field" style="max-width:140px;"><label>Take Profit (%)</label><input type="number" id="diagTp" value="3" min="0.5" step="0.5"></div>
-      <div class="field" style="max-width:140px;"><label>Stop Loss (%)</label><input type="number" id="diagSl" value="3" min="0.5" step="0.5"></div>
+      <div class="field" style="max-width:200px;"><label>Maks hari histori</label><input type="number" id="diagMaxDays" value="120" min="40" max="250" step="10"></div>
     </div>
     <label style="display:flex; gap:8px; align-items:center; font-size:12px; color:var(--text-dim); margin:4px 0 8px;"><input type="checkbox" id="diagExclFund" checked> Kecualikan saham di daftar "Saham Dikecualikan" (fundamental jelek) — sama dengan yang dibuang Step 4</label>
+    <label style="display:flex; gap:8px; align-items:center; font-size:12px; color:var(--text-dim); margin:0 0 8px;"><input type="checkbox" id="diagRapikan" checked> 💾 Rapikan riwayat skema baru (isi tanggal yang bolong + hitung ulang hasil H1–H10 semua catatan Top 3 &amp; Bandar Accum)</label>
     <button class="btn btn-ghost" id="btnRunDiag" style="margin-top:4px;">🎯 Jalankan Diagnosa</button>
     <div class="progress-wrap" id="progressWrapDiag">
       <div class="progress-bar-outer"><div class="progress-bar-inner" id="progressBarDiag"></div></div>
@@ -1141,7 +1140,93 @@
       updateProgress4(1, 1, 'Membersihkan data lama (tidak ada data lama)');
     }
 
-    // 8c. auto-tambah ke Watchlist — HANYA kandidat dengan match \u22653 kategori.
+    // 8c-0. SKEMA BARU (v2): LAMPU PASAR + TOP 3 "belum lari" + BANDAR ACCUM BARU.
+    //     Dicatat otomatis ke topPicks/{tanggal} SEBELUM Watchlist, karena Watchlist
+    //     otomatis sekarang diisi dari dua daftar ini (bukan lagi ≥3 kategori).
+    //     Murni pencatatan: tidak mengubah kategori, skor, maupun deteksi.
+    let top3Html = '';
+    let v2Top3 = [], v2Bandar = [];
+    try{
+      const seriesAsc = {};
+      rawAll.forEach(r => {
+        const days = historyMap[r.ticker];
+        if(days && days.length) seriesAsc[r.ticker] = days.slice().sort((a,b)=> a.date < b.date ? -1 : 1);
+      });
+      const regimeAll = mktRegimeSeries(seriesAsc);
+      const reg = regimeAll[latestDate] || null;
+      const market = reg ? { rule: MKT_RULE, light: reg.light, idxVsMa10: reg.idxVsMa10, above20: reg.above20,
+        mkt5: reg.mkt5, ewRet: reg.ewRet, breadth: reg.breadth, n: reg.n } : null;
+      if(market){
+        await setDoc(doc(db, 'systemMeta', 'marketRegime'), { date: latestDate, ...market, updatedAt: new Date().toISOString() });
+      }
+
+      const tpRef = doc(db, 'topPicks', latestDate);
+      const tpSnap = await getDoc(tpRef);
+      let tpDoc = tpSnap.exists() ? tpSnap.data() : null;
+      const li = tradingDateIndex.get(latestDate);
+      const prevDate = (li != null && li > 0) ? tradingDatesSorted[li-1] : null;
+      let prevRadar = null;
+      if(prevDate){ const ps = await getDoc(doc(db, 'topPicks', prevDate)); if(ps.exists()) prevRadar = ps.data().radar || null; }
+      const radarList = raw.filter(r => r.matchCount >= 1);
+      const isNew = r => prevRadar ? (r.matchCount || 0) > (prevRadar[r.ticker] || 0) : true;
+      let tpNote = '';
+      if(tpDoc && tpDoc.picks){
+        tpNote = 'Top 3 sudah tercatat sebelumnya (aturan dikunci, tidak ditimpa)';
+        const upd = {};
+        if(!tpDoc.market && market){ upd.market = market; tpDoc.market = market; }
+        if(!tpDoc.bandar || tpDoc.bandarSource === 'backfill'){
+          // daftar Bandar Accum belum ada / masih hasil rekonstruksi -> isi dari data resmi Step 4
+          const bl = radarList.filter(r => r.bandarAccum === true && isNew(r)).map(r => r.ticker);
+          upd.bandar = bl; upd.bandarSource = 'import'; upd.bandarRule = 'bandar-v1'; upd.bandarMode = prevRadar ? 'baru' : 'semua';
+          tpDoc.bandar = bl;
+        }
+        if(Object.keys(upd).length) await setDoc(tpRef, upd, { merge: true });
+      }else{
+        const withBl = radarList.map(r => ({ ticker: r.ticker, matchCount: r.matchCount, bandarAccum: r.bandarAccum === true,
+          bl: blFeatures(historyMap[r.ticker] || [], latestDate) }));
+        const radarMap = {}; withBl.forEach(r => { radarMap[r.ticker] = r.matchCount; });
+        let mode = 'semua';
+        let cand = withBl.filter(r => r.bl);
+        if(prevRadar){
+          const fresh = cand.filter(isNew);
+          if(fresh.length >= BL_MIN_POOL){ cand = fresh; mode = 'baru'; }
+        }
+        let picks = [];
+        if(cand.length >= BL_MIN_POOL){
+          const ranked = blRankItems(cand.map(r => ({ ticker: r.ticker, bl: r.bl }))).sort((a,b) => a.rank - b.rank);
+          picks = ranked.slice(0,3).map(x => ({ ticker: x.ticker, rank: x.rank, score: x.score }));
+          tpNote = `Top 3 dicatat (${mode === 'baru' ? 'dari sinyal baru' : 'dari semua kandidat'}, ${cand.length} saham)`;
+        }else{
+          tpNote = `Top 3 tidak dipilih: kandidat dengan data lengkap hanya ${cand.length} (&lt;${BL_MIN_POOL})`;
+        }
+        const bandar = withBl.filter(r => r.bandarAccum && isNew(r)).map(r => r.ticker);
+        tpDoc = {
+          date: latestDate, mode, rule: 'compF-v1', poolSize: cand.length,
+          candidates: cand.map(r => r.ticker), picks, radar: radarMap,
+          bandar, bandarRule: 'bandar-v1', bandarSource: 'import', bandarMode: prevRadar ? 'baru' : 'semua',
+          createdAt: new Date().toISOString(), source: 'import',
+        };
+        if(market) tpDoc.market = market;
+        await setDoc(tpRef, tpDoc);
+      }
+      v2Top3 = (tpDoc.picks || []).map(p => p.ticker);
+      v2Bandar = tpDoc.bandar || [];
+
+      // isi/ perbarui HASIL (H1/H3/H5/H10) catatan yang periodenya masuk jendela 20 hari histori ini
+      let settled = 0;
+      try{ settled = await settleRecentTopPicks(historyMap, rawAll.map(r => r.ticker), tradingDatesSorted, tradingDateIndex, latestDate); }
+      catch(e){ console.warn('Hitung hasil Top 3/Bandar gagal:', e); }
+
+      const picksTxt = v2Top3.length ? v2Top3.map(t => `<b>${t}</b>`).join(', ') : '-';
+      const bandarTxt = v2Bandar.length ? v2Bandar.map(t => `<b>${t}</b>`).join(', ') : 'tidak ada';
+      top3Html = `<div class="msg-box info"><div>🚦 Kondisi pasar ${latestDate}: <b>${mktLightLabel(market ? market.light : null)}</b>${market && market.mkt5 != null ? ` (indeks 5 hari ${market.mkt5>=0?'+':''}${market.mkt5.toFixed(2)}%${market.mkt5 <= -3 ? ' — 🔄 kondisi pantulan' : ''})` : ''}.<br>🎯 Top 3 "belum lari": ${picksTxt} — ${tpNote}.<br>🧱 Bandar Accum baru: ${bandarTxt}.${settled ? `<br>📏 Hasil H1–H10 diperbarui untuk ${settled} catatan harian.` : ''}</div></div>`;
+    }catch(e){
+      console.error('Skema baru (lampu / Top 3 / Bandar) gagal:', e);
+      warnings.push(`⚠ Lampu pasar / Top 3 / Bandar Accum gagal dicatat (tidak fatal, deteksi tetap tersimpan): ${e.message}`);
+    }
+
+    // 8c. auto-tambah ke Watchlist — SKEMA BARU (v2): Top 3 "belum lari" + Bandar Accum baru.
+    // (Skema lama ≥3 kategori dihentikan: di uji swing justru kelompok paling jelek.)
     // (Sebelumnya juga termasuk fase "Tahap Awal" saja, tapi itu bikin watchlist
     // kebanjiran kandidat lemah — dipersempit supaya fokus ke yang benar2 kuat.)
     //
@@ -1150,8 +1235,9 @@
     // (snapshot, peak, low) diarsipkan ke `episodeHistory` (tetap kepakai buat
     // statistik win rate), lalu entry-nya di-reset seolah baru pertama masuk.
     // Kalau masih dalam 5 hari, tetap dilewati seperti biasa (tidak ditimpa).
-    const WATCHLIST_MONITORING_DAYS = 5;
-    const autoWatchlistCandidates = raw.filter(r => r.matchCount >= 3);
+    const WATCHLIST_MONITORING_DAYS = 10; // swing: dipantau 10 hari bursa
+    const v2Set = new Set([...v2Top3, ...v2Bandar]);
+    const autoWatchlistCandidates = raw.filter(r => v2Set.has(r.ticker));
     let autoAdded = 0, autoReactivated = 0;
     if(autoWatchlistCandidates.length){
       const { errorCount: watchlistErrors } = await runWithConcurrency(autoWatchlistCandidates, 15, async (r) => {
@@ -1196,6 +1282,8 @@
           peakClose: null, peakDate: null, lowestClose: null, lowestDate: null, peakBackfilled: false,
           intradayHigh: null, intradayHighDate: null, intradayLow: null, intradayLowDate: null,
           snapshot: {
+            scheme: 'v2',
+            sources: [v2Top3.includes(r.ticker) ? 'top3' : null, v2Bandar.includes(r.ticker) ? 'bandar' : null].filter(Boolean),
             close: r.row.close ?? null,
             score: r.totalScorePartial ?? null,
             matchCount: r.matchCount ?? null,
@@ -1341,68 +1429,6 @@
       console.error('Update peak tracking gagal:', e);
     }
 
-    // 8c. LAMPU PASAR + TOP 3 HARIAN (dicatat otomatis di sini, supaya tidak ada hari
-    //     yang bolong walaupun dashboard tidak dibuka). Murni pencatatan: tidak mengubah
-    //     kategori, skor, maupun Watchlist. Aturan Top 3 = compF-v1 (sama dengan dashboard).
-    let top3Html = '';
-    try{
-      const seriesAsc = {};
-      rawAll.forEach(r => {
-        const days = historyMap[r.ticker];
-        if(days && days.length) seriesAsc[r.ticker] = days.slice().sort((a,b)=> a.date < b.date ? -1 : 1);
-      });
-      const regimeAll = mktRegimeSeries(seriesAsc);
-      const reg = regimeAll[latestDate] || null;
-      const market = reg ? { rule: MKT_RULE, light: reg.light, idxVsMa10: reg.idxVsMa10, above20: reg.above20,
-        mkt5: reg.mkt5, ewRet: reg.ewRet, breadth: reg.breadth, n: reg.n } : null;
-      if(market){
-        await setDoc(doc(db, 'systemMeta', 'marketRegime'), { date: latestDate, ...market, updatedAt: new Date().toISOString() });
-      }
-
-      const tpRef = doc(db, 'topPicks', latestDate);
-      const tpSnap = await getDoc(tpRef);
-      let tpDoc = null, tpNote = '';
-      if(tpSnap.exists()){
-        tpDoc = tpSnap.data();
-        if(!tpDoc.market && market){ await setDoc(tpRef, { market }, { merge: true }); tpDoc.market = market; }
-        tpNote = 'sudah tercatat sebelumnya (aturan dikunci, tidak ditimpa)';
-      }else{
-        const radarList = raw.filter(r => r.matchCount >= 1).map(r => ({
-          ticker: r.ticker, matchCount: r.matchCount, bl: blFeatures(historyMap[r.ticker] || [], latestDate),
-        }));
-        const li = tradingDateIndex.get(latestDate);
-        const prevDate = (li != null && li > 0) ? tradingDatesSorted[li-1] : null;
-        let prevRadar = null;
-        if(prevDate){ const ps = await getDoc(doc(db, 'topPicks', prevDate)); if(ps.exists()) prevRadar = ps.data().radar || null; }
-        const radarMap = {}; radarList.forEach(r => { radarMap[r.ticker] = r.matchCount; });
-        let mode = 'semua';
-        let cand = radarList.filter(r => r.bl);
-        if(prevRadar){
-          const fresh = cand.filter(r => (r.matchCount || 0) > (prevRadar[r.ticker] || 0));
-          if(fresh.length >= BL_MIN_POOL){ cand = fresh; mode = 'baru'; }
-        }
-        if(cand.length >= BL_MIN_POOL){
-          const ranked = blRankItems(cand.map(r => ({ ticker: r.ticker, bl: r.bl }))).sort((a,b) => a.rank - b.rank);
-          tpDoc = {
-            date: latestDate, mode, rule: 'compF-v1', poolSize: cand.length,
-            candidates: cand.map(r => r.ticker),
-            picks: ranked.slice(0,3).map(x => ({ ticker: x.ticker, rank: x.rank, score: x.score })),
-            radar: radarMap, createdAt: new Date().toISOString(), source: 'import',
-          };
-          if(market) tpDoc.market = market;
-          await setDoc(tpRef, tpDoc);
-          tpNote = `dicatat (${mode === 'baru' ? 'dari sinyal baru' : 'dari semua kandidat'}, ${cand.length} saham)`;
-        }else{
-          tpNote = `tidak dicatat: kandidat dengan data lengkap hanya ${cand.length} (&lt;${BL_MIN_POOL})`;
-        }
-      }
-      const picksTxt = tpDoc && tpDoc.picks ? tpDoc.picks.map(p => `<b>${p.ticker}</b>`).join(', ') : '-';
-      top3Html = `<div class="msg-box info"><div>🚦 Kondisi pasar ${latestDate}: <b>${mktLightLabel(market ? market.light : null)}</b>${market && market.above20 != null ? ` (indeks vs rata-rata 10 hari ${market.idxVsMa10>=0?'+':''}${market.idxVsMa10.toFixed(2)}%, ${market.above20.toFixed(0)}% saham di atas MA20)` : ''} — belum terbukti, lihat tabel 9 di Diagnosa.<br>🎯 Top 3 "belum lari": ${picksTxt} — ${tpNote}.</div></div>`;
-    }catch(e){
-      console.error('Lampu pasar / Top 3 gagal:', e);
-      warnings.push(`⚠ Lampu pasar / Top 3 harian gagal dicatat (tidak fatal, deteksi tetap tersimpan): ${e.message}`);
-    }
-
     // 9. ringkasan hasil di UI
     const withHistory3 = raw.filter(r => r.foreignNet3d !== null).length;
     const matched3plus = raw.filter(r => r.matchCount >= 3).sort((a,b)=>b.matchCount-a.matchCount || b.totalScorePartial-a.totalScorePartial).slice(0,10);
@@ -1414,7 +1440,7 @@
       <div class="stat-box ${withHistory3>=candidates.length*0.5?'ok':'warn'}"><div class="label">Histori \u22653 Hari</div><div class="value">${withHistory3}</div></div>
       <div class="stat-box"><div class="label">Match \u22653 Kategori</div><div class="value">${matched3plus.length}</div></div>
     </div>
-    <div class="msg-box info">ℹ ${belowMinPrice} saham dibuang karena harga di bawah Rp${minPrice}/lembar. ${belowLiquidity} saham dibuang karena Value/Frequency rata-rata di bawah batas minimal (dari ${rawBeforeLiquidityFilter} kandidat harga OK, tersisa ${rawAll.length}).${fundExcluded.length ? ` 🚫 ${fundExcluded.length} saham dibuang karena masuk daftar fundamental jelek (${fundExcluded.slice(0,15).join(', ')}${fundExcluded.length>15?', …':''}), tersisa ${raw.length}.` : ''}${staleDocs.length ? ` ${staleDocs.length} data lama (sudah tidak lolos filter) dibersihkan dari database.` : ''}${autoAdded ? ` ⭐ ${autoAdded} saham baru otomatis masuk Watchlist (match \u22653 kategori)${autoReactivated ? `, ${autoReactivated} di antaranya kejadian BARU dari ticker yang pernah dipantau (>5 hari lalu, data lama diarsipkan)` : ''}.` : ''}${peakUpdated ? ` 📈 ${peakUpdated} entry Watchlist ter-update tracking harga tertinggi/terendahnya.` : ''}${peakBackfilled ? ` ⏪ ${peakBackfilled} entry berhasil di-backfill histori harganya dari Yahoo Finance.` : ''}</div>`;
+    <div class="msg-box info">ℹ ${belowMinPrice} saham dibuang karena harga di bawah Rp${minPrice}/lembar. ${belowLiquidity} saham dibuang karena Value/Frequency rata-rata di bawah batas minimal (dari ${rawBeforeLiquidityFilter} kandidat harga OK, tersisa ${rawAll.length}).${fundExcluded.length ? ` 🚫 ${fundExcluded.length} saham dibuang karena masuk daftar fundamental jelek (${fundExcluded.slice(0,15).join(', ')}${fundExcluded.length>15?', …':''}), tersisa ${raw.length}.` : ''}${staleDocs.length ? ` ${staleDocs.length} data lama (sudah tidak lolos filter) dibersihkan dari database.` : ''}${autoAdded ? ` ⭐ ${autoAdded} saham baru otomatis masuk Watchlist (Top 3 + Bandar Accum baru)${autoReactivated ? `, ${autoReactivated} di antaranya kejadian BARU dari ticker yang pernah dipantau (>10 hari lalu, data lama diarsipkan)` : ''}.` : ''}${peakUpdated ? ` 📈 ${peakUpdated} entry Watchlist ter-update tracking harga tertinggi/terendahnya.` : ''}${peakBackfilled ? ` ⏪ ${peakBackfilled} entry berhasil di-backfill histori harganya dari Yahoo Finance.` : ''}</div>`;
 
     if(withHistory3 < candidates.length){
       html += `<div class="msg-box warning">⚠ ${candidates.length - withHistory3} saham belum punya histori 3 hari — kategori Foreign Uptrend/Big Accum/Bandar Accum untuk saham itu belum bisa dievaluasi (butuh upload beberapa hari lagi, termasuk backfill kalau ada).</div>`;
@@ -1566,7 +1592,7 @@
   // Dipanggil otomatis di ujung Tahap 5, supaya ada log tren dari
   // waktu ke waktu tanpa perlu diklik manual tiap hari.
   // ============================================================
-  const STATS_WATCHLIST_MONITORING_DAYS = 5; // sama dengan yang dipakai di dashboard.html
+  const STATS_WATCHLIST_MONITORING_DAYS = 10; // sama dengan yang dipakai di dashboard.html (swing)
 
   async function computeAndSaveStatsSnapshot(){
     const { collection, getDocs, doc, setDoc } = firestoreFns;
@@ -1602,9 +1628,11 @@
         });
       });
 
-      if(!items.length) return; // belum ada data watchlist sama sekali, skip
+      // skema baru saja (Top 3 + Bandar Accum); episode skema lama ≥3 kategori tidak ikut
+      const itemsV2 = items.filter(it => it.snapshot && it.snapshot.scheme === 'v2');
+      if(!itemsV2.length) return; // belum ada data watchlist skema baru, skip
 
-      const computed = items.map(item => {
+      const computed = itemsV2.map(item => {
         const s = item.snapshot || {};
         const baseClose = s.close ?? null;
         const peakClose = item.peakClose ?? null;
@@ -1618,7 +1646,8 @@
         const maxGainPct = (baseClose && peakClose) ? ((peakClose - baseClose) / baseClose) * 100 : null;
         const maxDrawdownPct = (baseClose && lowestClose) ? ((lowestClose - baseClose) / baseClose) * 100 : null;
         const isWin = (maxGainPct != null && daysSinceAdded > 0) ? maxGainPct > 0 : null;
-        const entryPhase = (s.phase && s.phase.length) ? s.phase[0] : (s.categories && s.categories.length ? 'Tanpa Fase Khusus' : '-');
+        const src = s.sources || [];
+        const entryPhase = src.includes('top3') && src.includes('bandar') ? 'Top 3 + Bandar Accum' : src.includes('top3') ? 'Top 3 belum lari' : src.includes('bandar') ? 'Bandar Accum baru' : '-';
         return { ticker: item.ticker, daysToPeak, maxGainPct, maxDrawdownPct, isWin, entryPhase };
       });
 
@@ -1651,6 +1680,7 @@
       const today = new Date().toISOString().slice(0,10);
       await setDoc(doc(db, 'statsHistory', today), {
         date: today,
+        scheme: 'v2',
         totalDipantau: computed.length,
         winRateOverall: totalWithResultAll ? Math.round((winCountAll/totalWithResultAll)*1000)/10 : null,
         phaseBreakdown,
@@ -2287,6 +2317,7 @@
     });
 
     const events = [];
+    const radarByDate = {}; // {tanggal: {ticker: matchCount}} untuk rekonstruksi riwayat
     const allRows = []; // semua ticker-hari (baseline acak)
     eligible.forEach(t => {
       const a = seriesAsc[t];
@@ -2297,6 +2328,7 @@
         const daysDesc = a.slice(lo, i+1).reverse();
         const r3 = detectCategoriesForWindow(daysDesc, 3, D, nets3ByDate[D.date] || []);
         const curMatch = r3 ? r3.matchCount : null;
+        if(curMatch != null && curMatch >= 1) (radarByDate[D.date] = radarByDate[D.date] || {})[t] = curMatch;
 
         const oc = diagOutcome(a, i, tp, sl, dateIdx);
         if(oc){
@@ -2349,121 +2381,7 @@
       avgRet3: diagMean(allRows.map(r=>r.ret3)),
       win3: allRows.length ? allRows.filter(r=>r.ret3>0).length/allRows.length*100 : null,
     };
-    return { events, baseline, allDates, tp, sl, allRows, seriesAsc, dateIdx };
-  }
-
-  // ---- analisis lanjutan: hari jual, entry limit/pullback, pembanding volatilitas sama ----
-  function diagExtras(built){
-    const { events, allRows, seriesAsc, dateIdx, tp, sl } = built;
-    const metrics = ['ret1','ret2','ret3','maxUp3','minDn3'];
-
-    // pembanding acak dengan volatilitas (ATR) sama: 5 kelompok ATR dari semua ticker-hari
-    const atrs = allRows.map(r=>r.atr).filter(v=>v!=null && isFinite(v)).sort((x,y)=>x-y);
-    const edges = [0.2,0.4,0.6,0.8].map(p=>diagQuantile(atrs,p));
-    const binOf = v => edges.filter(e=>v>e).length;
-    const binMeans = [0,1,2,3,4].map(b=>{
-      const rows = allRows.filter(r=>r.atr!=null && isFinite(r.atr) && binOf(r.atr)===b);
-      const o = { n: rows.length };
-      metrics.forEach(m=> o[m] = diagMean(rows.map(r=>r[m])));
-      o.win3 = rows.length ? rows.filter(r=>r.ret3>0).length/rows.length*100 : null;
-      return o;
-    });
-    const baseOf = list => {
-      const o = {};
-      metrics.forEach(m=> o[m] = diagMean(list.map(e=>binMeans[binOf(e.atrPct)][m])));
-      o.win3 = diagMean(list.map(e=>binMeans[binOf(e.atrPct)].win3));
-      return o;
-    };
-    const usable = events.filter(e=>e.atrPct!=null && isFinite(e.atrPct));
-
-    function exitRow(label, list){
-      if(!list.length) return { label, n:0 };
-      const o = { label, n: list.length, base: baseOf(list) };
-      metrics.forEach(m=> o[m] = diagMean(list.map(e=>e[m])));
-      o.win3 = list.filter(e=>e.ret3>0).length/list.length*100;
-      o.up3pct = list.filter(e=>e.maxUp3>=3).length/list.length*100;
-      o.dn3pct = list.filter(e=>e.minDn3<=-3).length/list.length*100;
-      return o;
-    }
-    const exits = [exitRow('Semua sinyal radar', usable)];
-    ['≥3','2','1'].forEach(k=>{
-      exits.push(exitRow('Kategori cocok: '+k, usable.filter(e=> (e.matchCount>=3 ? '≥3' : String(e.matchCount))===k)));
-    });
-
-    // entry limit (pasang order di bawah close sinyal, berlaku 2 hari)
-    function limitSim(level){
-      const filled = [], unfilled = [];
-      let considered = 0;
-      usable.forEach(e=>{
-        const a = seriesAsc[e.ticker], i = e.idx;
-        if([1,2,3].some(k=>!(a[i+k].open>0 && a[i+k].high>0 && a[i+k].low>0 && a[i+k].close>0))) return;
-        considered++;
-        const L = a[i].close*(1+level/100);
-        let res = null;
-        for(let k=1;k<=2 && !res;k++){
-          const r = a[i+k];
-          if(r.low <= L){
-            const openFill = r.open <= L;
-            const fill = openFill ? r.open : L;
-            let rr = null, tag='time';
-            for(let m=k;m<=3;m++){
-              const x = a[i+m];
-              if(x.low <= fill*(1-sl/100)){ rr=-sl; tag='SL'; break; }
-              if((m>k || openFill) && x.high >= fill*(1+tp/100)){ rr=tp; tag='TP'; break; }
-            }
-            const ret3 = (a[i+3].close/fill - 1)*100;
-            res = { ev:e, ret3, tpsl: rr===null ? ret3 : rr, tag };
-          }
-        }
-        if(res) filled.push(res); else unfilled.push(e);
-      });
-      return {
-        level, total: considered, nFilled: filled.length,
-        fillRate: considered ? filled.length/considered*100 : null,
-        ret3: diagMean(filled.map(f=>f.ret3)),
-        win: filled.length ? filled.filter(f=>f.tpsl>0).length/filled.length*100 : null,
-        tpsl: diagMean(filled.map(f=>f.tpsl)),
-        sameOpenRet3: diagMean(filled.map(f=>f.ev.ret3)),
-        sameOpenTpsl: diagMean(filled.map(f=>f.ev.tpslRet)),
-        nUnfilled: unfilled.length,
-        unfilledOpenRet3: diagMean(unfilled.map(e=>e.ret3)),
-        unfilledOpenTpsl: diagMean(unfilled.map(e=>e.tpslRet)),
-        base: null,
-      };
-    }
-    const limits = [0,-1,-2].map(limitSim);
-
-    // masuk saat koreksi: saham yang sudah muncul di radar, lalu 1-3 hari kemudian
-    // close-nya turun >= p% dari puncak close sejak sinyal -> entry open hari berikutnya
-    function pullbackSim(p){
-      const picks = [];
-      let noPull = 0;
-      usable.forEach(e=>{
-        const a = seriesAsc[e.ticker], i = e.idx;
-        let peak = a[i].close, found = null;
-        for(let j=i+1;j<=i+3 && j<a.length;j++){
-          peak = Math.max(peak, a[j].close);
-          const dd = (peak/a[j].close - 1)*100;
-          if(dd >= p && dd <= 12){ found = j; break; }
-        }
-        if(found===null){ noPull++; return; }
-        const oc = diagOutcome(a, found, tp, sl, dateIdx);
-        if(oc) picks.push({ ev:e, oc, daysAfter: found-i });
-      });
-      const list = picks.map(x=>x.ev);
-      return {
-        p, n: picks.length, noPull,
-        ret3: diagMean(picks.map(x=>x.oc.ret3)),
-        win: picks.length ? picks.filter(x=>x.oc.tpslRet>0).length/picks.length*100 : null,
-        tpsl: diagMean(picks.map(x=>x.oc.tpslRet)),
-        tpRate: picks.length ? picks.filter(x=>x.oc.tpslTag==='TP').length/picks.length*100 : null,
-        slRate: picks.length ? picks.filter(x=>x.oc.tpslTag==='SL').length/picks.length*100 : null,
-        baseRet3: picks.length ? baseOf(list).ret3 : null,
-        avgDays: diagMean(picks.map(x=>x.daysAfter)),
-      };
-    }
-    const pullbacks = [2,4,6].map(pullbackSim);
-    return { exits, limits, pullbacks, nUsable: usable.length };
+    return { events, baseline, allDates, tp, sl, allRows, seriesAsc, dateIdx, radarByDate };
   }
 
   // ---- uji cara pakai sebenarnya: pilih TOP-N saham per hari dari daftar radar ----
@@ -2564,100 +2482,12 @@
     };
   }
 
-  function diagAnalyze(events){
-    const valid = events.filter(e=>isFinite(e.ret3));
-    const dates = Array.from(new Set(valid.map(e=>e.date))).sort();
-    const cut = Math.max(1, Math.floor(dates.length*0.6));
-    const trainDates = new Set(dates.slice(0,cut));
-    const train = valid.filter(e=>trainDates.has(e.date));
-    const test  = valid.filter(e=>!trainDates.has(e.date));
-
-    // 1. korelasi + tersil per fitur (semua event)
-    const featRows = DIAG_FEATURES.map(f=>{
-      const items = valid.filter(e=>e[f.key]!=null && isFinite(e[f.key]));
-      const xs = items.map(e=>e[f.key]);
-      const rho = diagSpearman(xs, items.map(e=>e.tpslRet));
-      const sorted = items.slice().sort((a,b)=>a[f.key]-b[f.key]);
-      const k = Math.floor(sorted.length/3);
-      const low = sorted.slice(0,k), mid = sorted.slice(k, sorted.length-k), high = sorted.slice(sorted.length-k);
-      return {
-        f, n: items.length, rho,
-        low: diagStats(low), mid: diagStats(mid), high: diagStats(high),
-        lowMax: low.length? low[low.length-1][f.key] : null,
-        highMin: high.length? high[0][f.key] : null,
-      };
-    }).sort((a,b)=> Math.abs(b.rho||0) - Math.abs(a.rho||0));
-
-    // 2. rata-rata fitur: pemenang (TP duluan) vs pecundang (SL duluan)
-    const winners = valid.filter(e=>e.tpslTag==='TP'), losers = valid.filter(e=>e.tpslTag==='SL');
-    const wl = DIAG_FEATURES.map(f=>({
-      f,
-      win: diagMean(winners.map(e=>e[f.key]).filter(v=>v!=null&&isFinite(v))),
-      lose: diagMean(losers.map(e=>e[f.key]).filter(v=>v!=null&&isFinite(v))),
-    }));
-
-    // 3. cari aturan di TRAIN, uji di TEST
-    const minTrain = Math.max(25, Math.round(train.length*0.08));
-    function ruleMatch(e, r){
-      const v = e[r.key]; if(v==null || !isFinite(v)) return false;
-      return r.dir === '>=' ? v >= r.cut : v <= r.cut;
-    }
-    const bestRules = [];
-    DIAG_FEATURES.forEach(f=>{
-      const vals = train.map(e=>e[f.key]).filter(v=>v!=null&&isFinite(v)).sort((a,b)=>a-b);
-      if(vals.length < minTrain*2) return;
-      let best = null;
-      [0.2,0.3,0.4,0.5,0.6,0.7,0.8].forEach(p=>{
-        const cut = diagQuantile(vals, p);
-        ['>=','<='].forEach(dir=>{
-          const r = { key:f.key, label:f.label, dir, cut };
-          const st = diagStats(train.filter(e=>ruleMatch(e,r)));
-          if(st.n >= minTrain && (best===null || st.avg > best.trainSt.avg)) best = { ...r, trainSt: st };
-        });
-      });
-      if(best) bestRules.push(best);
-    });
-    bestRules.sort((a,b)=>b.trainSt.avg - a.trainSt.avg);
-    bestRules.forEach(r=>{ r.testSt = diagStats(test.filter(e=>ruleMatch(e,r))); });
-
-    // 4. kombinasi 2 aturan dari 5 aturan terbaik (AND)
-    const top = bestRules.slice(0,5);
-    const combos = [];
-    for(let i=0;i<top.length;i++) for(let j=i+1;j<top.length;j++){
-      if(top[i].key===top[j].key) continue;
-      const fn = e => ruleMatch(e,top[i]) && ruleMatch(e,top[j]);
-      const tr = diagStats(train.filter(fn));
-      if(tr.n >= Math.max(15, Math.round(train.length*0.04))){
-        combos.push({ a:top[i], b:top[j], trainSt: tr, testSt: diagStats(test.filter(fn)) });
-      }
-    }
-    combos.sort((x,y)=>y.trainSt.avg - x.trainSt.avg);
-
-    // 5. per bucket matchCount (entry realistis)
-    const byMatch = {};
-    valid.forEach(e=>{ const k = e.matchCount>=3 ? '≥3' : String(e.matchCount); (byMatch[k]=byMatch[k]||[]).push(e); });
-    const matchRows = Object.keys(byMatch).sort((a,b)=> (b==='≥3'?99:+b) - (a==='≥3'?99:+a)).map(k=>({
-      bucket:k, st: diagStats(byMatch[k]),
-      gap: diagMean(byMatch[k].map(e=>e.gapPct)),
-      alpha: diagMean(byMatch[k].map(e=>e.alpha3)),
-    }));
-
-    return {
-      total: valid.length, train: train.length, test: test.length,
-      trainRange: [dates[0], dates[cut-1]], testRange: [dates[cut], dates[dates.length-1]],
-      all: diagStats(valid), trainAll: diagStats(train), testAll: diagStats(test),
-      alphaAll: diagMean(valid.map(e=>e.alpha3)),
-      featRows, wl, bestRules, combos, matchRows,
-      nWin: winners.length, nLose: losers.length,
-    };
-  }
-
   document.getElementById('btnRunDiag').addEventListener('click', runDiagnosa);
 
-  function updateProgressDiag(done, total, label){
+  function updateProgressDiag(done, total, label, unit){
     const pct = total ? Math.round((done/total)*100) : 0;
     document.getElementById('progressBarDiag').style.width = pct + '%';
-    document.getElementById('progressLabelDiag').textContent = `${label || 'Memproses'} ${done} / ${total} saham... (${pct}%)`;
+    document.getElementById('progressLabelDiag').textContent = `${label || 'Memproses'} ${done} / ${total} ${unit || 'saham'}... (${pct}%)`;
   }
 
   async function runDiagnosa(){
@@ -2669,8 +2499,7 @@
     document.getElementById('btnRunDiag').disabled = true;
     try{
       const maxDays = parseInt(document.getElementById('diagMaxDays').value, 10) || 80;
-      const tpPct = parseFloat(document.getElementById('diagTp').value) || 3;
-      const slPct = parseFloat(document.getElementById('diagSl').value) || 3;
+      const tpPct = 3, slPct = 3; // tidak dipakai di tabel skema baru (sisa format lama)
 
       const metaSnap = await getDocs(query(collection(db, 'dailySummary'), orderBy('tradingDate', 'desc'), limit(1)));
       if(metaSnap.empty){ out.innerHTML = `<div class="msg-box error">✕ Belum ada data dailySummary.</div>`; return; }
@@ -2719,134 +2548,26 @@
         out.innerHTML = `<div class="msg-box warning">⚠ Baru ${built.events.length} sinyal yang punya 3 hari ke depan dan histori awal cukup (butuh ≥30). Histori tersedia: ${built.allDates.length} hari. Naikkan "Maks hari histori" atau tunggu histori bertambah.</div>`;
         return;
       }
-      const an = diagAnalyze(built.events);
-      const ex = diagExtras(built);
-      const t3 = diagTopN(built,3), t5 = diagTopN(built,5);
+      const t3 = diagTopN(built,3);
       const rg = diagRegime(built, t3.picksByKey.compF);
       const sw = diagSwing(built, t3);
-      out.innerHTML = diagExclNote + renderDiagnosa(an, built) + renderExtras(ex, built) + renderTopN(t3, t5) + renderRegime(rg) + renderSwing(sw);
+      let rapiHtml = '';
+      if(document.getElementById('diagRapikan').checked){
+        try{
+          const rr = await diagRapikan(built, (d, n) => updateProgressDiag(d, n, 'Merapikan riwayat', 'tanggal'));
+          rapiHtml = `<div class="msg-box success"><div>💾 Riwayat skema baru dirapikan: ${rr.created} tanggal baru direkonstruksi (Top 3 + Bandar Accum, sumber "backtest"), ${rr.updated} catatan live diperbarui hasilnya. Rentang ${rr.from || '-'} s/d ${rr.to || '-'}. Lihat tab 🎯 Rapor di dashboard.</div></div>`;
+        }catch(e){
+          console.error(e);
+          rapiHtml = `<div class="msg-box error">✕ Rapikan riwayat gagal: ${e.message}</div>`;
+        }
+      }
+      out.innerHTML = diagExclNote + rapiHtml + `<div class="msg-box info"><div>ℹ Rentang histori: ${built.allDates[0]} s/d ${built.allDates[built.allDates.length-1]} (${built.allDates.length} hari bursa), ${built.events.length} sinyal baru radar.</div></div>` + renderRegime(rg) + renderSwing(sw);
     }catch(err){
       console.error(err);
       out.innerHTML = `<div class="msg-box error">✕ Gagal menjalankan diagnosa: ${err.message}</div>`;
     }finally{
       document.getElementById('btnRunDiag').disabled = false;
     }
-  }
-
-  function renderDiagnosa(an, built){
-    const pc = (v, d=2) => v==null ? '-' : (v>=0?'+':'') + v.toFixed(d) + '%';
-    const cls = v => v==null ? '' : (v>=0 ? 'pos' : 'neg');
-    const num = (v, d=2) => v==null ? '-' : v.toFixed(d);
-    const cell = st => st.n ? `<td>${st.n}</td><td class="${cls(st.avg)}">${pc(st.avg)}</td><td>${st.win.toFixed(0)}%</td>` : `<td>0</td><td>-</td><td>-</td>`;
-    const ruleTxt = r => `${r.label} ${r.dir} ${num(r.cut)}`;
-    const tp = built.tp, sl = built.sl;
-
-    let h = `<div class="msg-box info">ℹ Rentang histori: ${built.allDates[0]} s/d ${built.allDates[built.allDates.length-1]} (${built.allDates.length} hari bursa). Sampel = hari pertama saham MASUK radar (kategori window-3 naik dari hari sebelumnya), entry di <b>OPEN hari berikutnya</b>, ditahan sampai close hari ke-3, dengan TP +${tp}% / SL −${sl}% (kalau TP & SL kesentuh di hari yang sama dihitung SL). <b>${an.total} sinyal</b>, dibagi: latihan ${an.train} sinyal (${an.trainRange[0]} → ${an.trainRange[1]}), uji ${an.test} sinyal (${an.testRange[0]} → ${an.testRange[1]}).</div>`;
-
-    // A. ringkasan
-    h += `<div class="table-section-title">1. Seberapa bagus sinyal radar dengan entry realistis?</div>
-      <div class="preview-table-wrap"><table><thead><tr><th>Kelompok</th><th>n</th><th>Rata2 return hari-3 (dari open)</th><th>Menang (return&gt;0)</th><th>Hasil TP/SL rata2</th><th>TP tercapai</th><th>SL tercapai</th></tr></thead><tbody>
-      <tr><td>Semua saham, semua hari (acak)</td><td>${built.baseline.n}</td><td class="${cls(built.baseline.avgRet3)}">${pc(built.baseline.avgRet3)}</td><td>${built.baseline.win3.toFixed(0)}%</td><td>-</td><td>-</td><td>-</td></tr>
-      <tr><td><b>Sinyal radar (semua)</b></td><td>${an.all.n}</td><td class="${cls(an.all.avgRet3)}">${pc(an.all.avgRet3)}</td><td>${(an.all.n? an.all.win:0).toFixed(0)}%*</td><td class="${cls(an.all.avg)}">${pc(an.all.avg)}</td><td>${an.all.tpRate.toFixed(0)}%</td><td>${an.all.slRate.toFixed(0)}%</td></tr>
-      </tbody></table></div>
-      <p style="font-size:11px; color:var(--text-muted); margin-top:6px;">*Win rate di kolom ini = persen sinyal dengan hasil TP/SL &gt; 0. Selisih terhadap pasar rata-rata di hari yang sama (alpha): <b class="${cls(an.alphaAll)}">${pc(an.alphaAll)}</b>. Kalau alpha ≈ 0 atau negatif, radar belum lebih baik dari sekadar beli saham acak di hari yang sama.</p>`;
-
-    h += `<div class="preview-table-wrap" style="margin-top:10px;"><table><thead><tr><th>Bucket Match</th><th>n</th><th>Gap open rata2</th><th>Return hari-3</th><th>Alpha vs pasar</th><th>Hasil TP/SL</th><th>Menang</th></tr></thead><tbody>` +
-      an.matchRows.map(m=>`<tr><td>${m.bucket}</td><td>${m.st.n}</td><td>${pc(m.gap)}</td><td class="${cls(m.st.avgRet3)}">${pc(m.st.avgRet3)}</td><td class="${cls(m.alpha)}">${pc(m.alpha)}</td><td class="${cls(m.st.avg)}">${pc(m.st.avg)}</td><td>${m.st.win.toFixed(0)}%</td></tr>`).join('') +
-      `</tbody></table></div>`;
-
-    // B. faktor
-    h += `<div class="table-section-title">2. Faktor mana yang memisahkan menang vs kalah?</div>
-      <div class="msg-box info" style="margin-bottom:10px;">ℹ Semua sinyal dibagi 3 kelompok sama besar per faktor (Rendah / Tengah / Tinggi). Kolom hijau-merah = rata-rata hasil TP/SL. Korelasi (−1…+1) dihitung terhadap hasil TP/SL: makin jauh dari 0 makin kuat; dengan sampel sekecil ini, di bawah ±0,10 anggap noise.</div>
-      <div class="preview-table-wrap"><table><thead><tr><th>Faktor</th><th>Korelasi</th><th colspan="3">Rendah (≤ batas)</th><th colspan="3">Tengah</th><th colspan="3">Tinggi (≥ batas)</th></tr>
-      <tr><th></th><th></th><th>n</th><th>Hasil</th><th>Menang</th><th>n</th><th>Hasil</th><th>Menang</th><th>n</th><th>Hasil</th><th>Menang</th></tr></thead><tbody>` +
-      an.featRows.map(r=>`<tr><td>${r.f.label}${r.f.hint?`<br><span style="font-size:10px;color:var(--text-muted);">${r.f.hint}</span>`:''}</td><td class="${cls(r.rho)}">${num(r.rho,2)}</td>
-        ${cell(r.low).replace('<td>', '<td title="≤ '+num(r.lowMax)+'">')}${cell(r.mid)}${cell(r.high).replace('<td>', '<td title="≥ '+num(r.highMin)+'">')}</tr>`).join('') +
-      `</tbody></table></div>
-      <p style="font-size:11px; color:var(--text-muted); margin-top:6px;">Arahkan kursor ke kolom n untuk melihat batas Rendah/Tinggi.</p>`;
-
-    // C. pemenang vs pecundang
-    h += `<div class="table-section-title">3. Rata-rata faktor: sinyal kena TP duluan vs kena SL duluan</div>
-      <div class="preview-table-wrap"><table><thead><tr><th>Faktor</th><th>Pemenang (n=${an.nWin})</th><th>Pecundang (n=${an.nLose})</th></tr></thead><tbody>` +
-      an.wl.map(r=>`<tr><td>${r.f.label}</td><td>${num(r.win)}</td><td>${num(r.lose)}</td></tr>`).join('') +
-      `</tbody></table></div>`;
-
-    // D. aturan
-    const verdict = st => (st.n >= 15 && st.avg > 0 && st.avg > an.testAll.avg + 0.3) ? '✅ lolos' : (st.n < 15 ? '⚠ n kecil' : '✕ gagal');
-    h += `<div class="table-section-title">4. Aturan filter: dicari di data latihan, diuji di data uji</div>
-      <div class="msg-box warning" style="margin-bottom:10px;">⚠ Aturan terbaik di latihan sering cuma kebetulan. Yang dihitung hanya kolom <b>Uji</b>: ✅ kalau n ≥ 15, hasil rata-rata positif, dan lebih baik dari semua sinyal tanpa filter (${pc(an.testAll.avg)} di data uji) minimal 0,3 poin.</div>
-      <div class="preview-table-wrap"><table><thead><tr><th>Aturan (hanya ambil sinyal jika…)</th><th colspan="3">Latihan</th><th colspan="3">Uji</th><th>Vonis</th></tr>
-      <tr><th></th><th>n</th><th>Hasil</th><th>Menang</th><th>n</th><th>Hasil</th><th>Menang</th><th></th></tr></thead><tbody>
-      <tr><td><i>Tanpa filter (semua sinyal)</i></td>${cell(an.trainAll)}${cell(an.testAll)}<td>-</td></tr>` +
-      an.bestRules.map(r=>`<tr><td>${ruleTxt(r)}</td>${cell(r.trainSt)}${cell(r.testSt)}<td>${verdict(r.testSt)}</td></tr>`).join('') +
-      an.combos.slice(0,6).map(c=>`<tr><td>${ruleTxt(c.a)}<br><b>DAN</b> ${ruleTxt(c.b)}</td>${cell(c.trainSt)}${cell(c.testSt)}<td>${verdict(c.testSt)}</td></tr>`).join('') +
-      `</tbody></table></div>`;
-
-    const passed = [...an.bestRules.map(r=>({t:ruleTxt(r),st:r.testSt})), ...an.combos.map(c=>({t:ruleTxt(c.a)+' DAN '+ruleTxt(c.b),st:c.testSt}))].filter(x=>verdict(x.st)==='✅ lolos');
-    h += passed.length
-      ? `<div class="msg-box success" style="margin-top:12px;">✅ ${passed.length} aturan lolos uji. Kandidat terkuat: <b>${passed.sort((a,b)=>b.st.avg-a.st.avg)[0].t}</b>. Ini kandidat untuk dicoba lot kecil, bukan bukti final: jalankan ulang tiap beberapa hari dan lihat apakah aturan yang sama tetap lolos.</div>`
-      : `<div class="msg-box warning" style="margin-top:12px;">⚠ Belum ada aturan yang lolos uji di data uji. Artinya dengan histori sekarang belum ada filter tunggal/ganda yang terbukti, bukan berarti tidak ada. Lihat tabel 2 dan 3 untuk arah, dan ulangi setelah histori bertambah.</div>`;
-    return h;
-  }
-
-  function renderExtras(ex, built){
-    const pc = (v, d=2) => v==null ? '-' : (v>=0?'+':'') + v.toFixed(d) + '%';
-    const cls = v => v==null ? '' : (v>=0 ? 'pos' : 'neg');
-    const withBase = (v, b) => v==null ? '<td>-</td>' : b==null ? `<td class="${cls(v)}">${pc(v)}</td>` : `<td class="${cls(v)}">${pc(v)}<br><span style="font-size:10px;color:var(--text-muted);">acak ${pc(b)}</span></td>`;
-    const tp = built.tp, sl = built.sl;
-
-    let h = `<div class="table-section-title" style="margin-top:28px;">5. Kapan sebaiknya jual? (entry di open besok)</div>
-      <div class="msg-box info" style="margin-bottom:10px;">ℹ Angka kecil abu-abu = saham acak dengan <b>volatilitas yang sama</b> (adil, karena saham radar memang lebih liar dari rata-rata). "Puncak" = harga tertinggi yang sempat tersentuh dalam 3 hari (bukan harga jual yang pasti didapat); "titik terendah" = harga terendah yang sempat tersentuh.</div>
-      <div class="preview-table-wrap"><table><thead><tr><th>Kelompok</th><th>n</th><th>Jual close H1</th><th>Jual close H2</th><th>Jual close H3</th><th>Rata2 puncak 3 hari</th><th>Rata2 titik terendah</th><th>Pernah ≥ +3%</th><th>Pernah ≤ −3%</th></tr></thead><tbody>` +
-      ex.exits.map(r => r.n ? `<tr><td>${r.label}</td><td>${r.n}</td>${withBase(r.ret1,r.base.ret1)}${withBase(r.ret2,r.base.ret2)}${withBase(r.ret3,r.base.ret3)}${withBase(r.maxUp3,r.base.maxUp3)}${withBase(r.minDn3,r.base.minDn3)}<td>${r.up3pct.toFixed(0)}%</td><td>${r.dn3pct.toFixed(0)}%</td></tr>` : `<tr><td>${r.label}</td><td>0</td><td colspan="7">-</td></tr>`).join('') +
-      `</tbody></table></div>`;
-
-    const lvlTxt = l => l===0 ? 'Limit di harga close sinyal' : `Limit ${Math.abs(l)}% di bawah close sinyal`;
-    h += `<div class="table-section-title">6. Pasang limit beli (tunggu turun), bukan beli di open besok</div>
-      <div class="msg-box info" style="margin-bottom:10px;">ℹ Order limit berlaku 2 hari bursa; kalau harga tidak pernah turun ke level itu, order tidak terisi. Kalau terisi, ditahan sampai close hari ke-3 dengan TP +${tp}% / SL −${sl}% (hari terisi hanya dicek SL, supaya konservatif). Bandingkan "terisi" dengan "tidak terisi": kalau yang tidak terisi hasilnya jelek, limit berhasil menyaring saham yang langsung lari lalu turun.</div>
-      <div class="preview-table-wrap"><table><thead><tr><th>Order</th><th>Terisi</th><th>Return H3 (limit)</th><th>Menang</th><th>Hasil TP/SL</th><th>Kejadian sama kalau beli di open</th><th>Tidak terisi: n</th><th>Tidak terisi: kalau beli di open</th></tr></thead><tbody>` +
-      ex.limits.map(r => `<tr><td>${lvlTxt(r.level)}</td><td>${r.nFilled} dari ${r.total} (${r.fillRate!=null?r.fillRate.toFixed(0):'-'}%)</td>${withBase(r.ret3, r.base?r.base.ret3:null)}<td>${r.win!=null?r.win.toFixed(0)+'%':'-'}</td><td class="${cls(r.tpsl)}">${pc(r.tpsl)}</td><td class="${cls(r.sameOpenRet3)}">${pc(r.sameOpenRet3)}</td><td>${r.nUnfilled}</td><td class="${cls(r.unfilledOpenRet3)}">${pc(r.unfilledOpenRet3)}</td></tr>`).join('') +
-      `</tbody></table></div>`;
-
-    h += `<div class="table-section-title">7. Masuk saat koreksi setelah muncul di radar</div>
-      <div class="msg-box info" style="margin-bottom:10px;">ℹ Saham yang sudah muncul di radar, lalu dalam 1-3 hari close-nya turun minimal X% dari puncak close sejak sinyal (maksimal turun 12%, supaya bukan saham ambruk). Entry di open hari berikutnya, ditahan sampai close hari ke-3 sejak entry.</div>
-      <div class="preview-table-wrap"><table><thead><tr><th>Koreksi minimal</th><th>n</th><th>Rata2 hari setelah sinyal</th><th>Return H3</th><th>Menang</th><th>TP tercapai</th><th>SL tercapai</th><th>Sinyal tanpa koreksi</th></tr></thead><tbody>` +
-      ex.pullbacks.map(r => `<tr><td>${r.p}%</td><td>${r.n}</td><td>${r.avgDays!=null?r.avgDays.toFixed(1):'-'}</td>${withBase(r.ret3, r.baseRet3)}<td>${r.win!=null?r.win.toFixed(0)+'%':'-'}</td><td>${r.tpRate!=null?r.tpRate.toFixed(0)+'%':'-'}</td><td>${r.slRate!=null?r.slRate.toFixed(0)+'%':'-'}</td><td>${r.noPull}</td></tr>`).join('') +
-      `</tbody></table></div>`;
-
-    const cands = [
-      
-      ...ex.pullbacks.filter(r=>r.n>=30 && r.baseRet3!=null).map(r=>({t:`Masuk saat koreksi ≥${r.p}%`, n:r.n, ret:r.ret3, base:r.baseRet3, tpsl:r.tpsl})),
-    ].filter(c=>c.ret>0 && c.tpsl>0 && c.ret - c.base >= 0.5).sort((a,b)=>(b.ret-b.base)-(a.ret-a.base));
-    h += cands.length
-      ? `<div class="msg-box success" style="margin-top:12px;">✅ Kandidat terbaik: <b>${cands[0].t}</b> (n=${cands[0].n}, return H3 ${pc(cands[0].ret)} vs acak ${pc(cands[0].base)}). Ini baru lolos syarat dasar (n≥30, positif, unggul ≥0,5 poin dari acak sevolatilitas), bukan bukti final: uji lot kecil dan jalankan ulang tiap beberapa hari.</div>`
-      : `<div class="msg-box warning" style="margin-top:12px;">⚠ Belum ada cara masuk di tabel 6-7 yang unggul jelas (n≥30, positif, ≥0,5 poin di atas acak sevolatilitas). Baca tabel 5 untuk melihat apakah ada ruang profit di hari ke-1 atau ke-2.</div>`;
-    return h;
-  }
-
-  function renderTopN(t3, t5){
-    const pc = (v, d=2) => v==null ? '-' : (v>=0?'+':'') + v.toFixed(d) + '%';
-    const cls = v => v==null ? '' : (v>=0 ? 'pos' : 'neg');
-    const FEE = 0.4;
-    function table(t){
-      if(!t.nDays) return `<div class="msg-box warning">⚠ Belum ada hari dengan cukup sinyal untuk Top ${t.N}.</div>`;
-      const b = t.base;
-      let h = `<div class="preview-table-wrap"><table><thead><tr><th>Cara memilih (Top ${t.N} per hari, ${t.nDays} hari)</th><th>Pilihan</th><th>Jual H1</th><th>Jual H2</th><th>Jual H3</th><th>H3 setelah fee ${FEE}%</th><th>Selisih H3 vs acak (± galat)</th><th>Paruh awal / akhir</th><th>Pernah ≥ +3%</th><th>Pernah ≤ −3%</th></tr></thead><tbody>
-        <tr><td><i>Acak dari daftar radar hari itu</i></td><td>${b.n}</td><td class="${cls(b.ret1)}">${pc(b.ret1)}</td><td class="${cls(b.ret2)}">${pc(b.ret2)}</td><td class="${cls(b.ret3)}">${pc(b.ret3)}</td><td class="${cls(b.ret3-FEE)}">${pc(b.ret3-FEE)}</td><td>-</td><td>-</td><td>${b.up3pct.toFixed(0)}%</td><td>${b.dn3pct.toFixed(0)}%</td></tr>`;
-      t.rows.forEach(r => {
-        h += `<tr><td>${r.label}</td><td>${r.n}</td><td class="${cls(r.ret1)}">${pc(r.ret1)}</td><td class="${cls(r.ret2)}">${pc(r.ret2)}</td><td class="${cls(r.ret3)}">${pc(r.ret3)}</td><td class="${cls(r.ret3-FEE)}">${pc(r.ret3-FEE)}</td><td class="${cls(r.diff3)}">${pc(r.diff3)} <span style="font-size:10px;color:var(--text-muted);">± ${r.se!=null?r.se.toFixed(2):'-'}</span></td><td><span class="${cls(r.diffA)}">${pc(r.diffA)}</span> / <span class="${cls(r.diffB)}">${pc(r.diffB)}</span></td><td>${r.up3pct.toFixed(0)}%</td><td>${r.dn3pct.toFixed(0)}%</td></tr>`;
-      });
-      return h + '</tbody></table></div>';
-    }
-    let h = `<div class="table-section-title" style="margin-top:28px;">8. Uji cara pakai sebenarnya: pilih Top 3 / Top 5 per hari</div>
-      <div class="msg-box info" style="margin-bottom:10px;">ℹ Tiap hari, dari saham yang baru masuk radar, diambil Top N menurut satu cara memilih, entry di open besok, dibandingkan dengan memilih acak dari daftar yang sama di hari yang sama (jadi kondisi pasar ikut terimbang). <b>Selisih H3</b> = rata-rata keunggulan per hari; <b>± galat</b> = ketidakpastiannya (kalau selisih lebih kecil dari 2× galat, anggap kebetulan). <b>Paruh awal / akhir</b> = selisih yang sama dihitung terpisah di separuh hari pertama dan separuh hari terakhir; keunggulan sungguhan harus positif di keduanya. Baris "kebalikan" sengaja dipasang sebagai pembanding: kalau cara memilih benar, baris ini harus lebih buruk dari acak. Fee ${FEE}% = perkiraan fee beli + jual.</div>
-      <div class="table-section-title" style="font-size:13px;">Top 3 per hari</div>${table(t3)}
-      <div class="table-section-title" style="font-size:13px; margin-top:14px;">Top 5 per hari</div>${table(t5)}`;
-    const good = [...t3.rows, ...t5.rows].filter(r => r.key!=='worst' && r.diff3!=null && r.se!=null && r.diff3 >= 0.5 && r.diff3 > 2*r.se && r.diffA > 0 && r.diffB > 0 && r.ret3 - FEE > 0);
-    h += good.length
-      ? `<div class="msg-box success" style="margin-top:12px;">✅ Cara memilih yang lolos semua syarat (selisih ≥ 0,5 poin, lebih besar dari 2× galat, positif di kedua paruh, dan H3 setelah fee masih positif): <b>${good.map(r=>r.label).filter((v,i,a)=>a.indexOf(v)===i).join('; ')}</b>. Ini kandidat untuk dicoba lot kecil dan diuji ulang tiap beberapa hari.</div>`
-      : `<div class="msg-box warning" style="margin-top:12px;">⚠ Belum ada cara memilih yang lolos semua syarat (selisih ≥ 0,5 poin, lebih besar dari 2× galat, positif di kedua paruh, H3 setelah fee positif). Baca kolom "Selisih H3": kalau cara "belum lari" unggul tetapi H3 setelah fee masih negatif, artinya filter ini mengurangi kerugian tapi belum cukup untuk untung.</div>`;
-    return h;
   }
 
 
@@ -2917,7 +2638,7 @@
   //   B = ≥ 50% saham likuid close di atas MA20-nya (mayoritas saham sehat)
   //   🟢 = A dan B · 🔴 = bukan A dan bukan B · 🟡 = salah satu
   // Aturan ini dipasang SEBELUM diuji (tidak dicari dari data), lalu diuji di
-  // tabel 9 panel Diagnosa. Dipakai sama persis di Step 4 dan di Diagnosa.
+  // tabel 1 panel Diagnosa. Dipakai sama persis di Step 4 dan di Diagnosa.
   // ============================================================
   const MKT_RULE = 'mkt-v1';
   function mktRegimeSeries(seriesAscByTicker){
@@ -3034,7 +2755,7 @@
     const pc = (v, d=2) => v==null || !isFinite(v) ? '-' : (v>=0?'+':'') + v.toFixed(d) + '%';
     const cls = v => v==null ? '' : (v>=0 ? 'pos' : 'neg');
     const FEE = 0.4;
-    let h = `<div class="table-section-title" style="margin-top:28px;">9. Lampu kondisi pasar: apakah hasilnya tergantung kondisi pasar saat sinyal?</div>
+    let h = `<div class="table-section-title" style="margin-top:18px;">1. Lampu kondisi pasar: apakah hasilnya tergantung kondisi pasar saat sinyal?</div>
       <div class="msg-box info" style="margin-bottom:10px;"><div>ℹ Lampu dihitung dari data <b>sampai hari sinyal</b> (jadi bisa dipakai sebelum beli besok paginya). Indeks pasar = rata-rata kenaikan harian semua saham likuid. <b>🟢 Hijau</b> = indeks di atas rata-rata 10 harinya <b>dan</b> ≥ 50% saham di atas MA20; <b>🔴 Merah</b> = keduanya tidak; <b>🟡 Kuning</b> = salah satu. Aturan ini dipasang sebelum diuji, bukan dicari dari data. Rentang uji: ${rg.range[0]||'-'} s/d ${rg.range[1]||'-'} (${rg.nDays} hari sinyal). <b>Episode</b> = berapa kali lampu itu muncul sebagai satu periode berurutan; kalau episode sedikit, hasilnya bisa cuma cerminan satu-dua periode pasar.</div></div>
       <div class="msg-box ${rg.current && rg.current.light==='hijau' ? 'success' : rg.current && rg.current.light==='merah' ? 'error' : 'warning'}"><div>Lampu di hari data terakhir (${rg.lastDate}): <b>${mktLightLabel(rg.current ? rg.current.light : null)}</b>${rg.current && rg.current.above20!=null ? ` — indeks vs rata-rata 10 hari ${pc(rg.current.idxVsMa10)}, ${rg.current.above20.toFixed(0)}% saham di atas MA20, indeks 5 hari ${pc(rg.current.mkt5)}` : ''}</div></div>
       <div class="preview-table-wrap"><table><thead><tr><th>Lampu</th><th>Kelompok</th><th>Hari (episode)</th><th>n</th><th>Jual H1</th><th>Jual H3</th><th>H3 setelah fee</th><th>Close H3 &gt; entry</th><th>Pernah ≥ +3%</th><th>Pernah ≤ −3%</th><th>H3 paruh awal / akhir</th></tr></thead><tbody>`;
@@ -3059,7 +2780,7 @@
     if(lowBest >= 3){
       const m5 = rg.terciles.find(t => t.m.key === 'mkt5');
       const lo = m5 ? m5.parts[0].top3 : null;
-      h += `<div class="msg-box info" style="margin-top:12px;"><div>🔄 Pola yang terlihat: Top 3 justru paling baik <b>setelah pasar turun</b> (kelompok Rendah lebih baik di ${lowBest} dari 4 ukuran)${lo && lo.n ? ` — saat indeks 5 hari ≤ ${m5.cuts[0].toFixed(1)}%: H3 ${pc(lo.ret3)}, paruh awal ${pc(lo.h3a)} / akhir ${pc(lo.h3b)}` : ''}. Ini pola <b>pantulan</b>, kebalikan dari lampu hijau. Karena ditemukan setelah melihat data, statusnya calon aturan: dilacak ke depan di tab 🎯 Top 3 sebagai "pantulan-v1" (indeks 5 hari ≤ −3%).</div></div>`;
+      h += `<div class="msg-box info" style="margin-top:12px;"><div>🔄 Pola yang terlihat: Top 3 justru paling baik <b>setelah pasar turun</b> (kelompok Rendah lebih baik di ${lowBest} dari 4 ukuran)${lo && lo.n ? ` — saat indeks 5 hari ≤ ${m5.cuts[0].toFixed(1)}%: H3 ${pc(lo.ret3)}, paruh awal ${pc(lo.h3a)} / akhir ${pc(lo.h3b)}` : ''}. Ini pola <b>pantulan</b>, kebalikan dari lampu hijau. Karena ditemukan setelah melihat data, statusnya calon aturan: dilacak ke depan di tab 🎯 Rapor Skema (baris "Pantulan" di tabel kondisi pasar).</div></div>`;
     }
 
     const g = rg.g, rd = rg.rd;
@@ -3199,7 +2920,7 @@
     const pc = (v, d=2) => v==null || !isFinite(v) ? '-' : (v>=0?'+':'') + v.toFixed(d) + '%';
     const cls = v => v==null ? '' : (v>=0 ? 'pos' : 'neg');
     const pct0 = v => v==null ? '-' : v.toFixed(0) + '%';
-    let h = `<div class="table-section-title" style="margin-top:28px;">10. Uji swing: tahan 5 dan 10 hari bursa</div>
+    let h = `<div class="table-section-title" style="margin-top:28px;">2. Uji swing: tahan 5 dan 10 hari bursa</div>
       <div class="msg-box info" style="margin-bottom:10px;"><div>ℹ Entry tetap di <b>open besok</b> setelah sinyal, lalu dijual di close hari bursa ke-5 (H5) atau ke-10 (H10); hari entry dihitung hari ke-1. <b>Alpha</b> = hasil saham dikurangi rata-rata semua saham likuid yang "dibeli" di hari yang sama dengan cara yang sama — jadi kalau pasar sedang turun, alpha tetap bisa menunjukkan apakah pilihan radar lebih baik dari pasar. Galat sudah memperhitungkan periode tahan yang saling tumpang tindih. Rentang tanggal sinyal yang punya 10 hari ke depan: ${sw.range[0]||'-'} s/d ${sw.range[1]||'-'} (${sw.nDates} hari). ✅ = alpha H10 ≥ +1 poin, &gt; 2× galat, positif di kedua paruh, minimal 15 hari.</div></div>
       <div class="preview-table-wrap"><table><thead><tr><th>Kelompok</th><th>n (H10)</th><th>Jual H5</th><th>Alpha H5</th><th>Jual H10</th><th>H10 setelah fee</th><th>Alpha H10 (± galat)</th><th>Alpha paruh awal / akhir</th><th>Close H10 &gt; entry</th><th>Pernah ≥ +5%</th><th>Pernah ≤ −5%</th><th>Vonis</th></tr></thead><tbody>
       <tr><td><i>Semua saham likuid (pasar)</i></td><td>${sw.mkt.n10}</td><td class="${cls(sw.mkt.r5)}">${pc(sw.mkt.r5)}</td><td>0</td><td class="${cls(sw.mkt.r10)}">${pc(sw.mkt.r10)}</td><td class="${cls(sw.mkt.r10-SWING_FEE)}">${pc(sw.mkt.r10-SWING_FEE)}</td><td>0</td><td>-</td><td>${pct0(sw.mkt.win10)}</td><td>${pct0(sw.mkt.up5)}</td><td>${pct0(sw.mkt.dn5)}</td><td>-</td></tr>`;
@@ -3300,6 +3021,154 @@
   }
   document.getElementById('btnSaveFundExclude').addEventListener('click', () => saveFundExclude(false));
   document.getElementById('btnClearFundExclude').addEventListener('click', () => { document.getElementById('fundExcludeInput').value = ''; saveFundExclude(true); });
+
+  // ============================================================
+  // HASIL SKEMA BARU: entry = OPEN hari bursa setelah tanggal catatan, lalu
+  // close hari ke-1/3/5/10 (hari entry = hari ke-1). Dipakai Step 4 (catatan
+  // terbaru) dan Diagnosa "rapikan riwayat" (semua catatan) — rumus SAMA.
+  // ============================================================
+  const SW_HS = [1, 3, 5, 10];
+  const swR = v => v == null || !isFinite(v) ? null : Math.round(v*100)/100;
+  // rowsByDate: {tanggal: baris tickerHistory}, dates: tanggal bursa urut naik, si: indeks tanggal catatan
+  function swOutcome(rowsByDate, dates, si){
+    if(si == null) return null;
+    const o = { done: 0 };
+    const d1 = dates[si+1];
+    if(!d1) return o; // menunggu
+    const r1 = rowsByDate[d1];
+    if(!r1 || !(r1.open > 0)) return { invalid: true };
+    const entry = r1.open;
+    let up = -Infinity, dn = Infinity;
+    for(let k=1;k<=10;k++){
+      const d = dates[si+k];
+      if(!d) break;
+      const r = rowsByDate[d];
+      if(!r || !(r.close > 0 && r.high > 0 && r.low > 0)) return { invalid: true };
+      up = Math.max(up, r.high); dn = Math.min(dn, r.low);
+      if(SW_HS.includes(k)) o['h'+k] = swR((r.close/entry - 1)*100);
+      if(k === 3){ o.up3 = swR((up/entry-1)*100); o.dn3 = swR((dn/entry-1)*100); }
+      if(k === 10){ o.up10 = swR((up/entry-1)*100); o.dn10 = swR((dn/entry-1)*100); }
+      o.done = k;
+    }
+    return o;
+  }
+  function swMeanOutcomes(list){
+    const m = {};
+    SW_HS.forEach(H => {
+      const v = list.filter(o => o && !o.invalid && o['h'+H] != null).map(o => o['h'+H]);
+      m['h'+H] = v.length ? swR(v.reduce((a,b)=>a+b,0)/v.length) : null;
+      m['n'+H] = v.length;
+    });
+    return m;
+  }
+  // tpDoc + akses baris -> objek res yang disimpan di dokumen topPicks
+  function swBuildRes(tpDoc, rowsOf, dates, si, mktTickers, avail){
+    const pickT = (tpDoc.picks || []).map(p => p.ticker);
+    const bandT = tpDoc.bandar || [];
+    const res = { v: 2, picks: {}, bandar: {}, updatedAt: new Date().toISOString() };
+    const out = t => { const rows = rowsOf(t); return rows ? swOutcome(rows, dates, si) : null; };
+    pickT.forEach(t => { const o = out(t); if(o) res.picks[t] = o; });
+    bandT.forEach(t => { const o = out(t); if(o) res.bandar[t] = o; });
+    res.pool = swMeanOutcomes((tpDoc.candidates || []).map(out));
+    res.mkt = swMeanOutcomes((mktTickers || []).map(out));
+    res.done = Math.max(0, Math.min(10, avail));
+    return res;
+  }
+  // Step 4: perbarui catatan yang tanggal entry-nya masih di dalam jendela 20 hari histori
+  async function settleRecentTopPicks(historyMap, mktTickers, dates, dateIndex, latestDate){
+    const { collection, getDocs, query, where, doc, setDoc } = firestoreFns;
+    const li = dateIndex.get(latestDate);
+    if(li == null) return 0;
+    const fromIdx = Math.max(0, li - 19);
+    const fromDate = dates[Math.max(0, fromIdx - 1)];
+    const snap = await getDocs(query(collection(db, 'topPicks'), where('date', '>=', fromDate)));
+    const byT = {};
+    const rowsOf = t => {
+      if(byT[t] !== undefined) return byT[t];
+      const h = historyMap[t];
+      if(!h){ byT[t] = null; return null; }
+      const m = {}; h.forEach(r => { m[r.date] = r; }); byT[t] = m; return m;
+    };
+    let n = 0;
+    for(const d of snap.docs){
+      const tp = d.data();
+      const si = dateIndex.get(tp.date);
+      if(si == null || si + 1 < fromIdx || si >= li) continue; // butuh baris entry di dalam jendela
+      const old = tp.res && tp.res.done != null ? tp.res.done : -1;
+      if(old >= 10) continue; // sudah final
+      const res = swBuildRes(tp, rowsOf, dates, si, mktTickers, li - si);
+      await setDoc(doc(db, 'topPicks', tp.date), { res }, { merge: true });
+      n++;
+    }
+    return n;
+  }
+
+  // ============================================================
+  // RAPIKAN RIWAYAT SKEMA BARU (dipanggil dari Diagnosa, memakai histori yang sudah diambil):
+  //  - tanggal yang belum punya catatan topPicks -> dibuat dari rekonstruksi (source: 'backfill'),
+  //    dengan aturan yang SAMA: Top 3 compF-v1 dari sinyal baru + daftar Bandar Accum baru (bandar-v1)
+  //  - catatan live yang belum punya daftar Bandar Accum -> diisi dari rekonstruksi (bandarSource: 'backfill')
+  //  - SEMUA catatan dihitung ulang hasil H1/H3/H5/H10 + pembanding (kandidat & pasar)
+  //  Catatan live (Top 3 yang dicatat saat itu) TIDAK ditimpa pilihannya.
+  // ============================================================
+  async function diagRapikan(built, onProgress){
+    const { collection, getDocs, doc, setDoc } = firestoreFns;
+    const { events, seriesAsc, allDates, dateIdx, radarByDate } = built;
+    const reg = mktRegimeSeries(seriesAsc);
+    const byDate = {};
+    events.forEach(e => { (byDate[e.date] = byDate[e.date] || []).push(e); });
+    const snap = await getDocs(collection(db, 'topPicks'));
+    const existing = {};
+    snap.docs.forEach(d => { existing[d.id] = d.data(); });
+    const rowsCache = {};
+    const rowsOf = t => {
+      if(rowsCache[t] !== undefined) return rowsCache[t];
+      const a = seriesAsc[t];
+      if(!a){ rowsCache[t] = null; return null; }
+      const m = {}; a.forEach(r => { m[r.date] = r; }); rowsCache[t] = m; return m;
+    };
+    const mktTickers = Object.keys(seriesAsc);
+    const lastIdx = allDates.length - 1;
+    const now = new Date().toISOString();
+    const marketOf = d => { const r = reg[d]; return r && r.light ? { rule: MKT_RULE, light: r.light, idxVsMa10: r.idxVsMa10, above20: r.above20, mkt5: r.mkt5, ewRet: r.ewRet, breadth: r.breadth, n: r.n } : null; };
+    const dates = allDates.filter((d, i) => i >= DIAG_MIN_LOOKBACK && (existing[d] || (byDate[d] || []).length));
+    let created = 0, updated = 0, done = 0;
+    for(const d of dates){
+      const si = dateIdx.get(d);
+      const signalsKnown = si <= lastIdx - 3; // sinyal baru hanya bisa direkonstruksi kalau ada 3 hari ke depan
+      const dayEv = byDate[d] || [];
+      const bandarRe = dayEv.filter(e => e.cats && e.cats.bd).map(e => e.ticker);
+      let tp = existing[d];
+      let write;
+      if(!tp){
+        const evs = dayEv.filter(e => [e.rangeD, e.atrPct, e.frD, e.chgD].every(v => v != null && isFinite(v)));
+        let picks = [];
+        if(evs.length >= BL_MIN_POOL){
+          const ranked = blRankItems(evs.map(e => ({ ticker: e.ticker, bl: { rangeD: e.rangeD, atrPct: e.atrPct, chgD: e.chgD, frD: e.frD } }))).sort((a,b) => a.rank - b.rank);
+          picks = ranked.slice(0,3).map(x => ({ ticker: x.ticker, rank: x.rank, score: x.score }));
+        }
+        tp = { date: d, mode: 'baru', rule: 'compF-v1', poolSize: evs.length, candidates: evs.map(e => e.ticker), picks,
+          radar: radarByDate[d] || {}, bandar: bandarRe, bandarRule: 'bandar-v1', bandarSource: 'backfill', bandarMode: 'baru',
+          source: 'backfill', createdAt: now };
+        const mk = marketOf(d); if(mk) tp.market = mk;
+        write = { ...tp };
+        created++;
+      }else{
+        write = {};
+        if((!tp.bandar || tp.bandarSource === 'backfill') && signalsKnown){
+          tp.bandar = bandarRe;
+          Object.assign(write, { bandar: bandarRe, bandarSource: 'backfill', bandarRule: 'bandar-v1', bandarMode: 'baru' });
+        }
+        if(!tp.market){ const mk = marketOf(d); if(mk){ tp.market = mk; write.market = mk; } }
+        updated++;
+      }
+      write.res = swBuildRes(tp, rowsOf, allDates, si, mktTickers, lastIdx - si);
+      await setDoc(doc(db, 'topPicks', d), write, { merge: true });
+      done++;
+      if(onProgress) onProgress(done, dates.length);
+    }
+    return { created, updated, total: dates.length, from: dates[0], to: dates[dates.length-1] };
+  }
 
   function sleep(ms){ return new Promise(resolve => setTimeout(resolve, ms)); }
 
