@@ -27,7 +27,7 @@ const PART_GZ = 900000;   // karakter base64 (ASCII) per dokumen — batas Fires
 const PART_JSON = 300000; // tanpa kompresi (browser lama): aman untuk karakter multi-byte
 export const DAILY_BUILD_LIMIT = 30; // maks bundle tanggal lama yang dibangun per hari kuota (±28.500 baca)
 
-// Kuota gratis Firestore reset tengah malam waktu Pasifik (15:00 WIB saat musim panas AS, 16:00 WIB Nov–Mar).
+// Kuota gratis Firestore reset tengah malam waktu Pasifik (14:00 WIB saat musim panas AS, 15:00 WIB Nov–Mar).
 export function quotaDay(d = new Date()) {
   return new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Los_Angeles', year: 'numeric', month: '2-digit', day: '2-digit' }).format(d);
 }

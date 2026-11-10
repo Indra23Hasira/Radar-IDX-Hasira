@@ -2,7 +2,7 @@
 
 Project Firebase `radar-idx-hasira` memakai paket gratis (Spark): ±50.000 baca dokumen per hari, dipakai bersama
 Radar IDX, Dashboard, Radar Konglo, Radar Pengendali dan Radar-DayTrade. Kuota reset tengah malam waktu Pasifik
-(**15:00 WIB** Mar–Nov, **16:00 WIB** Nov–Mar).
+(**14:00 WIB** Mar–Nov, **15:00 WIB** Nov–Mar).
 
 Kuota dihitung per dokumen. Cara lama membaca histori 20 hari untuk ±800 saham = ±16.000 dokumen sekali Step 4,
 Backtest 40 hari ±30.000, Diagnosa 120 hari bisa >80.000 (melebihi kuota harian sendirian).
