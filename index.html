@@ -1551,13 +1551,15 @@
     html += `<div class="stat-row">
       <div class="stat-box ok"><div class="label">Tanggal Diproses</div><div class="value">${latestDate}</div></div>
       <div class="stat-box"><div class="label">Kandidat Final (Lolos Semua Filter)</div><div class="value">${raw.length}</div></div>
-      <div class="stat-box ${withHistory3>=candidates.length*0.5?'ok':'warn'}"><div class="label">Histori \u22653 Hari</div><div class="value">${withHistory3}</div></div>
+      <div class="stat-box ${withHistory3>=raw.length*0.5?'ok':'warn'}"><div class="label">Histori \u22653 Hari</div><div class="value">${withHistory3}</div></div>
       <div class="stat-box"><div class="label">Match \u22653 Kategori</div><div class="value">${matched3plus.length}</div></div>
     </div>
     <div class="msg-box info">ℹ ${belowMinPrice} saham dibuang karena harga di bawah Rp${minPrice}/lembar. ${belowLiquidity} saham dibuang karena Value/Frequency rata-rata di bawah batas minimal (dari ${rawBeforeLiquidityFilter} kandidat harga OK, tersisa ${rawAll.length}).${fundExcluded.length ? ` 🚫 ${fundExcluded.length} saham dibuang karena masuk daftar fundamental jelek (${fundExcluded.slice(0,15).join(', ')}${fundExcluded.length>15?', …':''}), tersisa ${raw.length}.` : ''}${staleDocs.length ? ` ${staleDocs.length} data lama (sudah tidak lolos filter) dibersihkan dari database.` : ''}${autoAdded ? ` ⭐ ${autoAdded} saham baru otomatis masuk Watchlist (Top 3 + Bandar Accum baru)${autoReactivated ? `, ${autoReactivated} di antaranya kejadian BARU dari ticker yang pernah dipantau (>10 hari lalu, data lama diarsipkan)` : ''}.` : ''}${peakUpdated ? ` 📈 ${peakUpdated} entry Watchlist ter-update tracking harga tertinggi/terendahnya.` : ''}${peakBackfilled ? ` ⏪ ${peakBackfilled} entry berhasil di-backfill histori harganya dari Yahoo Finance.` : ''}</div>`;
 
-    if(withHistory3 < candidates.length){
-      html += `<div class="msg-box warning">⚠ ${candidates.length - withHistory3} saham belum punya histori 3 hari — kategori Foreign Uptrend/Big Accum/Bandar Accum untuk saham itu belum bisa dievaluasi (butuh upload beberapa hari lagi, termasuk backfill kalau ada).</div>`;
+    // dibandingkan dengan kandidat FINAL (dulu dengan semua saham harga OK, sehingga saham yang sekadar
+    // tersaring likuiditas ikut terhitung "belum punya histori")
+    if(withHistory3 < raw.length){
+      html += `<div class="msg-box warning">⚠ ${raw.length - withHistory3} saham belum punya histori 3 hari — kategori Foreign Uptrend/Big Accum/Bandar Accum untuk saham itu belum bisa dievaluasi (butuh upload beberapa hari lagi, termasuk backfill kalau ada).</div>`;
     }
 
     if(matched3plus.length){
