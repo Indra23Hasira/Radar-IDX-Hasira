@@ -454,6 +454,7 @@
   };
 
   let db = null, auth = null, firestoreFns = null, authFns = null, firebaseReady = false;
+  let RB = null; // arsip hemat (radar-bundle.js) — null = cara lama
 
   async function initFirebase(){
     try{
@@ -465,6 +466,10 @@
       auth = af.getAuth(app);
       firestoreFns = fs;
       authFns = af;
+      try{
+        const rbm = await import('./radar-bundle.js?v=1');
+        RB = rbm.createRadarBundles({ db, fs, log: (t) => console.info('[arsip hemat]', t) });
+      }catch(e){ console.warn('Arsip hemat tidak aktif (pakai cara lama):', e); RB = null; }
 
       af.onAuthStateChanged(auth, (user) => {
         if(user){
@@ -520,12 +525,27 @@
   // pakai Date.now()-addedDate mentah (864e5), yang salah hitung kalau window-nya
   // melewati akhir pekan/libur bursa. Di-cache sekali per sesi biar hemat baca.
   // ============================================================
+  // arsip hemat: hasil sama dengan query(tickerRollingStats, where('matchCount','>=',n)) — urut matchCount lalu id
+  function rbMatchAtLeast(entries, n){
+    return entries
+      .filter(([, d]) => typeof d.matchCount === 'number' && d.matchCount >= n)
+      .sort((a, b) => (a[1].matchCount - b[1].matchCount) || (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0))
+      .map(([, d]) => d);
+  }
+
   let tradingDatesCache = null;
   async function getTradingDatesIndex(){
     if(tradingDatesCache) return tradingDatesCache;
     const { collection, getDocs } = firestoreFns;
-    const snap = await getDocs(collection(db, 'dailySummary'));
-    const dates = snap.docs.map(d => d.id).sort(); // ascending
+    let dates = null;
+    if(RB){
+      // arsip hemat: 3 baca (dulu: 1 baca per tanggal bursa)
+      try{ dates = (await RB.tradingDates()).dates.slice(); }catch(e){ console.warn('Arsip hemat: daftar tanggal pakai cara lama —', e); }
+    }
+    if(!dates){
+      const snap = await getDocs(collection(db, 'dailySummary'));
+      dates = snap.docs.map(d => d.id).sort(); // ascending
+    }
     const indexOf = new Map(dates.map((d,i) => [d, i]));
     const latestDate = dates[dates.length - 1] || new Date().toISOString().slice(0,10);
     tradingDatesCache = { dates, indexOf, latestDate };
@@ -786,7 +806,16 @@
     const cacheKey = 'blFeat_' + latestDate;
     const cache = blCacheGet(cacheKey) || {};
     const need = list.filter(r => !(r.ticker in cache));
-    await runWithConcurrency(need, 15, async (r) => {
+    let viaArchive = false;
+    if(RB && need.length){
+      // arsip hemat: 10 dokumen (1 per tanggal) untuk semua kandidat, bukan 10 per saham
+      try{
+        const hm = await RB.history(need.map(r => r.ticker), 10);
+        need.forEach(r => { cache[r.ticker] = blFeatures(hm[r.ticker] || [], latestDate); });
+        viaArchive = true;
+      }catch(e){ console.warn('Arsip hemat: histori Belum Lari pakai cara lama —', e); }
+    }
+    if(!viaArchive) await runWithConcurrency(need, 15, async (r) => {
       const snap = await getDocs(query(collection(db, 'tickerHistory', r.ticker, 'days'), orderBy('date', 'desc'), limit(10)));
       const hist = snap.docs.map(d => d.data());
       cache[r.ticker] = blFeatures(hist, latestDate); // null kalau data kurang
@@ -1051,9 +1080,25 @@
       updateWatchlistCountBadge(wlSnap.size);
 
       // 1. ambil kandidat dengan match >= 1 sekaligus (filter ketat diterapkan saat render, biar ganti threshold tidak perlu query ulang)
-      const q = query(collection(db, 'tickerRollingStats'), where('matchCount', '>=', 1));
-      const snap = await getDocs(q);
-      const rollingStats = snap.docs.map(d => d.data());
+      //    arsip hemat: rolling + harga + indikator dari 3–5 dokumen (dulu: 3 baca per kandidat)
+      let rollingStats = null, priceMap = null, indMap = null, indMetaEarly;
+      if(RB){
+        try{
+          const ms = await getDoc(doc(db, 'systemMeta', 'technicalIndicators'));
+          indMetaEarly = ms.exists() ? ms.data() : null;
+          const techAt = indMetaEarly ? indMetaEarly.updatedAt || null : null;
+          rollingStats = rbMatchAtLeast(await RB.rolling({ techAt }), 1);
+          if(rollingStats.length){
+            priceMap = new Map((await RB.day(rollingStats[0].date)).map(r => [r.ticker, r]));
+            indMap = await RB.indicators({ techAt });
+          }
+        }catch(e){ console.warn('Arsip hemat: radar pakai cara lama —', e); rollingStats = null; priceMap = null; indMap = null; }
+      }
+      if(!rollingStats){
+        const q = query(collection(db, 'tickerRollingStats'), where('matchCount', '>=', 1));
+        const snap = await getDocs(q);
+        rollingStats = snap.docs.map(d => d.data());
+      }
 
       if(!rollingStats.length){
         content.innerHTML = `<div class="empty-state">
@@ -1069,6 +1114,7 @@
 
       // 2. lengkapi tiap kandidat dengan data harga (dailySummary) + indikator (tickerIndicators)
       const { results } = await runWithConcurrency(rollingStats, 15, async (rs) => {
+        if(priceMap && indMap) return { ...rs, price: priceMap.get(rs.ticker) || {}, ind: indMap.get(rs.ticker) || {} };
         const [priceSnap, indSnap] = await Promise.all([
           getDoc(doc(db, 'dailySummary', latestDate, 'stocks', rs.ticker)),
           getDoc(doc(db, 'tickerIndicators', rs.ticker)),
@@ -1092,8 +1138,12 @@
       renderTop3Callout();
 
       // 3. status freshness
-      const metaSnap = await getDoc(doc(db, 'systemMeta', 'technicalIndicators'));
-      const indMeta = metaSnap.exists() ? metaSnap.data() : null;
+      let indMeta;
+      if(indMetaEarly !== undefined) indMeta = indMetaEarly;
+      else{
+        const metaSnap = await getDoc(doc(db, 'systemMeta', 'technicalIndicators'));
+        indMeta = metaSnap.exists() ? metaSnap.data() : null;
+      }
       renderFreshnessBar(latestDate, indMeta);
 
       renderDashboard(lastRenderedData);
@@ -1335,10 +1385,26 @@
 
       // ambil kondisi TERKINI cuma buat yang AKTIF (yang arsip datanya sudah beku,
       // tidak perlu baca live lagi — hemat baca Firestore)
-      const anyRsSnap = await getDocs(collection(db, 'tickerRollingStats'));
-      const latestDate = anyRsSnap.docs[0]?.data()?.date;
+      //    arsip hemat: rolling + harga + indikator dari beberapa dokumen saja (dulu: semua rolling + 3 per saham)
+      let rsMap = null, priceMap = null, indMap = null, latestDate;
+      if(RB){
+        try{
+          const ms = await getDoc(doc(db, 'systemMeta', 'technicalIndicators'));
+          const techAt = ms.exists() ? ms.data().updatedAt || null : null;
+          const entries = await RB.rolling({ techAt });
+          latestDate = entries[0] ? entries[0][1].date : undefined;
+          priceMap = latestDate ? new Map((await RB.day(latestDate)).map(r => [r.ticker, r])) : new Map();
+          indMap = await RB.indicators({ techAt });
+          rsMap = new Map(entries);
+        }catch(e){ console.warn('Arsip hemat: watchlist pakai cara lama —', e); rsMap = null; priceMap = null; indMap = null; }
+      }
+      if(!rsMap){
+        const anyRsSnap = await getDocs(collection(db, 'tickerRollingStats'));
+        latestDate = anyRsSnap.docs[0]?.data()?.date;
+      }
 
       const { results } = await runWithConcurrency(activeItems, 15, async (item) => {
+        if(rsMap) return { ...item, current: { ...(rsMap.get(item.ticker) || {}), price: (latestDate && priceMap.get(item.ticker)) || {}, ind: indMap.get(item.ticker) || {} } };
         const [rsSnap, priceSnap, indSnap] = await Promise.all([
           getDoc(doc(db, 'tickerRollingStats', item.ticker)),
           latestDate ? getDoc(doc(db, 'dailySummary', latestDate, 'stocks', item.ticker)) : Promise.resolve(null),
@@ -2317,13 +2383,17 @@
     el.innerHTML = `<div class="loading-msg">Memuat kandidat dari radar...</div>`;
     const { collection, getDocs, where, query } = firestoreFns;
     try{
+      let rsList = null;
+      if(RB){
+        try{ rsList = rbMatchAtLeast(await RB.rolling({ techAt: await RB.readTechAt() }), 1); }
+        catch(e){ console.warn('Arsip hemat: kandidat hold pakai cara lama —', e); rsList = null; }
+      }
       const [rsSnap, fundSnap] = await Promise.all([
-        getDocs(query(collection(db, 'tickerRollingStats'), where('matchCount', '>=', 1))),
+        rsList ? Promise.resolve(null) : getDocs(query(collection(db, 'tickerRollingStats'), where('matchCount', '>=', 1))),
         getDocs(collection(db, 'holdFundamentalData')),
       ]);
       const already = new Set(fundSnap.docs.map(d => d.id));
-      const candidates = rsSnap.docs
-        .map(d => d.data())
+      const candidates = (rsList || rsSnap.docs.map(d => d.data()))
         .filter(r => !already.has(r.ticker))
         .filter(r => (r.foreignNetValue3d ?? 0) > 0 && (r.foreignNetValue10d ?? 0) > 0)
         .sort((a, b) => (b.foreignNetValue10d ?? 0) - (a.foreignNetValue10d ?? 0));
@@ -2457,10 +2527,19 @@
       const { latestDate } = await getTradingDatesIndex();
       const docs = fundSnap.docs.map(d => ({ id: d.id, ...d.data() }));
       fundamentalDocsCache = docs;
+      let priceMap = null;
+      if(RB && docs.length > 3){
+        try{ priceMap = new Map((await RB.day(latestDate)).map(r => [r.ticker, r])); }
+        catch(e){ console.warn('Arsip hemat: harga hold pakai cara lama —', e); priceMap = null; }
+      }
 
       const { results } = await runWithConcurrency(docs, 15, async (fd) => {
-        const priceSnap = await getDoc(doc(db, 'dailySummary', latestDate, 'stocks', fd.id));
-        const price = priceSnap.exists() ? (priceSnap.data().close ?? null) : null;
+        let price;
+        if(priceMap) price = priceMap.has(fd.id) ? (priceMap.get(fd.id).close ?? null) : null;
+        else{
+          const priceSnap = await getDoc(doc(db, 'dailySummary', latestDate, 'stocks', fd.id));
+          price = priceSnap.exists() ? (priceSnap.data().close ?? null) : null;
+        }
         const metrics = computeFundamentalMetrics(fd.quarters || [], price);
         return { ticker: fd.id, companyName: fd.companyName, dividendYield: fd.dividendYield, price, metrics };
       });

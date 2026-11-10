@@ -397,6 +397,7 @@
   let firestoreFns = null;
   let authFns = null;
   let firebaseReady = false;
+  let RB = null; // arsip hemat (radar-bundle.js) — null = cara lama
 
   async function initFirebase(){
     if (firebaseConfig.apiKey.startsWith("GANTI")) {
@@ -412,6 +413,10 @@
       auth = af.getAuth(app);
       firestoreFns = fs;
       authFns = af;
+      try{
+        const rbm = await import('./radar-bundle.js?v=1');
+        RB = rbm.createRadarBundles({ db, fs, log: (t) => console.info('[arsip hemat]', t) });
+      }catch(e){ console.warn('Arsip hemat tidak aktif (pakai cara lama):', e); RB = null; }
       document.getElementById('configNote').style.display = 'none';
 
       af.onAuthStateChanged(auth, (user) => {
@@ -750,12 +755,18 @@
         updateProgress(done, total);
       }
 
-      // meta doc
-      await setDoc(doc(db, 'dailySummary', detectedDate), {
+      // meta doc — sekaligus arsip hemat tanggal ini (1 dokumen berisi semua saham), dalam satu batch
+      const dailyMeta = {
         tradingDate: detectedDate,
         uploadedAt: serverTimestamp(),
         stockCount: total,
-      });
+      };
+      let bundled = false, bundleErr = null;
+      if(RB){
+        try{ await RB.putDay(detectedDate, parsedRows.map(r => ({ ...r, date: detectedDate })), { dailyMeta }); bundled = true; }
+        catch(e){ console.warn('Arsip hemat gagal ditulis:', e); bundleErr = e.message; }
+      }
+      if(!bundled) await setDoc(doc(db, 'dailySummary', detectedDate), dailyMeta);
 
       // log riwayat
       await setDoc(doc(collection(db, 'uploadHistory')), {
@@ -766,7 +777,8 @@
       });
 
       document.getElementById('saveResult').innerHTML =
-        `<div class="msg-box success">✓ Berhasil menyimpan ${total} saham untuk tanggal ${detectedDate}.</div>`;
+        `<div class="msg-box success">✓ Berhasil menyimpan ${total} saham untuk tanggal ${detectedDate}.</div>` +
+        (bundleErr ? `<div class="msg-box warning rb-note">⚠ Arsip hemat tanggal ini gagal ditulis (${bundleErr}). Data tetap tersimpan seperti biasa, tapi pembacaan berikutnya memakai cara lama yang boros kuota — cek blok rules <code>radarBundles</code> di Firestore.</div>` : '');
       loadUploadHistory();
 
       // Tahap 4: hitung ulang Liquidity + Foreign + Kategori untuk tanggal terbaru di database
@@ -837,7 +849,101 @@
     return { results, errorCount, firstError };
   }
 
-  document.getElementById('btnRecompute4').addEventListener('click', computeRollingStats);
+  // ============================================================
+  // ARSIP HEMAT (radar-bundle.js) — pembaca bersama untuk Step 4, Backtest, Diagnosa, Step 5.
+  // Hasil SAMA dengan cara lama; kalau arsip gagal dibaca, otomatis jatuh balik ke cara lama.
+  // ============================================================
+  function rbProgress(suffix){
+    return (done, total) => {
+      const pct = total ? Math.round((done/total)*100) : 0;
+      const bar = document.getElementById('progressBar' + suffix), lab = document.getElementById('progressLabel' + suffix);
+      if(bar) bar.style.width = pct + '%';
+      if(lab) lab.textContent = `Membaca arsip hemat ${done} / ${total} tanggal... (${pct}%)`;
+    };
+  }
+  function rbNote(before, extra, used = true){
+    if(!RB || !before) return '';
+    if(!used) return extra ? `<div class="msg-box info rb-note">📦 ${extra}</div>` : '';
+    const s = RB.stats();
+    const reads = s.reads - before.reads, built = s.built - before.built;
+    return `<div class="msg-box info rb-note">📦 Arsip hemat: ±${reads.toLocaleString('id-ID')} baca Firestore${built ? ` (termasuk membangun arsip ${built} tanggal lama — sekali saja)` : ''}.${extra ? ' ' + extra : ''}</div>`;
+  }
+  function rbBudgetBox(err, rerun){
+    const id = 'rbForce' + Math.random().toString(36).slice(2, 8);
+    setTimeout(() => { const b = document.getElementById(id); if(b) b.addEventListener('click', () => rerun(true)); }, 0);
+    return `<div class="msg-box warning rb-note" style="flex-direction:column; align-items:flex-start; gap:6px;">
+      <div>📦 Arsip hemat belum lengkap: <b>${err.missing}</b> tanggal lama belum diarsipkan. Supaya kuota harian Firestore aman, arsip dibangun bertahap (maks ${30} tanggal per hari, otomatis tiap Step 4). Jatah hari ini tersisa ${err.remaining}.</div>
+      <div>Pilihan: jalankan lagi besok (gratis), atau bangun sekarang sekali saja (±${(err.missing * 1000).toLocaleString('id-ID')} baca).</div>
+      <button class="btn btn-ghost" id="${id}">📦 Bangun sekarang &amp; jalankan</button></div>`;
+  }
+
+  // Data hari terakhir (+ daftar tanggal bursa kalau needDates).
+  async function loadLatestData({ needDates = false } = {}){
+    const { collection, query, orderBy, limit, getDocs } = firestoreFns;
+    if(RB){
+      try{
+        const td = await RB.tradingDates();
+        if(!td.latest) return null;
+        const latestDate = td.latest.data.tradingDate;
+        const latestRows = await RB.day(latestDate, { force: true });
+        return { latestDate, tradingDatesSorted: td.dates.slice(), latestRows, viaBundle: true };
+      }catch(e){ console.warn('Arsip hemat: data terakhir pakai cara lama —', e); }
+    }
+    const metaSnap = await getDocs(query(collection(db, 'dailySummary'), orderBy('tradingDate', 'desc'), limit(1)));
+    if(metaSnap.empty) return null;
+    const latestDate = metaSnap.docs[0].data().tradingDate;
+    let tradingDatesSorted = null;
+    if(needDates){
+      const allDailySnap = await getDocs(collection(db, 'dailySummary'));
+      tradingDatesSorted = allDailySnap.docs.map(d => d.id).sort();
+    }
+    const stocksSnap = await getDocs(collection(db, 'dailySummary', latestDate, 'stocks'));
+    return { latestDate, tradingDatesSorted, latestRows: stocksSnap.docs.map(d => d.data()), viaBundle: false };
+  }
+
+  // Histori s.d. maxDays hari per ticker (terbaru dulu). map memuat SEMUA ticker yang berhasil dibaca
+  // (boleh array kosong) — persis seperti hasil query tickerHistory per ticker.
+  // Melempar error code 'budget' kalau arsip belum lengkap & jatah bangun hari ini tidak cukup.
+  async function loadHistoryMap(tickers, maxDays, { progressBundle, progressOld, force = false, oldWay = false } = {}){
+    if(RB && !oldWay){
+      try{
+        const map = await RB.history(tickers, maxDays, { onProgress: progressBundle, force });
+        return { map, errorCount: 0, firstError: null, viaBundle: true };
+      }catch(e){
+        if(e && e.code === 'budget') throw e;
+        console.warn('Arsip hemat: histori pakai cara lama —', e);
+      }
+    }
+    const { collection, query, orderBy, limit, getDocs } = firestoreFns;
+    let fetched = 0;
+    const { results, errorCount, firstError } = await runWithConcurrency(tickers, 15, async (ticker) => {
+      const snap = await getDocs(query(collection(db, 'tickerHistory', ticker, 'days'), orderBy('date', 'desc'), limit(maxDays)));
+      fetched++;
+      if(progressOld) progressOld(fetched, tickers.length);
+      return { ticker, days: snap.docs.map(d => d.data()) };
+    });
+    const map = {};
+    results.forEach(h => { if(h) map[h.ticker] = h.days; });
+    return { map, errorCount, firstError, viaBundle: false };
+  }
+
+  // Daftar tanggal bursa (id dokumen dailySummary, urut naik)
+  async function loadTradingDates(){
+    if(RB){
+      try{ return (await RB.tradingDates()).dates.slice(); }catch(e){ console.warn('Arsip hemat: daftar tanggal pakai cara lama —', e); }
+    }
+    const { collection, getDocs } = firestoreFns;
+    const allDailySnap = await getDocs(collection(db, 'dailySummary'));
+    return allDailySnap.docs.map(d => d.id).sort();
+  }
+
+  // Salinan tickerRollingStats dari arsip (null = arsip tidak ada/usang → pemanggil pakai cara lama)
+  async function rbRollingEntries(opts){
+    if(!RB) return null;
+    try{ return await RB.rolling(opts); }catch(e){ console.warn('Arsip rolling tidak terpakai:', e); return null; }
+  }
+
+  document.getElementById('btnRecompute4').addEventListener('click', () => computeRollingStats());
 
   async function computeRollingStats(){
     if(!firebaseReady) return;
@@ -847,23 +953,23 @@
     document.getElementById('progressWrap4').style.display = 'block';
     document.getElementById('btnRecompute4').disabled = true;
 
+    const rbBefore = RB ? RB.stats() : null;
+    let rbExtra = '';
     try{
       // 1. cari tanggal terbaru yang ada di database (bukan tanggal upload terakhir)
-      const metaQ = query(collection(db, 'dailySummary'), orderBy('tradingDate', 'desc'), limit(1));
-      const metaSnap = await getDocs(metaQ);
-      if(metaSnap.empty){
+      //    + index tanggal bursa AKTUAL (dari daftar dailySummary yang benar-benar ada
+      //    datanya) — dipakai untuk hitung "N hari" berdasarkan hari BURSA, bukan
+      //    hari kalender. Ini otomatis melompati Sabtu/Minggu/libur bursa, karena
+      //    hari-hari itu memang tidak pernah ada entry dailySummary-nya.
+      //    (dibaca dari arsip hemat kalau tersedia — hasil sama, jauh lebih sedikit baca)
+      const latestData = await loadLatestData({ needDates: true });
+      if(!latestData){
         out.innerHTML = `<div class="msg-box error">✕ Tidak ada data di dailySummary.</div>`;
         return;
       }
-      const latestDate = metaSnap.docs[0].data().tradingDate;
+      const latestDate = latestData.latestDate;
       const warnings = [];
-
-      // Index tanggal bursa AKTUAL (dari daftar dailySummary yang benar-benar ada
-      // datanya) — dipakai untuk hitung "N hari" berdasarkan hari BURSA, bukan
-      // hari kalender. Ini otomatis melompati Sabtu/Minggu/libur bursa, karena
-      // hari-hari itu memang tidak pernah ada entry dailySummary-nya.
-      const allDailySnap = await getDocs(collection(db, 'dailySummary'));
-      const tradingDatesSorted = allDailySnap.docs.map(d => d.id).sort(); // ascending
+      const tradingDatesSorted = latestData.tradingDatesSorted; // ascending
       const tradingDateIndex = new Map(tradingDatesSorted.map((d,i) => [d, i]));
       function tradingDaysElapsed(fromDate, toDate){
         // jumlah hari bursa yang sudah lewat dari fromDate ke toDate (>=0).
@@ -883,8 +989,7 @@
       }
 
       // 2. ambil seluruh saham untuk tanggal terbaru itu
-      const stocksSnap = await getDocs(collection(db, 'dailySummary', latestDate, 'stocks'));
-      const latestRows = stocksSnap.docs.map(d => d.data());
+      const latestRows = latestData.latestRows;
 
       // 3. universe kandidat = saham aktif (volume>0) DAN harga >= minimum (buang saham gocap/likuiditas semu)
       const minPrice = parseFloat(document.getElementById('minPriceFilter').value) || 0;
@@ -892,27 +997,20 @@
       const candidates = latestRows.filter(r => r.isActive && r.close >= minPrice);
       updateProgress4(0, candidates.length, 'Mengambil histori');
 
-      // 4. ambil s.d. 20 hari histori terakhir per ticker kandidat (paralel dibatasi)
-      let fetched = 0;
-      const { results: historyResults, errorCount: fetchErrors, firstError: fetchFirstError } =
-        await runWithConcurrency(candidates, 15, async (row) => {
-          const q = query(
-            collection(db, 'tickerHistory', row.ticker, 'days'),
-            orderBy('date', 'desc'),
-            limit(20)
-          );
-          const snap = await getDocs(q);
-          fetched++;
-          updateProgress4(fetched, candidates.length, 'Mengambil histori');
-          return { ticker: row.ticker, days: snap.docs.map(d => d.data()) }; // days[0] = paling baru
-        });
+      // 4. ambil s.d. 20 hari histori terakhir per ticker kandidat (arsip hemat; cara lama: query per ticker)
+      const histOpts = { progressBundle: rbProgress('4'), progressOld: (n, t) => updateProgress4(n, t, 'Mengambil histori') };
+      let hist;
+      try{ hist = await loadHistoryMap(candidates.map(r => r.ticker), 20, histOpts); }
+      catch(e){
+        if(e && e.code !== 'budget') throw e;
+        rbExtra = 'Arsip 20 hari terakhir belum lengkap & jatah bangun hari ini habis — histori kali ini dibaca dengan cara lama.';
+        hist = await loadHistoryMap(candidates.map(r => r.ticker), 20, { ...histOpts, oldWay: true });
+      }
+      const { map: historyMap, errorCount: fetchErrors, firstError: fetchFirstError } = hist; // days[0] = paling baru
 
       if(fetchErrors > 0){
         warnings.push(`⚠ ${fetchErrors} saham gagal diambil histori-nya (dilewati, tidak menghentikan proses). Contoh error: ${fetchFirstError ? fetchFirstError.message : '-'}`);
       }
-
-      const historyMap = {};
-      historyResults.forEach(h => { if(h) historyMap[h.ticker] = h.days; });
 
     // 5. hitung metrik mentah per ticker
     let raw = candidates.map(row => {
@@ -1084,9 +1182,12 @@
     }
 
     // 8. simpan ke tickerRollingStats/{ticker}
+    //    (catat dulu isi lama dari arsip hemat — dipakai langkah 8b untuk membersihkan data lama)
+    const rbPrevRolling = await rbRollingEntries({ seed: false });
     let saved = 0;
+    const rollingWritten = []; // salinan persis yang ditulis → arsip hemat 'rolling'
     const { errorCount: saveErrors, firstError: saveFirstError } = await runWithConcurrency(raw, 15, async (r) => {
-      await setDoc(doc(db, 'tickerRollingStats', r.ticker), {
+      const rsDoc = {
         ticker: r.ticker,
         companyName: r.companyName,
         date: latestDate,
@@ -1109,7 +1210,9 @@
         priceChange10d: r.priceChange10d,
         daysUsed10d: r.daysUsed10d,
         updatedAt: new Date().toISOString(),
-      });
+      };
+      await setDoc(doc(db, 'tickerRollingStats', r.ticker), rsDoc);
+      rollingWritten.push([r.ticker, rsDoc]);
       saved++;
       updateProgress4(saved, raw.length, 'Menyimpan hasil');
     });
@@ -1122,15 +1225,18 @@
     // supaya tidak nyangkut selamanya di tickerRollingStats dan tetap muncul di Dashboard
     updateProgress4(0, 1, 'Membersihkan data lama');
     const currentTickerSet = new Set(raw.map(r => r.ticker));
-    const allRollingStatsSnap = await getDocs(collection(db, 'tickerRollingStats'));
-    const staleDocs = allRollingStatsSnap.docs.filter(d => !currentTickerSet.has(d.id));
-    let removed = 0;
+    // daftar dokumen tickerRollingStats SEBELUM run ini: dari arsip hemat (1–2 baca), kalau tidak ada → baca semua
+    const prevRolling = rbPrevRolling;
+    const staleDocs = prevRolling
+      ? prevRolling.filter(([id]) => !currentTickerSet.has(id)).map(([id]) => ({ id }))
+      : (await getDocs(collection(db, 'tickerRollingStats'))).docs.filter(d => !currentTickerSet.has(d.id));
+    let removed = 0, removeErrors = 0;
     if(staleDocs.length){
-      const { errorCount: removeErrors } = await runWithConcurrency(staleDocs, 15, async (d) => {
+      ({ errorCount: removeErrors } = await runWithConcurrency(staleDocs, 15, async (d) => {
         await deleteDoc(doc(db, 'tickerRollingStats', d.id));
         removed++;
         updateProgress4(removed, staleDocs.length, 'Membersihkan data lama');
-      });
+      }));
       if(removeErrors > 0){
         warnings.push(`⚠ Sebagian data lama gagal dibersihkan (tidak fatal, coba jalankan ulang).`);
       }
@@ -1138,6 +1244,13 @@
       // tidak ada data lama yang perlu dibersihkan — tetap tandai progress SELESAI,
       // supaya teks tidak nyangkut di "0/1 (0%)" padahal prosesnya sudah lanjut
       updateProgress4(1, 1, 'Membersihkan data lama (tidak ada data lama)');
+    }
+    // arsip hemat 'rolling' = isi tickerRollingStats sekarang (persis yang baru ditulis) — dibaca Dashboard & Radar-DayTrade
+    if(RB){
+      if(saveErrors === 0 && removeErrors === 0){
+        try{ await RB.putRolling(rollingWritten, { techAt: await RB.readTechAt() }); }
+        catch(e){ console.warn('Arsip rolling gagal ditulis:', e); await RB.invalidate('rolling'); }
+      }else{ await RB.invalidate('rolling'); }
     }
 
     // 8c-0. SKEMA BARU (v2): LAMPU PASAR + TOP 3 "belum lari" + BANDAR ACCUM BARU.
@@ -1312,6 +1425,7 @@
     //     dari histori Yahoo Finance (filter dari addedDate), baru "peakBackfilled" ditandai
     //   - Sudah pernah ada → cukup bandingkan harga resmi hari ini (ringan, tanpa Yahoo)
     let peakUpdated = 0, peakBackfilled = 0;
+    const latestByTicker = new Map(latestRows.map(r => [r.ticker, r]));
     try{
       const allWlSnap = await getDocs(collection(db, 'watchlist'));
       if(allWlSnap.size){
@@ -1384,9 +1498,9 @@
               : 0;
             if(daysSinceAdded > WATCHLIST_MONITORING_DAYS) return; // window sudah lewat, dibekukan — jangan update lagi
 
-            const priceSnap = await getDoc(doc(db, 'dailySummary', latestDate, 'stocks', ticker));
-            if(!priceSnap.exists()) return; // saham ini tidak ada di data hari ini (suspend/dsb), lewati
-            const priceData = priceSnap.data();
+            // harga resmi hari ini: dari data tanggal terbaru yang sudah dibaca di langkah 2 (tanpa baca ulang per saham)
+            const priceData = latestByTicker.get(ticker);
+            if(!priceData) return; // saham ini tidak ada di data hari ini (suspend/dsb), lewati
             const currentClose = priceData.close;
             if(!currentClose || currentClose <= 0) return;
             const currentHigh = priceData.high ?? currentClose;
@@ -1474,6 +1588,13 @@
     html += top3Html;
     document.getElementById('stepNum4').classList.add('done');
     out.innerHTML = html;
+
+    // arsip hemat: sekalian arsipkan beberapa tanggal lama (dalam jatah harian) supaya Backtest/Diagnosa nanti hemat
+    if(RB){
+      let bf = 0;
+      try{ bf = await RB.backfill({ lookback: 120, max: 6 }); }catch(e){ console.warn('Arsip tanggal lama gagal:', e); }
+      out.insertAdjacentHTML('beforeend', rbNote(rbBefore, [rbExtra, bf ? `${bf} tanggal lama ikut diarsipkan untuk Backtest/Diagnosa.` : ''].filter(Boolean).join(' '), hist.viaBundle));
+    }
 
     }catch(err){
       console.error('computeRollingStats gagal:', err);
@@ -1599,8 +1720,7 @@
     try{
       // index tanggal bursa aktual — sama seperti yang dipakai di Tahap 4, supaya
       // "berapa hari" di snapshot statistik ini konsisten hari BURSA, bukan kalender
-      const allDailySnap = await getDocs(collection(db, 'dailySummary'));
-      const tdDatesSorted = allDailySnap.docs.map(d => d.id).sort();
+      const tdDatesSorted = await loadTradingDates();
       const tdIndexOf = new Map(tdDatesSorted.map((d,i) => [d, i]));
       const tdLatest = tdDatesSorted[tdDatesSorted.length - 1];
       function tdElapsed(fromDate, toDate){
@@ -1938,33 +2058,32 @@
     document.getElementById('progressLabelBacktestWindow').textContent = `${label || 'Memproses'} ${done} / ${total} saham... (${pct}%)`;
   }
 
-  document.getElementById('btnRunBacktestWindow').addEventListener('click', runBacktestWindow);
+  document.getElementById('btnRunBacktestWindow').addEventListener('click', () => runBacktestWindow());
 
-  async function runBacktestWindow(){
+  async function runBacktestWindow(rbForce){
     if(!firebaseReady) return;
     const { collection, query, orderBy, limit, getDocs } = firestoreFns;
     const out = document.getElementById('backtestWindowResult');
     out.innerHTML = '';
     document.getElementById('progressWrapBacktestWindow').style.display = 'block';
     document.getElementById('btnRunBacktestWindow').disabled = true;
+    const rbBefore = RB ? RB.stats() : null;
 
     try{
       const maxDays = parseInt(document.getElementById('backtestMaxDays').value, 10) || 40;
 
       // 1. universe = kandidat tanggal terbaru yang lolos filter likuiditas (proksi
       //    universe historis — cukup representatif untuk saham yang layak dipantau)
-      const metaQ = query(collection(db, 'dailySummary'), orderBy('tradingDate', 'desc'), limit(1));
-      const metaSnap = await getDocs(metaQ);
-      if(metaSnap.empty){
+      const latestData = await loadLatestData();
+      if(!latestData){
         out.innerHTML = `<div class="msg-box error">✕ Belum ada data dailySummary.</div>`;
         return;
       }
-      const latestDate = metaSnap.docs[0].data().tradingDate;
-      const stocksSnap = await getDocs(collection(db, 'dailySummary', latestDate, 'stocks'));
+      const latestDate = latestData.latestDate;
       const minPrice = parseFloat(document.getElementById('minPriceFilter').value) || 0;
       const minAvgValue = parseFloat(document.getElementById('minAvgValueFilter').value) || 0;
       const minAvgFreq = parseFloat(document.getElementById('minAvgFreqFilter').value) || 0;
-      const universe = stocksSnap.docs.map(d => d.data()).filter(r => r.isActive && r.close >= minPrice);
+      const universe = latestData.latestRows.filter(r => r.isActive && r.close >= minPrice);
 
       if(!universe.length){
         out.innerHTML = `<div class="msg-box error">✕ Tidak ada saham di universe (cek filter harga minimum).</div>`;
@@ -1973,22 +2092,22 @@
 
       updateProgressBacktestWindow(0, universe.length, 'Mengambil histori');
 
-      // 2. tarik histori tiap ticker (s.d. maxDays hari, urut terbaru->lama)
-      let fetched = 0;
-      const { results: historyResults, errorCount: fetchErrors } = await runWithConcurrency(universe, 15, async (row) => {
-        const q = query(
-          collection(db, 'tickerHistory', row.ticker, 'days'),
-          orderBy('date', 'desc'),
-          limit(maxDays)
-        );
-        const snap = await getDocs(q);
-        fetched++;
-        updateProgressBacktestWindow(fetched, universe.length, 'Mengambil histori');
-        return { ticker: row.ticker, days: snap.docs.map(d => d.data()) };
-      });
+      // 2. tarik histori tiap ticker (s.d. maxDays hari, urut terbaru->lama) — arsip hemat atau query per ticker
+      let hist;
+      try{
+        hist = await loadHistoryMap(universe.map(r => r.ticker), maxDays, {
+          progressBundle: rbProgress('BacktestWindow'),
+          progressOld: (n, t) => updateProgressBacktestWindow(n, t, 'Mengambil histori'),
+          force: !!rbForce,
+        });
+      }catch(e){
+        if(e && e.code === 'budget'){ out.innerHTML = rbBudgetBox(e, runBacktestWindow); return; }
+        throw e;
+      }
+      const fetchErrors = hist.errorCount;
 
       const historyMap = {};
-      historyResults.forEach(h => { if(h && h.days.length) historyMap[h.ticker] = h.days; });
+      Object.keys(hist.map).forEach(t => { if(hist.map[t].length) historyMap[t] = hist.map[t]; });
 
       // buang ticker dengan likuiditas historis terlalu rendah rata2 (proksi kasar,
       // dihitung dari histori yg baru saja ditarik, bukan avgValue20d hari ini)
@@ -2199,7 +2318,7 @@
           <p style="font-size:11px; color:var(--text-muted); margin-top:6px;">Tanggal 2 hari terakhir yang dibandingkan: ${last2TradingDates.join(', ')}. Kalau n di kolom "2 Hari Terakhir" kecil banget (0-2), perbandingan ini juga belum terlalu bisa diandalkan — sama seperti keterbatasan sample di tabel backtest atas.</p>`;
       }
 
-      out.innerHTML = html;
+      out.innerHTML = html + rbNote(rbBefore, '', hist.viaBundle);
     }catch(err){
       console.error(err);
       out.innerHTML = `<div class="msg-box error">✕ Gagal menjalankan backtest: ${err.message}</div>`;
@@ -2482,7 +2601,7 @@
     };
   }
 
-  document.getElementById('btnRunDiag').addEventListener('click', runDiagnosa);
+  document.getElementById('btnRunDiag').addEventListener('click', () => runDiagnosa());
 
   function updateProgressDiag(done, total, label, unit){
     const pct = total ? Math.round((done/total)*100) : 0;
@@ -2490,37 +2609,43 @@
     document.getElementById('progressLabelDiag').textContent = `${label || 'Memproses'} ${done} / ${total} ${unit || 'saham'}... (${pct}%)`;
   }
 
-  async function runDiagnosa(){
+  async function runDiagnosa(rbForce){
     if(!firebaseReady) return;
     const { collection, query, orderBy, limit, getDocs } = firestoreFns;
     const out = document.getElementById('diagResult');
     out.innerHTML = '';
     document.getElementById('progressWrapDiag').style.display = 'block';
     document.getElementById('btnRunDiag').disabled = true;
+    const rbBefore = RB ? RB.stats() : null;
+    let rbUsed = false;
     try{
       const maxDays = parseInt(document.getElementById('diagMaxDays').value, 10) || 80;
       const tpPct = 3, slPct = 3; // tidak dipakai di tabel skema baru (sisa format lama)
 
-      const metaSnap = await getDocs(query(collection(db, 'dailySummary'), orderBy('tradingDate', 'desc'), limit(1)));
-      if(metaSnap.empty){ out.innerHTML = `<div class="msg-box error">✕ Belum ada data dailySummary.</div>`; return; }
-      const latestDate = metaSnap.docs[0].data().tradingDate;
-      const stocksSnap = await getDocs(collection(db, 'dailySummary', latestDate, 'stocks'));
+      const latestData = await loadLatestData();
+      if(!latestData){ out.innerHTML = `<div class="msg-box error">✕ Belum ada data dailySummary.</div>`; return; }
+      const latestDate = latestData.latestDate;
       const minPrice = parseFloat(document.getElementById('minPriceFilter').value) || 0;
       const minAvgValue = parseFloat(document.getElementById('minAvgValueFilter').value) || 0;
       const minAvgFreq = parseFloat(document.getElementById('minAvgFreqFilter').value) || 0;
-      const universe = stocksSnap.docs.map(d => d.data()).filter(r => r.isActive && r.close >= minPrice);
+      const universe = latestData.latestRows.filter(r => r.isActive && r.close >= minPrice);
       if(!universe.length){ out.innerHTML = `<div class="msg-box error">✕ Tidak ada saham di universe.</div>`; return; }
 
       updateProgressDiag(0, universe.length, 'Mengambil histori');
-      let fetched = 0;
-      const { results } = await runWithConcurrency(universe, 15, async (row) => {
-        const snap = await getDocs(query(collection(db, 'tickerHistory', row.ticker, 'days'), orderBy('date', 'desc'), limit(maxDays)));
-        fetched++;
-        updateProgressDiag(fetched, universe.length, 'Mengambil histori');
-        return { ticker: row.ticker, days: snap.docs.map(d => d.data()) };
-      });
+      let hist;
+      try{
+        hist = await loadHistoryMap(universe.map(r => r.ticker), maxDays, {
+          progressBundle: rbProgress('Diag'),
+          progressOld: (n, t) => updateProgressDiag(n, t, 'Mengambil histori'),
+          force: !!rbForce,
+        });
+      }catch(e){
+        if(e && e.code === 'budget'){ out.innerHTML = rbBudgetBox(e, runDiagnosa); return; }
+        throw e;
+      }
+      rbUsed = hist.viaBundle;
       const historyMap = {};
-      results.forEach(h => { if(h && h.days.length) historyMap[h.ticker] = h.days; });
+      Object.keys(hist.map).forEach(t => { if(hist.map[t].length) historyMap[t] = hist.map[t]; });
       let eligible = Object.keys(historyMap).filter(t => {
         const days = historyMap[t];
         const avgVal = days.reduce((a,d)=>a+(d.value||0),0) / days.length;
@@ -2561,7 +2686,7 @@
           rapiHtml = `<div class="msg-box error">✕ Rapikan riwayat gagal: ${e.message}</div>`;
         }
       }
-      out.innerHTML = diagExclNote + rapiHtml + `<div class="msg-box info"><div>ℹ Rentang histori: ${built.allDates[0]} s/d ${built.allDates[built.allDates.length-1]} (${built.allDates.length} hari bursa), ${built.events.length} sinyal baru radar.</div></div>` + renderRegime(rg) + renderSwing(sw);
+      out.innerHTML = diagExclNote + rapiHtml + `<div class="msg-box info"><div>ℹ Rentang histori: ${built.allDates[0]} s/d ${built.allDates[built.allDates.length-1]} (${built.allDates.length} hari bursa), ${built.events.length} sinyal baru radar.</div></div>` + renderRegime(rg) + renderSwing(sw) + rbNote(rbBefore, '', rbUsed);
     }catch(err){
       console.error(err);
       out.innerHTML = `<div class="msg-box error">✕ Gagal menjalankan diagnosa: ${err.message}</div>`;
@@ -2996,13 +3121,8 @@
         if(!tokens.length){ el.innerHTML = `<span style="color:var(--amber-flag);">⚠ Tidak ada kode saham (4 huruf) yang terbaca. Kalau mau mengosongkan daftar, klik "Kosongkan".</span>`; return; }
         el.textContent = 'Mencocokkan dengan daftar saham di data terbaru...';
         // cocokkan dengan kode saham yang benar-benar ada, supaya kata biasa (mis. "FREE", "CASH") tidak ikut tersimpan
-        const metaSnap = await getDocs(query(collection(db, 'dailySummary'), orderBy('tradingDate', 'desc'), limit(1)));
-        let known = null;
-        if(!metaSnap.empty){
-          const ld = metaSnap.docs[0].data().tradingDate;
-          const st = await getDocs(collection(db, 'dailySummary', ld, 'stocks'));
-          known = new Set(st.docs.map(d => d.id));
-        }
+        const ldata = await loadLatestData(); // arsip hemat: 1 dokumen, bukan semua saham
+        const known = ldata ? new Set(ldata.latestRows.map(r => r.ticker)) : null;
         tickers = known ? tokens.filter(t => known.has(t)) : tokens;
         ignored = known ? tokens.filter(t => !known.has(t)) : [];
         tickers.sort();
@@ -3367,10 +3487,31 @@
     try{
       const threshold = parseInt(document.getElementById('minMatchThreshold').value, 10) || 2;
 
+      // 0. arsip hemat: isi tickerRollingStats & tickerIndicators saat ini (null = pakai cara lama)
+      const rbBefore = RB ? RB.stats() : null;
+      let curTechAt, rollEntries = null, prevInd = null;
+      if(RB){
+        try{
+          curTechAt = await RB.readTechAt();
+          rollEntries = await rbRollingEntries({ techAt: curTechAt });
+          prevInd = await RB.indicators({ techAt: curTechAt });
+        }catch(e){ console.warn('Arsip hemat Step 5 tidak terpakai:', e); prevInd = null; }
+      }
+      const rollMap = rollEntries ? new Map(rollEntries) : null;
+
       // 1. ambil emiten yang sudah match kategori >= threshold dari Tahap 4
-      const q = query(collection(db, 'tickerRollingStats'), where('matchCount', '>=', threshold));
-      const snap = await getDocs(q);
-      const candidates = snap.docs.map(d => d.data());
+      let candidates;
+      if(rollEntries){
+        // sama dengan query where('matchCount','>=',threshold): urut matchCount lalu id
+        candidates = rollEntries
+          .filter(([, d]) => typeof d.matchCount === 'number' && d.matchCount >= threshold)
+          .sort((a, b) => (a[1].matchCount - b[1].matchCount) || (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0))
+          .map(([, d]) => structuredClone(d));
+      }else{
+        const q = query(collection(db, 'tickerRollingStats'), where('matchCount', '>=', threshold));
+        const snap = await getDocs(q);
+        candidates = snap.docs.map(d => d.data());
+      }
 
       if(!candidates.length){
         out.innerHTML = `<div class="msg-box warning">⚠ Tidak ada saham dengan match kategori ≥ ${threshold}. Coba turunkan angka minimal, atau pastikan Tahap 4 (Step 4) sudah dijalankan lebih dulu.</div>`;
@@ -3378,9 +3519,22 @@
       }
 
       // 1b. cari tanggal terbaru data resmi kita (dari upload Excel), buat validasi silang vs Yahoo
-      const metaQ = query(collection(db, 'dailySummary'), orderBy('tradingDate', 'desc'), limit(1));
-      const metaSnap = await getDocs(metaQ);
-      const officialLatestDate = metaSnap.empty ? null : metaSnap.docs[0].data().tradingDate;
+      //     (arsip hemat: harga resmi semua saham dari 1 dokumen, bukan 1 baca per saham)
+      let officialLatestDate = null, officialByTicker = null;
+      if(RB){
+        try{
+          const td = await RB.tradingDates();
+          officialLatestDate = td.latest ? td.latest.data.tradingDate : null;
+          if(officialLatestDate) officialByTicker = new Map((await RB.day(officialLatestDate, { force: true })).map(r => [r.ticker, r]));
+        }catch(e){ console.warn('Arsip hemat: harga resmi pakai cara lama —', e); officialByTicker = null; }
+      }
+      if(!officialByTicker){
+        const metaQ = query(collection(db, 'dailySummary'), orderBy('tradingDate', 'desc'), limit(1));
+        const metaSnap = await getDocs(metaQ);
+        officialLatestDate = metaSnap.empty ? null : metaSnap.docs[0].data().tradingDate;
+      }
+      const officialFromArchive = (t) => Promise.resolve(officialByTicker.has(t)
+        ? { exists: () => true, data: () => officialByTicker.get(t) } : { exists: () => false, data: () => undefined });
 
       updateProgress5(0, candidates.length, 'Mengambil histori Yahoo Finance');
 
@@ -3389,7 +3543,8 @@
       const { results, errorCount, firstError } = await runWithConcurrency(candidates, 2, async (row) => {
         const [hist, officialSnap] = await Promise.all([
           fetchYahooHistory(row.ticker),
-          officialLatestDate ? getDoc(doc(db, 'dailySummary', officialLatestDate, 'stocks', row.ticker)) : Promise.resolve(null),
+          officialByTicker ? officialFromArchive(row.ticker)
+            : officialLatestDate ? getDoc(doc(db, 'dailySummary', officialLatestDate, 'stocks', row.ticker)) : Promise.resolve(null),
         ]);
         fetched++;
         updateProgress5(fetched, candidates.length, 'Mengambil histori Yahoo Finance');
@@ -3518,8 +3673,9 @@
 
       // 4. simpan ke tickerIndicators/{ticker}
       let saved = 0;
+      const indWritten = []; // salinan persis yang ditulis → arsip hemat 'indicators'
       const saveRes = await runWithConcurrency(computed, 15, async (r) => {
-        await setDoc(doc(db, 'tickerIndicators', r.ticker), {
+        const indDoc = {
           ticker: r.ticker,
           companyName: r.companyName,
           source: 'yahoo_finance',
@@ -3537,7 +3693,9 @@
           candlePatterns: r.candlePatterns,
           supportLevel: r.supportLevel,
           updatedAt: new Date().toISOString(),
-        });
+        };
+        await setDoc(doc(db, 'tickerIndicators', r.ticker), indDoc);
+        indWritten.push([r.ticker, indDoc]);
         saved++;
         updateProgress5(saved, computed.length, 'Menyimpan indikator');
       });
@@ -3551,9 +3709,15 @@
       let merged = 0;
       const mergeRes = await runWithConcurrency(computed, 15, async (r) => {
         const rsRef = doc(db, 'tickerRollingStats', r.ticker);
-        const rsSnap = await getDoc(rsRef);
-        if(!rsSnap.exists()) return; // belum ada data Tahap 4 untuk ticker ini, lewati
-        const rs = rsSnap.data();
+        let rs;
+        if(rollMap){
+          rs = rollMap.get(r.ticker); // dari arsip hemat (isi sama dengan dokumen)
+          if(!rs) return; // belum ada data Tahap 4 untuk ticker ini, lewati
+        }else{
+          const rsSnap = await getDoc(rsRef);
+          if(!rsSnap.exists()) return; // belum ada data Tahap 4 untuk ticker ini, lewati
+          rs = rsSnap.data();
+        }
         const pillars = [
           { w: 25, s: rs.liquidityScore ?? null },
           { w: 30, s: rs.foreignScore ?? null },
@@ -3561,14 +3725,16 @@
         ].filter(p => p.s !== null);
         const totalW = pillars.reduce((a,p)=>a+p.w, 0);
         const totalScore = totalW ? Math.round(pillars.reduce((a,p)=>a+p.w*p.s, 0) / totalW) : null;
-        await setDoc(rsRef, {
+        const rsPatch = {
           technicalScore: r.technicalScore,
           totalScore,
           reclaimPattern: r.reclaimPattern,
           candlePatterns: r.candlePatterns,
           supportLevel: r.supportLevel,
           atr14: r.atr14,
-        }, { merge: true });
+        };
+        await setDoc(rsRef, rsPatch, { merge: true });
+        if(rollMap) Object.assign(rs, structuredClone(rsPatch)); // salinan arsip ikut diperbarui
         merged++;
         updateProgress5(merged, computed.length, 'Menggabungkan skor');
       });
@@ -3663,11 +3829,28 @@
       await computeAndSaveStatsSnapshot();
 
       // 5. simpan meta status
+      const techAt = new Date().toISOString();
       await setDoc(doc(db, 'systemMeta', 'technicalIndicators'), {
         matchThresholdUsed: threshold,
-        updatedAt: new Date().toISOString(),
+        updatedAt: techAt,
         stockCount: computed.length,
       });
+
+      // 5b. arsip hemat: perbarui salinan tickerIndicators & tickerRollingStats (dibaca Dashboard)
+      if(RB){
+        try{
+          if(prevInd && saveRes.errorCount === 0){
+            const allInd = new Map(prevInd);
+            indWritten.forEach(([t, d]) => allInd.set(t, d));
+            await RB.putIndicators([...allInd.entries()], { techAt });
+          }else await RB.invalidate('indicators');
+          if(rollEntries && mergeRes.errorCount === 0) await RB.putRolling(rollEntries, { techAt });
+          else await RB.invalidate('rolling');
+        }catch(e){
+          console.warn('Arsip hemat Step 5 gagal ditulis:', e);
+          await RB.invalidate('indicators'); await RB.invalidate('rolling');
+        }
+      }
 
       // 6. ringkasan UI
       const withEMA50 = computed.filter(r => r.ema50 !== null).length;
@@ -3746,7 +3929,7 @@
       }
 
       document.getElementById('stepNum5').classList.add('done');
-      out.innerHTML = html;
+      out.innerHTML = html + rbNote(rbBefore, '', !!(rollMap && officialByTicker));
     }catch(err){
       console.error('updateTechnicalIndicators gagal:', err);
       out.innerHTML = `<div class="msg-box error">✕ Proses gagal: ${err.message}<br><span style="font-size:10.5px; opacity:0.8;">Cek Console browser (F12) untuk detail teknis lengkap.</span></div>`;

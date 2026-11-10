@@ -1,0 +1,9 @@
+    // Arsip hemat (radar-bundle.js) — salinan ringkas untuk DIBACA, supaya kuota baca Firestore hemat.
+    // Tempel blok ini di dalam  match /databases/{database}/documents { ... }  (di bawah blok lain), lalu Publish.
+    // meta, day_* (harga harian) dan ownership boleh dibaca publik karena Radar Konglo dibuka tanpa login;
+    // rolling & indicators (hasil analisis Radar) hanya untuk akun Anda. Menulis: hanya akun Anda.
+    match /radarBundles/{docId} {
+      allow read: if docId == "meta" || docId.matches("day_.*") || docId.matches("ownership.*")
+        || (request.auth != null && request.auth.token.email == "indraanggriawan17@gmail.com");
+      allow write: if request.auth != null && request.auth.token.email == "indraanggriawan17@gmail.com";
+    }
