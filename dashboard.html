@@ -966,10 +966,17 @@
       const vals = rule.tickers(d).filter(t => !(ex && ex.has(d.date + '|' + t))).map(t => outs[t]).filter(o => o && !o.invalid && o['h'+H] != null);
       if(!vals.length) return null;
       const m = rMean(vals.map(o => o['h'+H]));
-      if(H === 10){ var sl5 = rMean(vals.map(o => slv(o, 5))), sl8 = rMean(vals.map(o => slv(o, 8))); }
+      if(H === 10){
+        var sl5 = rMean(vals.map(o => slv(o, 5))), sl8 = rMean(vals.map(o => slv(o, 8)));
+        // cara entry baru: antri di close hari sinyal
+        var qAll = vals.filter(o => o.q), qOk = qAll.filter(o => !o.q.nofill && o.q.h10 != null);
+        var q10 = qOk.length ? rMean(qOk.map(o => o.q.h10)) : null;
+        var qsl5 = qOk.length ? rMean(qOk.map(o => (o.q.dn10 != null && o.q.dn10 <= -5) ? -5 : o.q.h10)) : null;
+        var qN = qAll.length, qF = qOk.length;
+      }
       const mk = d.res && d.res.mkt ? d.res.mkt['h'+H] : null;
       const pl = d.res && d.res.pool ? d.res.pool['h'+H] : null;
-      return { date: d.date, si: d.si, mean: m, outs: vals, sl5, sl8, aMkt: mk != null ? m - mk : null, aPool: pl != null ? m - pl : null };
+      return { date: d.date, si: d.si, mean: m, outs: vals, sl5, sl8, q10, qsl5, qN, qF, aMkt: mk != null ? m - mk : null, aPool: pl != null ? m - pl : null };
     }).filter(Boolean);
   }
   function raporSummary(docs, rule){
@@ -983,6 +990,9 @@
     s.aA = rMean(am.slice(0, half).map(x=>x.aMkt)); s.aB = rMean(am.slice(half).map(x=>x.aMkt));
     s.p10 = rMean(d10.map(x=>x.aPool).filter(v=>v!=null));
     s.sl5 = rMean(d10.map(x=>x.sl5).filter(v=>v!=null)); s.sl8 = rMean(d10.map(x=>x.sl8).filter(v=>v!=null));
+    s.q10 = rMean(d10.map(x=>x.q10).filter(v=>v!=null)); s.qsl5 = rMean(d10.map(x=>x.qsl5).filter(v=>v!=null));
+    const qN = d10.reduce((a,x)=>a+(x.qN||0),0), qF = d10.reduce((a,x)=>a+(x.qF||0),0);
+    s.qFill = qN ? qF/qN*100 : null;
     const picks = d10.flatMap(x => x.outs);
     s.n10 = picks.length;
     s.win10 = picks.length ? picks.filter(o=>o.h10>0).length/picks.length*100 : null;
@@ -1068,13 +1078,13 @@
       }else{
         html += `<div class="msg-box info" style="margin-top:0;"><div>⚪ Data kondisi pasar untuk ${latestDate} belum ada — jalankan Step 4 versi terbaru.</div></div>`;
       }
-      html += `<div class="msg-box info"><div>📏 <b>Rekam jejak aturan ini</b> (Top 3 saat pantulan, H10 selesai): gabungan ${sAll.d10} hari — jual H5 ${pct(sAll.h5)}, jual H10 ${pct(sAll.h10)}, H10 dengan SL −5% ${pct(sAll.sl5)}, dengan SL −8% ${pct(sAll.sl8)}; <b>live</b> ${sLive.d10} hari${sLive.d10 ? ` (H10 ${pct(sLive.h10)})` : ''}. Belum terbukti penuh — pakai <b>lot kecil</b>. Detail di tab 🎯 Rapor Skema.</div></div>`;
+      html += `<div class="msg-box info"><div>📏 <b>Rekam jejak aturan ini</b> (Top 3 saat pantulan, H10 selesai): gabungan ${sAll.d10} hari — jual H5 ${pct(sAll.h5)}, jual H10 ${pct(sAll.h10)}, H10 dengan SL −5% ${pct(sAll.sl5)}, dengan SL −8% ${pct(sAll.sl8)}${sAll.q10 != null ? `; <b>cara antri close kemarin</b>: terisi ${sAll.qFill.toFixed(0)}%, H10 ${pct(sAll.q10)}, dengan SL −5% ${pct(sAll.qsl5)}` : ''}; <b>live</b> ${sLive.d10} hari${sLive.d10 ? ` (H10 ${pct(sLive.h10)})` : ''}. Belum terbukti penuh — pakai <b>lot kecil</b>. Detail di tab 🎯 Rapor Skema.</div></div>`;
 
       html += `<div class="table-section-title">${bounce ? '🛒 Kandidat beli' : '👀 Kandidat (pantauan, belum boleh entry)'} — Top 3 "belum lari" data ${fmtTgl(latestDate)}</div>`;
       if(!picks.length){
         html += `<div class="empty-state"><div class="msg">Top 3 tidak terpilih hari ini (kandidat sinyal baru kurang dari ${BL_MIN_POOL}).</div></div>`;
       }else{
-        html += `<div class="preview-table-wrap"><table><thead><tr><th>#</th><th>Saham</th><th>Skor belum lari</th><th>Close ${fmtTgl(latestDate)}</th><th>Chg hari itu</th><th>RSI14 / Trend</th><th>Kategori</th><th>Entry</th><th>Antri beli: close kemarin (maks) / −1%</th><th>SL −5% dari harga antri</th><th>Jual (hari ke-5 / ke-10)</th><th>Catatan</th></tr></thead><tbody>` +
+        html += `<div class="preview-table-wrap"><table><thead><tr><th>#</th><th>Saham</th><th>Skor belum lari</th><th>Close ${fmtTgl(latestDate)}</th><th>Chg hari itu</th><th>RSI14 / Trend</th><th>Kategori</th><th>Tanggal beli</th><th>Antri beli: close kemarin (maks) / −1%</th><th>SL −5% dari harga antri</th><th>Jual (hari ke-5 / ke-10)</th><th>Catatan</th></tr></thead><tbody>` +
           picks.map((p, i) => {
             const x = info[p.ticker] || {}; const c = x.price.close; const ch = x.price.changePct;
             const tags = categoryTags(x.rs || {});
@@ -1083,7 +1093,7 @@
               <td>${p.score ?? '-'}</td><td>${rp(c)}</td><td class="${cls(ch)}">${ch != null ? pct(ch) : '-'}</td>
               <td>${x.ind.rsi14 != null ? x.ind.rsi14.toFixed(1) : '-'} / ${x.ind.trendLabel ?? '-'}</td>
               <td style="font-size:11px;">${tags.length ? tags.join(', ') : '-'}</td>
-              <td>Open ${fmtTgl(entryDate)}</td>
+              <td>${fmtTgl(entryDate)}</td>
               <td>${c ? `<b>${rp(idxTickDown(c))}</b> / ${rp(idxTickDown(c*0.99))}` : '-'}</td>
               <td>${c ? `${rp(idxTickDown(c*0.95))} / ${rp(idxTickDown(idxTickDown(c*0.99)*0.95))}` : '-'}</td>
               <td>${fmtTgl(day5)} / ${fmtTgl(day10)}</td>
@@ -1103,23 +1113,29 @@
       if(!rows.length){
         html += `<div class="empty-state"><div class="msg">Tidak ada — belum ada catatan pantulan dalam 10 hari bursa terakhir.</div></div>`;
       }else{
-        html += `<div class="preview-table-wrap"><table><thead><tr><th>Saham</th><th>Dicatat</th><th>Entry (open)</th><th>Hari ke-</th><th>Close terakhir</th><th>Hasil sekarang</th><th>Tertinggi / terdalam</th><th>Jual hari ke-5 / ke-10</th><th>Status</th></tr></thead><tbody>` +
+        html += `<div class="preview-table-wrap"><table><thead><tr><th>Saham</th><th>Dicatat</th><th>Beli (antri close kemarin)</th><th>Hari ke-</th><th>Close terakhir</th><th>Hasil sekarang</th><th>Tertinggi / terdalam</th><th>Jual hari ke-5 / ke-10</th><th>Status</th></tr></thead><tbody>` +
           rows.map(({ d, t, o }) => {
             const ed = dates[d.si + 1] || addWeekdays(d.date, 1);
             const j5 = dates[d.si + 5] || addWeekdays(ed, 4), j10 = dates[d.si + 10] || addWeekdays(ed, 9);
+            // pakai cara entry baru (antri di close hari sinyal) kalau datanya sudah ada; kalau belum, pakai open
+            const q = o && o.q && !o.q.nofill ? o.q : null;
+            const v = q ? { entry: q.entry, hl: q.hl, upL: q.upL, dnL: q.dnL } : (o ? { entry: o.entry, hl: o.hl, upL: o.upL, dnL: o.dnL } : null);
+            const beliTxt = !o ? fmtTgl(ed) : o.q && o.q.nofill ? `<span style="color:var(--text-faint);">tidak terisi (open & low di atas ${rp(o.c0)})</span>` : `${v.entry ? rp(v.entry) : '-'} · ${fmtTgl(ed)}${q ? '' : ' <span style="font-size:10px;color:var(--text-faint);">(open)</span>'}`;
             let st = '';
             if(!o) st = '<span style="color:var(--text-faint);">menunggu Step 4</span>';
             else if(o.invalid) st = `<span style="color:var(--text-faint);">tdk valid${o.why ? ` (${o.why==='nodata'?'data kosong':'harga 0'} ${o.at ? o.at.slice(5) : ''})` : ''}</span>`;
-            else if(o.dnL != null && o.dnL <= -8) st = '<span class="neg">SL −8% tersentuh</span>';
-            else if(o.dnL != null && o.dnL <= -5) st = '<span style="color:var(--amber-flag);">SL −5% tersentuh</span>';
+            else if(o.q && o.q.nofill) st = '<span style="color:var(--text-faint);">antrian tidak terisi — lewati</span>';
+            else if(v.dnL != null && v.dnL <= -8) st = '<span class="neg">SL −8% tersentuh</span>';
+            else if(v.dnL != null && v.dnL <= -5) st = '<span style="color:var(--amber-flag);">SL −5% tersentuh</span>';
             else if(o.done >= 5) st = '<span style="color:var(--gold);">masuk jendela jual (hari 5–10)</span>';
             else st = 'tahan';
-            return `<tr><td><b>${t}</b></td><td>${d.date}</td><td>${o && o.entry ? rp(o.entry) + ' · ' + fmtTgl(ed) : fmtTgl(ed)}</td><td>${o && o.done != null ? o.done : '-'}</td>
-              <td>${o && o.lastClose ? rp(o.lastClose) : '-'}</td><td class="${cls(o && o.hl)}">${o && o.hl != null ? pct(o.hl) : '-'}</td>
-              <td><span class="pos">${o && o.upL != null ? pct(o.upL) : '-'}</span> / <span class="neg">${o && o.dnL != null ? pct(o.dnL) : '-'}</span></td>
+            const nf = o && o.q && o.q.nofill;
+            return `<tr><td><b>${t}</b></td><td>${d.date}</td><td>${beliTxt}</td><td>${o && o.done != null ? o.done : '-'}</td>
+              <td>${o && o.lastClose ? rp(o.lastClose) : '-'}</td><td class="${cls(!nf && v ? v.hl : null)}">${!nf && v && v.hl != null ? pct(v.hl) : '-'}</td>
+              <td><span class="pos">${!nf && v && v.upL != null ? pct(v.upL) : '-'}</span> / <span class="neg">${!nf && v && v.dnL != null ? pct(v.dnL) : '-'}</span></td>
               <td>${fmtTgl(j5)} / ${fmtTgl(j10)}</td><td>${st}</td></tr>`;
           }).join('') + `</tbody></table></div>
-          <div style="font-size:11px; color:var(--text-faint); margin-top:6px;">Angka ini hasil simulasi aturan (beli di open hari bursa setelah catatan), bukan posisi riil di akunmu. Diperbarui tiap Step 4.</div>`;
+          <div style="font-size:11px; color:var(--text-faint); margin-top:6px;">Angka ini hasil simulasi aturan (antri beli di close hari sinyal, di hari bursa berikutnya; kalau data antrian belum ada, dihitung dari open), bukan posisi riil di akunmu. Diperbarui tiap Step 4.</div>`;
       }
 
       // Bandar Accum = pantauan
@@ -1188,10 +1204,11 @@
       else if(live.rel) verdict = `<div class="msg-box warning"><div>⚠ ${rule.label}: unggul dari pasar (alpha H10 ${pct(live.a10)}), tapi H10 setelah fee masih ${pct(live.h10 - BL_FEE_PCT)} — lebih baik dari pasar, belum untung.</div></div>`;
       else verdict = `<div class="msg-box warning"><div>⚠ ${rule.label}: belum lolos (alpha H10 live ${pct(live.a10)} ± ${live.se10!=null?live.se10.toFixed(2):'-'}, paruh ${pct(live.aA)} / ${pct(live.aB)}).</div></div>`;
       html += `<div class="table-section-title">${rule.label} <span style="text-transform:none; letter-spacing:0; color:var(--text-faint);">· ${rule.code}</span></div>${verdict}
-        <div class="preview-table-wrap"><table><thead><tr><th>Data</th><th>Hari (H10 selesai)</th><th>Pick H10</th><th>Jual H1</th><th>Jual H3</th><th>Jual H5</th><th>Jual H10</th><th>H10 setelah fee</th><th>H10 + SL −5%</th><th>H10 + SL −8%</th><th>Alpha H5</th><th>Alpha H10 (± galat)</th><th>Alpha paruh awal / akhir</th><th>vs semua kandidat</th><th>Close H10 &gt; entry</th><th>Pernah ≥ +5%</th><th>Pernah ≤ −5%</th></tr></thead><tbody>` +
+        <div class="preview-table-wrap"><table><thead><tr><th>Data</th><th>Hari (H10 selesai)</th><th>Pick H10</th><th>Jual H1</th><th>Jual H3</th><th>Jual H5</th><th>Jual H10</th><th>H10 setelah fee</th><th>H10 + SL −5%</th><th>H10 + SL −8%</th><th>Antri close kemarin: terisi / H10 / +SL −5%</th><th>Alpha H5</th><th>Alpha H10 (± galat)</th><th>Alpha paruh awal / akhir</th><th>vs semua kandidat</th><th>Close H10 &gt; entry</th><th>Pernah ≥ +5%</th><th>Pernah ≤ −5%</th></tr></thead><tbody>` +
         sums.map(g => { const s = g.s; return `<tr${g.label==='Gabungan' ? ' style="opacity:.75;"' : ''}><td><b>${g.label}</b></td><td>${s.d10} <span style="font-size:10px;color:var(--text-faint);">dari ${s.nDocs}</span></td><td>${s.n10}</td>
           <td class="${cls(s.h1)}">${pct(s.h1)}</td><td class="${cls(s.h3)}">${pct(s.h3)}</td><td class="${cls(s.h5)}">${pct(s.h5)}</td><td class="${cls(s.h10)}">${pct(s.h10)}</td><td class="${cls(s.h10!=null?s.h10-BL_FEE_PCT:null)}">${s.h10!=null?pct(s.h10-BL_FEE_PCT):'-'}</td>
           <td class="${cls(s.sl5)}">${pct(s.sl5)}</td><td class="${cls(s.sl8)}">${pct(s.sl8)}</td>
+          <td>${s.qFill != null ? s.qFill.toFixed(0)+'%' : '-'} / <span class="${cls(s.q10)}">${pct(s.q10)}</span> / <span class="${cls(s.qsl5)}">${pct(s.qsl5)}</span></td>
           <td class="${cls(s.a5)}">${pct(s.a5)}</td><td class="${cls(s.a10)}">${pct(s.a10)} <span style="font-size:10px;color:var(--text-faint);">± ${s.se10!=null?s.se10.toFixed(2):'-'}</span></td><td><span class="${cls(s.aA)}">${pct(s.aA)}</span> / <span class="${cls(s.aB)}">${pct(s.aB)}</span></td><td class="${cls(s.p10)}">${pct(s.p10)}</td><td>${p0(s.win10)}</td><td>${p0(s.up5)}</td><td>${p0(s.dn5)}</td></tr>`; }).join('') +
         `</tbody></table></div>`;
     });
@@ -1209,7 +1226,7 @@
       <div class="preview-table-wrap"><table><thead><tr><th rowspan="2">Kondisi</th><th colspan="4">🎯 Top 3 "belum lari"</th><th colspan="4">🧱 Bandar Accum baru</th></tr>
       <tr><th>Hari</th><th>H5</th><th>H10</th><th>Alpha H10</th><th>Hari</th><th>H5</th><th>H10</th><th>Alpha H10</th></tr></thead><tbody>` +
       conds.map(c => { const sub = docs.filter(c.f); return `<tr><td>${c.label}</td>${cell(raporSummary(sub, RAPOR_RULES.find(r => r.key === 'top3')))}${cell(raporSummary(sub, RAPOR_RULES.find(r => r.key === 'bandar')))}</tr>`; }).join('') +
-      `</tbody></table></div><div style="font-size:11px; color:var(--text-faint); margin-top:6px;">Kolom "H10 + SL": kalau dalam 10 hari harga pernah menyentuh −5% / −8% dari harga beli, dianggap keluar di level itu (gap turun di bawah SL diabaikan, jadi hasil nyata bisa sedikit lebih jelek). Hari = jumlah hari dengan H10 selesai. Kondisi pasar hanya ada untuk hari yang punya data indeks (≥ 20 hari histori).</div>`;
+      `</tbody></table></div><div style="font-size:11px; color:var(--text-faint); margin-top:6px;">Kolom "Antri close kemarin" = cara entry baru (antri beli di close hari sinyal; terisi kalau open atau harga terendah hari entry ≤ level itu) — butuh Step 4 / Rapikan riwayat versi 23 Nov ke atas untuk terisi. Kolom "H10 + SL": kalau dalam 10 hari harga pernah menyentuh −5% / −8% dari harga beli, dianggap keluar di level itu (gap turun di bawah SL diabaikan, jadi hasil nyata bisa sedikit lebih jelek). Hari = jumlah hari dengan H10 selesai. Kondisi pasar hanya ada untuk hari yang punya data indeks (≥ 20 hari histori).</div>`;
 
     // --- per tanggal
     const outTxt = o => {

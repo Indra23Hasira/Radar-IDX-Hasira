@@ -3280,6 +3280,26 @@
       o.entry = entry; o.lastClose = r.close; o.lastDate = d;
       o.done = k;
     }
+    // CARA ENTRY BARU (23 Nov 2026): antri beli di close hari sinyal (c0). Open ≤ c0 → beli di open;
+    // open > c0 tapi low hari entry ≤ c0 → beli di c0; selain itu antrian tidak terisi.
+    const r0 = rowsByDate[dates[si]];
+    if(o.done >= 1 && r0 && r0.close > 0){
+      o.c0 = r0.close; o.l1 = r1.low;
+      const qe = r1.open <= r0.close ? r1.open : (r1.low <= r0.close ? r0.close : null);
+      if(qe == null) o.q = { nofill: true };
+      else{
+        const q = { entry: qe };
+        let qu = -Infinity, qd = Infinity;
+        for(let k=1;k<=o.done;k++){
+          const r = rowsByDate[dates[si+k]];
+          qu = Math.max(qu, r.high); qd = Math.min(qd, r.low);
+          if(SW_HS.includes(k)) q['h'+k] = swR((r.close/qe - 1)*100);
+          if(k === 10){ q.up10 = swR((qu/qe-1)*100); q.dn10 = swR((qd/qe-1)*100); }
+          q.hl = swR((r.close/qe - 1)*100); q.upL = swR((qu/qe-1)*100); q.dnL = swR((qd/qe-1)*100);
+        }
+        o.q = q;
+      }
+    }
     return o;
   }
   function swMeanOutcomes(list){
