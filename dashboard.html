@@ -308,6 +308,7 @@
 
 <div class="tab-bar">
   <button class="tab-btn active" id="tabRadarBtn">📡 Radar</button>
+  <button class="tab-btn" id="tabExecBtn">🛒 Eksekusi</button>
   <button class="tab-btn" id="tabWatchlistBtn">⭐ Watchlist <span id="watchlistCountBadge"></span></button>
   <button class="tab-btn" id="tabStatsBtn">📊 Statistik</button>
   <button class="tab-btn" id="tabHoldBtn">🏛️ Hold Jk. Panjang</button>
@@ -386,6 +387,16 @@
         </div>
       </div>
       <div id="watchlistContent"><div class="loading-msg">Memuat watchlist...</div></div>
+    </div>
+
+    <div id="execSection" style="display:none;">
+      <div class="main-header">
+        <div>
+          <div class="main-title">Eksekusi Hari Ini</div>
+          <div class="main-desc">Saham yang sesuai aturan radar yang sedang dipakai (Top 3 "belum lari" saat pantulan), lengkap dengan rencana entry, SL, dan tanggal jual — plus posisi yang masih dalam masa tahan.</div>
+        </div>
+      </div>
+      <div id="execContent"><div class="loading-msg">Memuat...</div></div>
     </div>
 
     <div id="topSection" style="display:none;">
@@ -882,6 +893,10 @@
     return l === 'hijau' ? '🟢 Hijau' : l === 'kuning' ? '🟡 Kuning' : l === 'merah' ? '🔴 Merah' : '⚪ Belum tercatat';
   }
   const RAPOR_RULES = [
+    { key:'top3b', label:'🔄 Top 3 saat pantulan (ATURAN AKTIF)', code:'pantulan-v1', lock:'9 Nov 2026',
+      filter: d => d.market && d.market.mkt5 != null && d.market.mkt5 <= BL_BOUNCE_MKT5,
+      tickers: d => (d.picks || []).map(p => p.ticker), outs: d => (d.res && d.res.picks) || {},
+      isLive: d => d.source !== 'backfill' && d.date >= '2026-11-09' },
     { key:'top3', label:'🎯 Top 3 "belum lari"', code:'compF-v1', lock:'8 Okt 2026',
       tickers: d => (d.picks || []).map(p => p.ticker), outs: d => (d.res && d.res.picks) || {},
       isLive: d => d.source !== 'backfill' },
@@ -902,15 +917,30 @@
     }
     return Math.sqrt(Math.max(v,0)/n);
   }
+  // hitung sekali per saham: pilihan ulang saat saham itu masih ditahan (<10 hari bursa) diabaikan
+  let raporDedupe = (() => { try{ return localStorage.getItem('raporDedupe') === '1'; }catch(e){ return false; } })();
+  function raporExcluded(docs, rule){
+    const ex = new Set(), last = {};
+    docs.filter(d => d.si != null && (!rule.filter || rule.filter(d))).sort((a,b) => a.si - b.si).forEach(d => {
+      rule.tickers(d).forEach(t => {
+        if(last[t] != null && d.si - last[t] < 10) ex.add(d.date + '|' + t);
+        else last[t] = d.si;
+      });
+    });
+    return ex;
+  }
+  const slv = (o, x) => (o.dn10 != null && o.dn10 <= -x) ? -x : o.h10; // SL dianggap kena di level SL (konservatif, gap diabaikan)
   function raporDays(docs, rule, H){
-    return docs.map(d => {
+    return docs.filter(d => !rule.filter || rule.filter(d)).map(d => {
       const outs = rule.outs(d);
-      const vals = rule.tickers(d).map(t => outs[t]).filter(o => o && !o.invalid && o['h'+H] != null);
+      const ex = raporDedupe ? rule._ex : null;
+      const vals = rule.tickers(d).filter(t => !(ex && ex.has(d.date + '|' + t))).map(t => outs[t]).filter(o => o && !o.invalid && o['h'+H] != null);
       if(!vals.length) return null;
       const m = rMean(vals.map(o => o['h'+H]));
+      if(H === 10){ var sl5 = rMean(vals.map(o => slv(o, 5))), sl8 = rMean(vals.map(o => slv(o, 8))); }
       const mk = d.res && d.res.mkt ? d.res.mkt['h'+H] : null;
       const pl = d.res && d.res.pool ? d.res.pool['h'+H] : null;
-      return { date: d.date, si: d.si, mean: m, outs: vals, aMkt: mk != null ? m - mk : null, aPool: pl != null ? m - pl : null };
+      return { date: d.date, si: d.si, mean: m, outs: vals, sl5, sl8, aMkt: mk != null ? m - mk : null, aPool: pl != null ? m - pl : null };
     }).filter(Boolean);
   }
   function raporSummary(docs, rule){
@@ -923,6 +953,7 @@
     const half = Math.floor(am.length/2);
     s.aA = rMean(am.slice(0, half).map(x=>x.aMkt)); s.aB = rMean(am.slice(half).map(x=>x.aMkt));
     s.p10 = rMean(d10.map(x=>x.aPool).filter(v=>v!=null));
+    s.sl5 = rMean(d10.map(x=>x.sl5).filter(v=>v!=null)); s.sl8 = rMean(d10.map(x=>x.sl8).filter(v=>v!=null));
     const picks = d10.flatMap(x => x.outs);
     s.n10 = picks.length;
     s.win10 = picks.length ? picks.filter(o=>o.h10>0).length/picks.length*100 : null;
@@ -933,12 +964,148 @@
     return s;
   }
 
+
+  // ============================================================
+  // TAB 🛒 EKSEKUSI — daftar beli hari ini sesuai aturan aktif + posisi dalam masa tahan
+  // Aturan aktif: pantulan-v1 = Top 3 "belum lari" HANYA saat indeks pasar 5 hari ≤ −3%,
+  // entry di open hari bursa berikutnya, tahan 5–10 hari bursa.
+  // ============================================================
+  function addWeekdays(dateStr, n){ // perkiraan tanggal bursa ke depan (lewati Sabtu/Minggu, libur bursa tidak diketahui)
+    const d = new Date(dateStr + 'T00:00:00Z');
+    let k = 0;
+    while(k < n){ d.setUTCDate(d.getUTCDate() + 1); const w = d.getUTCDay(); if(w !== 0 && w !== 6) k++; }
+    return d.toISOString().slice(0,10);
+  }
+  function fmtTgl(s){ if(!s) return '-'; const d = new Date(s + 'T00:00:00Z'); return d.toLocaleDateString('id-ID', { weekday:'short', day:'numeric', month:'short', timeZone:'UTC' }); }
+
+  async function loadExecTab(){
+    const box = document.getElementById('execContent');
+    box.innerHTML = `<div class="loading-msg">Menyiapkan daftar eksekusi...</div>`;
+    const { collection, getDocs, doc, getDoc } = firestoreFns;
+    const pct = v => v == null || !isFinite(v) ? '-' : (v>=0?'+':'') + v.toFixed(2) + '%';
+    const cls = v => v == null ? '' : (v >= 0 ? 'pos' : 'neg');
+    const rp = v => v == null ? '-' : Math.round(v).toLocaleString('id-ID');
+    try{
+      const { dates, indexOf, latestDate } = await getTradingDatesIndex();
+      const li = indexOf.get(latestDate);
+      const snap = await getDocs(collection(db, 'topPicks'));
+      const docs = snap.docs.map(d => d.data()).filter(d => d && d.date).map(d => ({ ...d, si: indexOf.get(d.date) }));
+      const today = docs.find(d => d.date === latestDate);
+      if(!today){
+        box.innerHTML = `<div class="msg-box warning"><div>⚠ Catatan untuk data terakhir (${latestDate}) belum ada. Jalankan Step 4 di halaman Import Data dulu, lalu buka tab ini lagi.</div></div>`;
+        return;
+      }
+      let mk = today.market || null;
+      if(!mk){ try{ const ms = await getDoc(doc(db, 'systemMeta', 'marketRegime')); if(ms.exists() && ms.data().date === latestDate) mk = ms.data(); }catch(e){} }
+      const isB = d => d.market && d.market.mkt5 != null && d.market.mkt5 <= BL_BOUNCE_MKT5;
+      const bounce = mk && mk.mkt5 != null && mk.mkt5 <= BL_BOUNCE_MKT5;
+      const entryDate = addWeekdays(latestDate, 1);
+      const day5 = addWeekdays(entryDate, 4), day10 = addWeekdays(entryDate, 9);
+
+      // rekam jejak aturan aktif (dari rapor)
+      const ruleB = RAPOR_RULES.find(r => r.key === 'top3b');
+      const sAll = raporSummary(docs, ruleB);
+      const sLive = raporSummary(docs.filter(ruleB.isLive), ruleB);
+
+      // posisi berjalan: catatan pantulan yang entry-nya sudah terjadi dan belum lewat hari ke-10
+      const holdDocs = docs.filter(d => isB(d) && d.si != null && li != null && d.si < li && d.si >= li - 10 && (d.picks || []).length)
+        .sort((a,b) => a.date < b.date ? 1 : -1);
+      const holding = {};
+      holdDocs.forEach(d => (d.picks || []).forEach(p => { const o = d.res && d.res.picks ? d.res.picks[p.ticker] : null; if(!(o && o.done >= 10) && !holding[p.ticker]) holding[p.ticker] = d.date; }));
+
+      // data harga & indikator kandidat hari ini
+      const picks = today.picks || [];
+      const info = {};
+      await Promise.all(picks.map(async p => {
+        const [ps, rs, is] = await Promise.all([
+          getDoc(doc(db, 'dailySummary', latestDate, 'stocks', p.ticker)),
+          getDoc(doc(db, 'tickerRollingStats', p.ticker)),
+          getDoc(doc(db, 'tickerIndicators', p.ticker)),
+        ]);
+        info[p.ticker] = { price: ps.exists() ? ps.data() : {}, rs: rs.exists() ? rs.data() : {}, ind: is.exists() ? is.data() : {} };
+      }));
+
+      let html = '';
+      if(bounce){
+        html += `<div class="msg-box success" style="font-size:13.5px; margin-top:0;"><div>✅ <b>BOLEH ENTRY</b> — kondisi pantulan aktif di data ${fmtTgl(latestDate)} (indeks pasar 5 hari <b>${pct(mk.mkt5)}</b> ≤ −3%). Kandidat di bawah dibeli di <b>harga buka ${fmtTgl(entryDate)}</b>, setelah lolos analisamu sendiri. Rencana jual: close hari bursa ke-5 (${fmtTgl(day5)}) sampai ke-10 (${fmtTgl(day10)}).</div></div>`;
+      }else if(mk && mk.mkt5 != null){
+        html += `<div class="msg-box warning" style="font-size:13.5px; margin-top:0;"><div>⏸ <b>TUNGGU</b> — kondisi pantulan tidak aktif di data ${fmtTgl(latestDate)} (indeks pasar 5 hari <b>${pct(mk.mkt5)}</b>, syarat ≤ −3%). Di data Agu–Nov, membeli Top 3 di luar pantulan rata-rata rugi. Daftar di bawah hanya untuk dipantau.</div></div>`;
+      }else{
+        html += `<div class="msg-box info" style="margin-top:0;"><div>⚪ Data kondisi pasar untuk ${latestDate} belum ada — jalankan Step 4 versi terbaru.</div></div>`;
+      }
+      html += `<div class="msg-box info"><div>📏 <b>Rekam jejak aturan ini</b> (Top 3 saat pantulan, H10 selesai): gabungan ${sAll.d10} hari — jual H5 ${pct(sAll.h5)}, jual H10 ${pct(sAll.h10)}, H10 dengan SL −5% ${pct(sAll.sl5)}, dengan SL −8% ${pct(sAll.sl8)}; <b>live</b> ${sLive.d10} hari${sLive.d10 ? ` (H10 ${pct(sLive.h10)})` : ''}. Belum terbukti penuh — pakai <b>lot kecil</b>. Detail di tab 🎯 Rapor Skema.</div></div>`;
+
+      html += `<div class="table-section-title">${bounce ? '🛒 Kandidat beli' : '👀 Kandidat (pantauan, belum boleh entry)'} — Top 3 "belum lari" data ${fmtTgl(latestDate)}</div>`;
+      if(!picks.length){
+        html += `<div class="empty-state"><div class="msg">Top 3 tidak terpilih hari ini (kandidat sinyal baru kurang dari ${BL_MIN_POOL}).</div></div>`;
+      }else{
+        html += `<div class="preview-table-wrap"><table><thead><tr><th>#</th><th>Saham</th><th>Skor belum lari</th><th>Close ${fmtTgl(latestDate)}</th><th>Chg hari itu</th><th>RSI14 / Trend</th><th>Kategori</th><th>Entry</th><th>SL −5% / −8% (perkiraan)</th><th>Jual (hari ke-5 / ke-10)</th><th>Catatan</th></tr></thead><tbody>` +
+          picks.map((p, i) => {
+            const x = info[p.ticker] || {}; const c = x.price.close; const ch = x.price.changePct;
+            const tags = categoryTags(x.rs || {});
+            const held = holding[p.ticker];
+            return `<tr><td>${i+1}</td><td><b style="color:var(--gold);">${p.ticker}</b><br><a href="https://stockbit.com/symbol/${p.ticker}" target="_blank" rel="noopener" style="font-size:10px; color:var(--text-faint);">chart ↗</a></td>
+              <td>${p.score ?? '-'}</td><td>${rp(c)}</td><td class="${cls(ch)}">${ch != null ? pct(ch) : '-'}</td>
+              <td>${x.ind.rsi14 != null ? x.ind.rsi14.toFixed(1) : '-'} / ${x.ind.trendLabel ?? '-'}</td>
+              <td style="font-size:11px;">${tags.length ? tags.join(', ') : '-'}</td>
+              <td>Open ${fmtTgl(entryDate)}</td>
+              <td>${c ? `${rp(c*0.95)} / ${rp(c*0.92)}` : '-'}</td>
+              <td>${fmtTgl(day5)} / ${fmtTgl(day10)}</td>
+              <td style="font-size:11px;">${held ? `⚠ masih dipegang dari catatan ${held} — jangan beli dobel` : ''}</td></tr>`;
+          }).join('') + `</tbody></table></div>
+          <div style="font-size:11px; color:var(--text-faint); margin-top:6px;">Level SL dihitung dari close terakhir sebagai perkiraan — hitung ulang dari harga beli sebenarnya. Tanggal jual = perkiraan hari bursa (Sabtu/Minggu dilewati, libur bursa belum diperhitungkan).</div>`;
+      }
+
+      // posisi dalam masa tahan
+      html += `<div class="table-section-title">📦 Posisi sesuai aturan yang masih dalam masa tahan (≤ 10 hari bursa)</div>`;
+      const rows = [];
+      holdDocs.forEach(d => (d.picks || []).forEach(p => {
+        const o = d.res && d.res.picks ? d.res.picks[p.ticker] : null;
+        if(o && o.done >= 10) return;
+        rows.push({ d, t: p.ticker, o });
+      }));
+      if(!rows.length){
+        html += `<div class="empty-state"><div class="msg">Tidak ada — belum ada catatan pantulan dalam 10 hari bursa terakhir.</div></div>`;
+      }else{
+        html += `<div class="preview-table-wrap"><table><thead><tr><th>Saham</th><th>Dicatat</th><th>Entry (open)</th><th>Hari ke-</th><th>Close terakhir</th><th>Hasil sekarang</th><th>Tertinggi / terdalam</th><th>Jual hari ke-5 / ke-10</th><th>Status</th></tr></thead><tbody>` +
+          rows.map(({ d, t, o }) => {
+            const ed = dates[d.si + 1] || addWeekdays(d.date, 1);
+            const j5 = dates[d.si + 5] || addWeekdays(ed, 4), j10 = dates[d.si + 10] || addWeekdays(ed, 9);
+            let st = '';
+            if(!o) st = '<span style="color:var(--text-faint);">menunggu Step 4</span>';
+            else if(o.invalid) st = `<span style="color:var(--text-faint);">tdk valid${o.why ? ` (${o.why==='nodata'?'data kosong':'harga 0'} ${o.at ? o.at.slice(5) : ''})` : ''}</span>`;
+            else if(o.dnL != null && o.dnL <= -8) st = '<span class="neg">SL −8% tersentuh</span>';
+            else if(o.dnL != null && o.dnL <= -5) st = '<span style="color:var(--amber-flag);">SL −5% tersentuh</span>';
+            else if(o.done >= 5) st = '<span style="color:var(--gold);">masuk jendela jual (hari 5–10)</span>';
+            else st = 'tahan';
+            return `<tr><td><b>${t}</b></td><td>${d.date}</td><td>${o && o.entry ? rp(o.entry) + ' · ' + fmtTgl(ed) : fmtTgl(ed)}</td><td>${o && o.done != null ? o.done : '-'}</td>
+              <td>${o && o.lastClose ? rp(o.lastClose) : '-'}</td><td class="${cls(o && o.hl)}">${o && o.hl != null ? pct(o.hl) : '-'}</td>
+              <td><span class="pos">${o && o.upL != null ? pct(o.upL) : '-'}</span> / <span class="neg">${o && o.dnL != null ? pct(o.dnL) : '-'}</span></td>
+              <td>${fmtTgl(j5)} / ${fmtTgl(j10)}</td><td>${st}</td></tr>`;
+          }).join('') + `</tbody></table></div>
+          <div style="font-size:11px; color:var(--text-faint); margin-top:6px;">Angka ini hasil simulasi aturan (beli di open hari bursa setelah catatan), bukan posisi riil di akunmu. Diperbarui tiap Step 4.</div>`;
+      }
+
+      // Bandar Accum = pantauan
+      const bl = today.bandar || [];
+      html += `<div class="table-section-title">🧱 Bandar Accum baru (pantauan saja)</div>
+        <div class="msg-box info"><div>${bl.length ? bl.map(t => `<b style="color:var(--gold);">${t}</b>`).join(', ') : 'Tidak ada hari ini.'} — unggul dari pasar di backtest, tapi <b>belum ada aturan waktu masuk</b> (saat pantulan justru jelek). Jangan dijadikan sinyal beli dulu.</div></div>`;
+
+      html += `<div class="msg-box warning"><div>⚠ Pengingat: (1) entry hanya saat ✅ BOLEH ENTRY; (2) analisa chart/berita tetap wajib; (3) lot kecil — sekitar separuh posisi sempat turun ≥5% sebelum hasil akhir; (4) jangan beli saham yang sama dua kali selama masih dalam masa tahan.</div></div>`;
+      box.innerHTML = html;
+    }catch(err){
+      console.error('loadExecTab gagal:', err);
+      box.innerHTML = `<div class="empty-state"><div class="big">⚠</div><div class="msg">Gagal menyiapkan daftar eksekusi.</div><div class="sub">${err.message}</div></div>`;
+    }
+  }
+
   async function loadTopPicksTab(){
     const box = document.getElementById('topContent');
     box.innerHTML = `<div class="loading-msg">Memuat rapor...</div>`;
     const { collection, getDocs } = firestoreFns;
     try{
       const { indexOf } = await getTradingDatesIndex();
+      RAPOR_RULES.forEach(r => { r._ex = null; });
       let snap;
       try{ snap = await getDocs(collection(db, 'topPicks')); }
       catch(e){ box.innerHTML = `<div class="msg-box warning"><div>Tidak bisa membaca koleksi topPicks (cek Firestore rules): ${e.message}</div></div>`; return; }
@@ -947,7 +1114,13 @@
         box.innerHTML = `<div class="empty-state"><div class="big">🎯</div><div class="msg">Belum ada catatan.</div><div class="sub">Jalankan Step 4 di halaman Import Data, atau Diagnosa dengan "Rapikan riwayat" dicentang.</div></div>`;
         return;
       }
-      box.innerHTML = renderRapor(docs);
+      const draw = () => {
+        RAPOR_RULES.forEach(r => { r._ex = raporExcluded(docs, r); });
+        box.innerHTML = renderRapor(docs);
+        const cb = document.getElementById('raporDedupe');
+        if(cb) cb.addEventListener('change', () => { raporDedupe = cb.checked; try{ localStorage.setItem('raporDedupe', raporDedupe ? '1' : '0'); }catch(e){} draw(); });
+      };
+      draw();
     }catch(err){
       console.error('loadTopPicksTab gagal:', err);
       box.innerHTML = `<div class="empty-state"><div class="big">⚠</div><div class="msg">Gagal memuat rapor.</div><div class="sub">${err.message}</div></div>`;
@@ -961,6 +1134,7 @@
     const maxSi = Math.max(...docs.map(d => d.si == null ? -1 : d.si));
     const noRes = docs.filter(d => !d.res && d.si != null && d.si < maxSi).length; // catatan hari terakhir memang belum punya hasil
     let html = `<div class="msg-box info" style="margin-top:0;"><div>ℹ <b>Skema baru (v2)</b>: tiap hari dicatat <b>Top 3 "belum lari"</b> dan <b>daftar Bandar Accum yang baru muncul</b>. Entry = harga <b>buka</b> hari bursa berikutnya, hasil = penutupan hari ke-1/3/5/10. <b>Alpha</b> = hasil dikurangi rata-rata semua saham likuid yang "dibeli" di hari yang sama (jadi naik-turunnya pasar terimbang). <b>Live</b> = dicatat pada harinya (uji jujur ke depan); <b>Backtest</b> = direkonstruksi dari histori setelah aturannya dibuat (bahan awal, bukan bukti). Vonis ✅ hanya dari baris Live: minimal 15 hari H10 selesai, alpha H10 ≥ +1 poin dan &gt; 2× galat, positif di kedua paruh, dan H10 setelah fee ${BL_FEE_PCT}% positif.</div></div>`;
+    html += `<label style="display:flex; gap:8px; align-items:center; font-size:12px; color:var(--text-dim); margin:4px 0 6px;"><input type="checkbox" id="raporDedupe" ${raporDedupe ? 'checked' : ''}> Hitung sekali per saham — abaikan pilihan ulang saham yang masih dalam masa tahan 10 hari (lebih mirip trading nyata)</label>`;
     if(noRes) html += `<div class="msg-box warning"><div>⚠ ${noRes} catatan belum punya hasil. Hasil terisi otomatis saat Step 4 jalan; untuk catatan lama jalankan Diagnosa dengan "Rapikan riwayat" dicentang.</div></div>`;
 
     // --- ringkasan per aturan
@@ -978,9 +1152,10 @@
       else if(live.rel) verdict = `<div class="msg-box warning"><div>⚠ ${rule.label}: unggul dari pasar (alpha H10 ${pct(live.a10)}), tapi H10 setelah fee masih ${pct(live.h10 - BL_FEE_PCT)} — lebih baik dari pasar, belum untung.</div></div>`;
       else verdict = `<div class="msg-box warning"><div>⚠ ${rule.label}: belum lolos (alpha H10 live ${pct(live.a10)} ± ${live.se10!=null?live.se10.toFixed(2):'-'}, paruh ${pct(live.aA)} / ${pct(live.aB)}).</div></div>`;
       html += `<div class="table-section-title">${rule.label} <span style="text-transform:none; letter-spacing:0; color:var(--text-faint);">· ${rule.code}</span></div>${verdict}
-        <div class="preview-table-wrap"><table><thead><tr><th>Data</th><th>Hari (H10 selesai)</th><th>Pick H10</th><th>Jual H1</th><th>Jual H3</th><th>Jual H5</th><th>Jual H10</th><th>H10 setelah fee</th><th>Alpha H5</th><th>Alpha H10 (± galat)</th><th>Alpha paruh awal / akhir</th><th>vs semua kandidat</th><th>Close H10 &gt; entry</th><th>Pernah ≥ +5%</th><th>Pernah ≤ −5%</th></tr></thead><tbody>` +
+        <div class="preview-table-wrap"><table><thead><tr><th>Data</th><th>Hari (H10 selesai)</th><th>Pick H10</th><th>Jual H1</th><th>Jual H3</th><th>Jual H5</th><th>Jual H10</th><th>H10 setelah fee</th><th>H10 + SL −5%</th><th>H10 + SL −8%</th><th>Alpha H5</th><th>Alpha H10 (± galat)</th><th>Alpha paruh awal / akhir</th><th>vs semua kandidat</th><th>Close H10 &gt; entry</th><th>Pernah ≥ +5%</th><th>Pernah ≤ −5%</th></tr></thead><tbody>` +
         sums.map(g => { const s = g.s; return `<tr${g.label==='Gabungan' ? ' style="opacity:.75;"' : ''}><td><b>${g.label}</b></td><td>${s.d10} <span style="font-size:10px;color:var(--text-faint);">dari ${s.nDocs}</span></td><td>${s.n10}</td>
           <td class="${cls(s.h1)}">${pct(s.h1)}</td><td class="${cls(s.h3)}">${pct(s.h3)}</td><td class="${cls(s.h5)}">${pct(s.h5)}</td><td class="${cls(s.h10)}">${pct(s.h10)}</td><td class="${cls(s.h10!=null?s.h10-BL_FEE_PCT:null)}">${s.h10!=null?pct(s.h10-BL_FEE_PCT):'-'}</td>
+          <td class="${cls(s.sl5)}">${pct(s.sl5)}</td><td class="${cls(s.sl8)}">${pct(s.sl8)}</td>
           <td class="${cls(s.a5)}">${pct(s.a5)}</td><td class="${cls(s.a10)}">${pct(s.a10)} <span style="font-size:10px;color:var(--text-faint);">± ${s.se10!=null?s.se10.toFixed(2):'-'}</span></td><td><span class="${cls(s.aA)}">${pct(s.aA)}</span> / <span class="${cls(s.aB)}">${pct(s.aB)}</span></td><td class="${cls(s.p10)}">${pct(s.p10)}</td><td>${p0(s.win10)}</td><td>${p0(s.up5)}</td><td>${p0(s.dn5)}</td></tr>`; }).join('') +
         `</tbody></table></div>`;
     });
@@ -997,13 +1172,13 @@
     html += `<div class="table-section-title">Menurut kondisi pasar saat dicatat (live + backtest)</div>
       <div class="preview-table-wrap"><table><thead><tr><th rowspan="2">Kondisi</th><th colspan="4">🎯 Top 3 "belum lari"</th><th colspan="4">🧱 Bandar Accum baru</th></tr>
       <tr><th>Hari</th><th>H5</th><th>H10</th><th>Alpha H10</th><th>Hari</th><th>H5</th><th>H10</th><th>Alpha H10</th></tr></thead><tbody>` +
-      conds.map(c => { const sub = docs.filter(c.f); return `<tr><td>${c.label}</td>${cell(raporSummary(sub, RAPOR_RULES[0]))}${cell(raporSummary(sub, RAPOR_RULES[1]))}</tr>`; }).join('') +
-      `</tbody></table></div><div style="font-size:11px; color:var(--text-faint); margin-top:6px;">Hari = jumlah hari dengan H10 selesai. Kondisi pasar hanya ada untuk hari yang punya data indeks (≥ 20 hari histori).</div>`;
+      conds.map(c => { const sub = docs.filter(c.f); return `<tr><td>${c.label}</td>${cell(raporSummary(sub, RAPOR_RULES.find(r => r.key === 'top3')))}${cell(raporSummary(sub, RAPOR_RULES.find(r => r.key === 'bandar')))}</tr>`; }).join('') +
+      `</tbody></table></div><div style="font-size:11px; color:var(--text-faint); margin-top:6px;">Kolom "H10 + SL": kalau dalam 10 hari harga pernah menyentuh −5% / −8% dari harga beli, dianggap keluar di level itu (gap turun di bawah SL diabaikan, jadi hasil nyata bisa sedikit lebih jelek). Hari = jumlah hari dengan H10 selesai. Kondisi pasar hanya ada untuk hari yang punya data indeks (≥ 20 hari histori).</div>`;
 
     // --- per tanggal
     const outTxt = o => {
       if(!o) return '<span style="color:var(--text-faint);">menunggu</span>';
-      if(o.invalid) return '<span style="color:var(--text-faint);">tdk valid</span>';
+      if(o.invalid) return `<span style="color:var(--text-faint);" title="${o.why === 'nodata' ? 'Tidak ada baris data harga' : o.why === 'zero' ? 'Harga 0 (tidak ada transaksi / data rusak)' : 'Data tidak lengkap'}${o.at ? ' pada ' + o.at : ''}">tdk valid${o.why ? ` (${o.why === 'nodata' ? 'data kosong' : 'harga 0'} ${o.at ? o.at.slice(5) : ''})` : ''}</span>`;
       const H = o.h10 != null ? 10 : o.h5 != null ? 5 : o.h3 != null ? 3 : o.h1 != null ? 1 : null;
       return H == null ? '<span style="color:var(--text-faint);">menunggu</span>' : `<span class="${cls(o['h'+H])}">${H===10?'':'H'+H+' '}${pct(o['h'+H])}</span>`;
     };
@@ -1128,6 +1303,7 @@
   document.getElementById('tabHoldBtn').addEventListener('click', () => switchTab('hold'));
   document.getElementById('statsShowOld').addEventListener('change', () => loadStats());
   document.getElementById('tabTopBtn').addEventListener('click', () => switchTab('top'));
+  document.getElementById('tabExecBtn').addEventListener('click', () => switchTab('exec'));
 
   function switchTab(tab){
     currentTab = tab;
@@ -1136,16 +1312,19 @@
     document.getElementById('tabStatsBtn').classList.toggle('active', tab === 'stats');
     document.getElementById('tabHoldBtn').classList.toggle('active', tab === 'hold');
     document.getElementById('tabTopBtn').classList.toggle('active', tab === 'top');
+    document.getElementById('tabExecBtn').classList.toggle('active', tab === 'exec');
     document.getElementById('radarSection').style.display = tab === 'radar' ? 'block' : 'none';
     document.getElementById('watchlistSection').style.display = tab === 'watchlist' ? 'block' : 'none';
     document.getElementById('statsSection').style.display = tab === 'stats' ? 'block' : 'none';
     document.getElementById('holdSection').style.display = tab === 'hold' ? 'block' : 'none';
     document.getElementById('topSection').style.display = tab === 'top' ? 'block' : 'none';
-    document.getElementById('mainLayout').classList.toggle('watchlist-mode', tab === 'watchlist' || tab === 'stats' || tab === 'hold' || tab === 'top');
+    document.getElementById('execSection').style.display = tab === 'exec' ? 'block' : 'none';
+    document.getElementById('mainLayout').classList.toggle('watchlist-mode', tab === 'watchlist' || tab === 'stats' || tab === 'hold' || tab === 'top' || tab === 'exec');
     if(tab === 'watchlist') loadWatchlist();
     if(tab === 'stats') loadStats();
     if(tab === 'hold') loadHoldSection();
     if(tab === 'top') loadTopPicksTab();
+    if(tab === 'exec') loadExecTab();
   }
 
   function updateWatchlistCountBadge(n){
