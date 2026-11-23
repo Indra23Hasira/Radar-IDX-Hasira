@@ -2555,7 +2555,7 @@
       if(document.getElementById('diagRapikan').checked){
         try{
           const rr = await diagRapikan(built, (d, n) => updateProgressDiag(d, n, 'Merapikan riwayat', 'tanggal'));
-          rapiHtml = `<div class="msg-box success"><div>💾 Riwayat skema baru dirapikan: ${rr.created} tanggal baru direkonstruksi (Top 3 + Bandar Accum, sumber "backtest"), ${rr.updated} catatan live diperbarui hasilnya. Rentang ${rr.from || '-'} s/d ${rr.to || '-'}. Lihat tab 🎯 Rapor di dashboard.</div></div>`;
+          rapiHtml = `<div class="msg-box success"><div>💾 Riwayat skema baru dirapikan: ${rr.created} tanggal baru direkonstruksi (Top 3 + Bandar Accum, sumber "backtest"), ${rr.updated} catatan lama dihitung ulang hasilnya (${rr.updatedLive} live + ${rr.updatedBackfill} backtest). Rentang ${rr.from || '-'} s/d ${rr.to || '-'}. Lihat tab 🎯 Rapor di dashboard.</div></div>`;
         }catch(e){
           console.error(e);
           rapiHtml = `<div class="msg-box error">✕ Rapikan riwayat gagal: ${e.message}</div>`;
@@ -3036,18 +3036,23 @@
     const d1 = dates[si+1];
     if(!d1) return o; // menunggu
     const r1 = rowsByDate[d1];
-    if(!r1 || !(r1.open > 0)) return { invalid: true };
+    if(!r1) return { invalid: true, why: 'nodata', at: d1 };
+    if(!(r1.open > 0)) return { invalid: true, why: 'zero', at: d1 };
     const entry = r1.open;
     let up = -Infinity, dn = Infinity;
     for(let k=1;k<=10;k++){
       const d = dates[si+k];
       if(!d) break;
       const r = rowsByDate[d];
-      if(!r || !(r.close > 0 && r.high > 0 && r.low > 0)) return { invalid: true };
+      if(!r) return { invalid: true, why: 'nodata', at: d };
+      if(!(r.close > 0 && r.high > 0 && r.low > 0)) return { invalid: true, why: 'zero', at: d };
       up = Math.max(up, r.high); dn = Math.min(dn, r.low);
       if(SW_HS.includes(k)) o['h'+k] = swR((r.close/entry - 1)*100);
       if(k === 3){ o.up3 = swR((up/entry-1)*100); o.dn3 = swR((dn/entry-1)*100); }
       if(k === 10){ o.up10 = swR((up/entry-1)*100); o.dn10 = swR((dn/entry-1)*100); }
+      // posisi berjalan (untuk tab Eksekusi): hasil & naik/turun terjauh sampai hari terakhir yang ada
+      o.hl = swR((r.close/entry - 1)*100); o.upL = swR((up/entry-1)*100); o.dnL = swR((dn/entry-1)*100);
+      o.entry = entry; o.lastClose = r.close; o.lastDate = d;
       o.done = k;
     }
     return o;
@@ -3076,7 +3081,7 @@
   }
   // Step 4: perbarui catatan yang tanggal entry-nya masih di dalam jendela 20 hari histori
   async function settleRecentTopPicks(historyMap, mktTickers, dates, dateIndex, latestDate){
-    const { collection, getDocs, query, where, doc, setDoc } = firestoreFns;
+    const { collection, getDocs, query, where, doc, updateDoc } = firestoreFns;
     const li = dateIndex.get(latestDate);
     if(li == null) return 0;
     const fromIdx = Math.max(0, li - 19);
@@ -3097,7 +3102,7 @@
       const old = tp.res && tp.res.done != null ? tp.res.done : -1;
       if(old >= 10) continue; // sudah final
       const res = swBuildRes(tp, rowsOf, dates, si, mktTickers, li - si);
-      await setDoc(doc(db, 'topPicks', tp.date), { res }, { merge: true });
+      await updateDoc(doc(db, 'topPicks', tp.date), { res }); // ganti utuh (bukan merge) supaya status lama tidak tertinggal
       n++;
     }
     return n;
@@ -3112,7 +3117,7 @@
   //  Catatan live (Top 3 yang dicatat saat itu) TIDAK ditimpa pilihannya.
   // ============================================================
   async function diagRapikan(built, onProgress){
-    const { collection, getDocs, doc, setDoc } = firestoreFns;
+    const { collection, getDocs, doc, setDoc, updateDoc } = firestoreFns;
     const { events, seriesAsc, allDates, dateIdx, radarByDate } = built;
     const reg = mktRegimeSeries(seriesAsc);
     const byDate = {};
@@ -3132,7 +3137,7 @@
     const now = new Date().toISOString();
     const marketOf = d => { const r = reg[d]; return r && r.light ? { rule: MKT_RULE, light: r.light, idxVsMa10: r.idxVsMa10, above20: r.above20, mkt5: r.mkt5, ewRet: r.ewRet, breadth: r.breadth, n: r.n } : null; };
     const dates = allDates.filter((d, i) => i >= DIAG_MIN_LOOKBACK && (existing[d] || (byDate[d] || []).length));
-    let created = 0, updated = 0, done = 0;
+    let created = 0, updated = 0, updatedLive = 0, done = 0;
     for(const d of dates){
       const si = dateIdx.get(d);
       const signalsKnown = si <= lastIdx - 3; // sinyal baru hanya bisa direkonstruksi kalau ada 3 hari ke depan
@@ -3161,13 +3166,15 @@
         }
         if(!tp.market){ const mk = marketOf(d); if(mk){ tp.market = mk; write.market = mk; } }
         updated++;
+        if(tp.source !== 'backfill') updatedLive++;
       }
-      write.res = swBuildRes(tp, rowsOf, allDates, si, mktTickers, lastIdx - si);
-      await setDoc(doc(db, 'topPicks', d), write, { merge: true });
+      const res = swBuildRes(tp, rowsOf, allDates, si, mktTickers, lastIdx - si);
+      if(Object.keys(write).length) await setDoc(doc(db, 'topPicks', d), write, { merge: true });
+      await updateDoc(doc(db, 'topPicks', d), { res }); // ganti utuh supaya status lama tidak tertinggal
       done++;
       if(onProgress) onProgress(done, dates.length);
     }
-    return { created, updated, total: dates.length, from: dates[0], to: dates[dates.length-1] };
+    return { created, updated, updatedLive, updatedBackfill: updated - updatedLive, total: dates.length, from: dates[0], to: dates[dates.length-1] };
   }
 
   function sleep(ms){ return new Promise(resolve => setTimeout(resolve, ms)); }
