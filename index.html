@@ -348,7 +348,7 @@
       <div class="step-num">🎯</div>
       <div class="step-title">Utilitas: Diagnosa Skema Baru + Rapikan Riwayat</div>
     </div>
-    <div class="msg-box info"><div>ℹ Menguji skema baru dengan histori yang sudah ada: <b>1. lampu kondisi pasar</b> dan <b>2. tahan swing 5 &amp; 10 hari</b> (Top 3 "belum lari", Bandar Accum, dan pembandingnya). Entry selalu di <b>open hari bursa berikutnya</b>. Kalau "Rapikan riwayat" dicentang, hasilnya juga disimpan ke catatan harian (tab 🎯 Rapor di dashboard): tanggal yang bolong direkonstruksi dengan aturan yang sama, dan hasil H1–H10 semua catatan dihitung ulang. Deteksi kategori, skor, dan Watchlist tidak diubah.</div></div>
+    <div class="msg-box info"><div>ℹ Menguji skema baru dengan histori yang sudah ada: <b>1. lampu kondisi pasar</b> dan <b>2. tahan swing 5 &amp; 10 hari</b> (Top 3 "belum lari", Bandar Accum, dan pembandingnya), dan <b>3. batas harga entry</b> (supaya tidak kejar harga). Entry selalu di <b>open hari bursa berikutnya</b>. Kalau "Rapikan riwayat" dicentang, hasilnya juga disimpan ke catatan harian (tab 🎯 Rapor di dashboard): tanggal yang bolong direkonstruksi dengan aturan yang sama, dan hasil H1–H10 semua catatan dihitung ulang. Deteksi kategori, skor, dan Watchlist tidak diubah.</div></div>
     <div style="display:flex; gap:12px; flex-wrap:wrap; margin-top:12px;">
       <div class="field" style="max-width:200px;"><label>Maks hari histori</label><input type="number" id="diagMaxDays" value="120" min="40" max="250" step="10"></div>
     </div>
@@ -2688,7 +2688,7 @@
           rapiHtml = `<div class="msg-box error">✕ Rapikan riwayat gagal: ${e.message}</div>`;
         }
       }
-      out.innerHTML = diagExclNote + rapiHtml + `<div class="msg-box info"><div>ℹ Rentang histori: ${built.allDates[0]} s/d ${built.allDates[built.allDates.length-1]} (${built.allDates.length} hari bursa), ${built.events.length} sinyal baru radar.</div></div>` + renderRegime(rg) + renderSwing(sw) + rbNote(rbBefore, '', rbUsed);
+      out.innerHTML = diagExclNote + rapiHtml + `<div class="msg-box info"><div>ℹ Rentang histori: ${built.allDates[0]} s/d ${built.allDates[built.allDates.length-1]} (${built.allDates.length} hari bursa), ${built.events.length} sinyal baru radar.</div></div>` + renderRegime(rg) + renderSwing(sw) + renderEntry(diagEntry(built, t3)) + rbNote(rbBefore, '', rbUsed);
     }catch(err){
       console.error(err);
       out.innerHTML = `<div class="msg-box error">✕ Gagal menjalankan diagnosa: ${err.message}</div>`;
@@ -3041,6 +3041,109 @@
       dn5: mkAll[10].length ? mkAll[10].filter(x=>x.dn<=-5).length/mkAll[10].length*100 : null,
     };
     return { rows, mkt, nDates: allDates10.length, range: [allDates10[0], allDates10[allDates10.length-1]] };
+  }
+
+
+  // ---- 3. uji ENTRY: berapa batas harga beli supaya tidak "kejar harga"? ----
+  // Semua dihitung untuk pick Top 3 "belum lari" (semua hari & saat pantulan).
+  // C0 = close hari sinyal, O = open hari entry (hari bursa berikutnya).
+  // H5/H10 = close hari ke-5/ke-10 sejak hari entry (hari entry = hari ke-1), dihitung dari HARGA BELI.
+  function diagEntry(built, t3){
+    const { seriesAsc, dateIdx } = built;
+    const picksAll = ((t3 && t3.picksByKey && t3.picksByKey.compF) || []).filter(e => e.idx != null);
+    const reg = mktRegimeSeries(seriesAsc);
+    const isBounce = d => reg[d] && reg[d].mkt5 != null && reg[d].mkt5 <= -3;
+    // rata-rata pasar per tanggal (entry di open, sama seperti uji swing) untuk alpha
+    const mk = { 5:{}, 10:{} };
+    Object.keys(seriesAsc).forEach(t => {
+      const a = seriesAsc[t];
+      for(let j=0;j<a.length;j++) [5,10].forEach(H => { const o = diagSwingOutcome(a, j, H, dateIdx); if(o) (mk[H][a[j].date] = mk[H][a[j].date] || []).push(o.ret); });
+    });
+    const mkMean = { 5:{}, 10:{} };
+    [5,10].forEach(H => Object.keys(mk[H]).forEach(d => { mkMean[H][d] = diagMean(mk[H][d]); }));
+
+    // data dasar tiap pick: C0, O, L1 (low hari entry), H1 high, close hari ke-5 & ke-10
+    const base = [];
+    picksAll.forEach(e => {
+      const a = seriesAsc[e.ticker]; const j = e.idx;
+      if(!a || j+10 >= a.length) return;
+      const di = dateIdx.get(a[j].date);
+      for(let k=1;k<=10;k++){ const r = a[j+k]; if(dateIdx.get(r.date) !== di+k || !(r.open>0 && r.high>0 && r.low>0 && r.close>0)) return; }
+      if(!(a[j].close > 0)) return;
+      let dn = Infinity; for(let k=1;k<=10;k++) dn = Math.min(dn, a[j+k].low);
+      base.push({ date: e.date, bounce: isBounce(e.date), C0: a[j].close, O: a[j+1].open, L1: a[j+1].low, H1: a[j+1].high,
+        c5: a[j+5].close, c10: a[j+10].close, low10: dn, m5: mkMean[5][e.date], m10: mkMean[10][e.date] });
+    });
+    const sum = (list, priceOf) => { // priceOf(b) -> harga beli atau null (tidak terisi)
+      const f = list.map(b => ({ b, p: priceOf(b) })).filter(x => x.p != null && x.p > 0);
+      if(!f.length) return { n: 0, fill: list.length ? 0 : null };
+      const r5 = f.map(x => (x.b.c5/x.p - 1)*100), r10 = f.map(x => (x.b.c10/x.p - 1)*100);
+      const a10 = f.filter(x => x.b.m10 != null).map(x => (x.b.c10/x.p - 1)*100 - x.b.m10);
+      return { n: f.length, fill: f.length/list.length*100, h5: diagMean(r5), h10: diagMean(r10), a10: diagMean(a10),
+        win10: r10.filter(v => v > 0).length/r10.length*100,
+        sl5: diagMean(f.map(x => (x.b.low10 <= x.p*0.95) ? -5 : (x.b.c10/x.p - 1)*100)) };
+    };
+    const groups = [ { key:'all', label:'Top 3 semua hari', list: base }, { key:'bounce', label:'Top 3 saat pantulan', list: base.filter(b => b.bounce) } ];
+    const gapPct = b => (b.O/b.C0 - 1)*100;
+    const gapBuckets = [
+      { label:'Open turun ≥ 1% dari close kemarin', f: g => g <= -1 },
+      { label:'Open turun 0–1%', f: g => g > -1 && g < 0 },
+      { label:'Open sama (0%)', f: g => g === 0 },
+      { label:'Open naik 0–1%', f: g => g > 0 && g <= 1 },
+      { label:'Open naik 1–2%', f: g => g > 1 && g <= 2 },
+      { label:'Open naik > 2%', f: g => g > 2 },
+    ];
+    // batas kejar: pasang antrian beli di C0 × (1 + x). Open di bawah batas → beli di open; open di atas batas tapi
+    // harga turun menyentuh batas di hari itu → beli di batas; tidak menyentuh → tidak beli.
+    const capFill = x => b => { const L = b.C0 * (1 + x/100); return b.O <= L ? b.O : (b.L1 <= L ? L : null); };
+    const caps = [ { label:'Beli di open, berapa pun (yang diuji selama ini)', fn: b => b.O },
+      { label:'Batas maks +3% dari close kemarin', fn: capFill(3) }, { label:'Batas maks +2%', fn: capFill(2) },
+      { label:'Batas maks +1%', fn: capFill(1) }, { label:'Batas maks = close kemarin (0%)', fn: capFill(0) } ];
+    // antri di bawah: beli hanya kalau harga turun ke level ini di hari entry
+    const dipFill = (refKey, y) => b => { const L = b[refKey] * (1 - y/100); return b.O <= L ? b.O : (b.L1 <= L ? L : null); };
+    const dips = [ { label:'Antri 1% di bawah close kemarin', fn: dipFill('C0', 1) }, { label:'Antri 2% di bawah close kemarin', fn: dipFill('C0', 2) },
+      { label:'Antri 1% di bawah open', fn: b => { const L = b.O*0.99; return b.L1 <= L ? L : null; } },
+      { label:'Antri 2% di bawah open', fn: b => { const L = b.O*0.98; return b.L1 <= L ? L : null; } } ];
+    return {
+      groups: groups.map(g => ({
+        ...g, n: g.list.length,
+        gaps: gapBuckets.map(k => ({ label: k.label, ...sum(g.list.filter(b => k.f(Math.round(gapPct(b)*100)/100)), b => b.O) })),
+        caps: caps.map(c => ({ label: c.label, ...sum(g.list, c.fn) })),
+        dips: dips.map(c => ({ label: c.label, ...sum(g.list, c.fn) })),
+        gapDist: { median: g.list.length ? diagQuantile(g.list.map(gapPct).sort((x,y)=>x-y), 0.5) : null, up2: g.list.length ? g.list.filter(b => gapPct(b) > 2).length/g.list.length*100 : null },
+      })),
+    };
+  }
+
+  function renderEntry(en){
+    const pc = v => v==null || !isFinite(v) ? '-' : (v>=0?'+':'') + v.toFixed(2) + '%';
+    const cls = v => v==null ? '' : (v>=0 ? 'pos' : 'neg');
+    const p0 = v => v==null ? '-' : v.toFixed(0) + '%';
+    const FEE = 0.4;
+    let h = `<div class="table-section-title" style="margin-top:28px;">3. Uji entry: sampai harga berapa masih boleh beli?</div>
+      <div class="msg-box info"><div>ℹ Untuk pick Top 3 "belum lari". <b>Close kemarin</b> = close hari sinyal; hari entry = hari bursa berikutnya. H5/H10 dihitung dari <b>harga beli</b>, alpha = dibanding rata-rata semua saham likuid yang dibeli di open hari yang sama. <b>Batas maks</b> = pasang antrian beli di close kemarin + x%: kalau open di bawah batas → beli di open; kalau open di atasnya tapi harga turun menyentuh batas hari itu → beli di batas; kalau tidak menyentuh → tidak jadi beli (kolom "Terisi"). Tidak ada antrian yang diulang hari berikutnya.</div></div>`;
+    const tbl = (title, rows, note) => `<div class="table-section-title" style="font-size:13px; margin-top:14px;">${title}</div>
+      <div class="preview-table-wrap"><table><thead><tr><th>Cara / kondisi</th><th>Kelompok</th><th>Transaksi</th><th>Terisi</th><th>Jual H5</th><th>Jual H10</th><th>H10 setelah fee</th><th>H10 + SL −5%</th><th>Alpha H10</th><th>Close H10 &gt; beli</th></tr></thead><tbody>` +
+      rows.map(r => r.n ? `<tr${r.first ? ' style="border-top:2px solid var(--border);"' : ''}><td>${r.first ? r.label : ''}</td><td>${r.group}</td><td>${r.n}</td><td>${p0(r.fill)}</td><td class="${cls(r.h5)}">${pc(r.h5)}</td><td class="${cls(r.h10)}">${pc(r.h10)}</td><td class="${cls(r.h10-FEE)}">${pc(r.h10-FEE)}</td><td class="${cls(r.sl5)}">${pc(r.sl5)}</td><td class="${cls(r.a10)}">${pc(r.a10)}</td><td>${p0(r.win10)}</td></tr>`
+        : `<tr${r.first ? ' style="border-top:2px solid var(--border);"' : ''}><td>${r.first ? r.label : ''}</td><td>${r.group}</td><td>0</td><td colspan="7">-</td></tr>`).join('') + `</tbody></table></div>${note || ''}`;
+    const rowsOf = key => { const out = []; const n = en.groups[0][key].length; for(let i=0;i<n;i++) en.groups.forEach((g, gi) => out.push({ ...g[key][i], group: g.label, first: gi === 0 })); return out; };
+    const g0 = en.groups[0], g1 = en.groups[1];
+    h += `<div class="msg-box info"><div>Sebaran open: median ${pc(g0.gapDist.median)} dari close kemarin; ${p0(g0.gapDist.up2)} pick dibuka naik &gt; 2% (saat pantulan: median ${pc(g1.gapDist.median)}, ${p0(g1.gapDist.up2)} naik &gt; 2%). Transaksi = ${g0.n} pick semua hari / ${g1.n} saat pantulan yang sudah punya 10 hari ke depan.</div></div>`;
+    h += tbl('A. Hasil menurut posisi open terhadap close kemarin (beli di open)', rowsOf('gaps'));
+    h += tbl('B. Batas maksimal harga beli (anti kejar harga)', rowsOf('caps'));
+    h += tbl('C. Antri di bawah (menunggu harga turun dulu)', rowsOf('dips'),
+      `<div style="font-size:11px; color:var(--text-faint); margin-top:6px;">Asumsi: antrian di level batas terisi kalau harga terendah hari itu menyentuh level tersebut (antrian panjang di harga yang sama bisa tidak kebagian, jadi hasil nyata bisa sedikit berbeda). Sampel "saat pantulan" kecil — bandingkan arah, bukan angka persis.</div>`);
+    // ringkasan otomatis untuk kelompok pantulan (aturan aktif), fallback semua hari
+    const gk = g1.n >= 20 ? g1 : g0;
+    const base = gk.caps[0];
+    const ok = gk.caps.slice(1).filter(c => c.n >= 10 && c.h10 != null && base.h10 != null && c.h10 >= base.h10 && c.fill >= 60);
+    const hiGap = gk.gaps[5];
+    let msg = `Untuk <b>${gk.label}</b>: beli di open berapa pun → H10 ${pc(base.h10)} (${base.n} transaksi).`;
+    if(hiGap && hiGap.n) msg += ` Pick yang dibuka naik &gt; 2%: H10 ${pc(hiGap.h10)} dari ${hiGap.n} transaksi.`;
+    if(ok.length){ const best = ok.reduce((a,b) => (b.h10 > a.h10 ? b : a)); msg += ` Batas yang hasilnya tidak lebih jelek dan masih terisi ≥ 60%: <b>${best.label.replace('Batas maks ','')}</b> (H10 ${pc(best.h10)}, terisi ${p0(best.fill)}).`; }
+    else msg += ` Belum ada batas harga yang jelas lebih baik dari beli di open — artinya tidak mengejar harga cukup dengan beli di sekitar open.`;
+    h += `<div class="msg-box ${ok.length ? 'success' : 'warning'}" style="margin-top:12px;"><div>🎯 ${msg} Sampel kecil, jadi pakai sebagai pagar, bukan angka pasti.</div></div>`;
+    return h;
   }
 
   function renderSwing(sw){

@@ -1068,7 +1068,7 @@
       if(!picks.length){
         html += `<div class="empty-state"><div class="msg">Top 3 tidak terpilih hari ini (kandidat sinyal baru kurang dari ${BL_MIN_POOL}).</div></div>`;
       }else{
-        html += `<div class="preview-table-wrap"><table><thead><tr><th>#</th><th>Saham</th><th>Skor belum lari</th><th>Close ${fmtTgl(latestDate)}</th><th>Chg hari itu</th><th>RSI14 / Trend</th><th>Kategori</th><th>Entry</th><th>SL −5% / −8% (perkiraan)</th><th>Jual (hari ke-5 / ke-10)</th><th>Catatan</th></tr></thead><tbody>` +
+        html += `<div class="preview-table-wrap"><table><thead><tr><th>#</th><th>Saham</th><th>Skor belum lari</th><th>Close ${fmtTgl(latestDate)}</th><th>Chg hari itu</th><th>RSI14 / Trend</th><th>Kategori</th><th>Entry</th><th>Batas beli maks +1% / +2%</th><th>SL −5% / −8% (perkiraan)</th><th>Jual (hari ke-5 / ke-10)</th><th>Catatan</th></tr></thead><tbody>` +
           picks.map((p, i) => {
             const x = info[p.ticker] || {}; const c = x.price.close; const ch = x.price.changePct;
             const tags = categoryTags(x.rs || {});
@@ -1078,11 +1078,12 @@
               <td>${x.ind.rsi14 != null ? x.ind.rsi14.toFixed(1) : '-'} / ${x.ind.trendLabel ?? '-'}</td>
               <td style="font-size:11px;">${tags.length ? tags.join(', ') : '-'}</td>
               <td>Open ${fmtTgl(entryDate)}</td>
+              <td>${c ? `${rp(c*1.01)} / ${rp(c*1.02)}` : '-'}</td>
               <td>${c ? `${rp(c*0.95)} / ${rp(c*0.92)}` : '-'}</td>
               <td>${fmtTgl(day5)} / ${fmtTgl(day10)}</td>
               <td style="font-size:11px;">${held ? `⚠ masih dipegang dari catatan ${held} — jangan beli dobel` : ''}</td></tr>`;
           }).join('') + `</tbody></table></div>
-          <div style="font-size:11px; color:var(--text-faint); margin-top:6px;">Level SL dihitung dari close terakhir sebagai perkiraan — hitung ulang dari harga beli sebenarnya. Tanggal jual = perkiraan hari bursa (Sabtu/Minggu dilewati, libur bursa belum diperhitungkan).</div>`;
+          <div style="font-size:11px; color:var(--text-faint); margin-top:6px;">Batas beli maks = close terakhir +1% / +2%: kalau harga sudah di atasnya, jangan kejar (pagar sementara — cek hasil uji di Diagnosa bagian 3). Level SL dihitung dari close terakhir sebagai perkiraan — hitung ulang dari harga beli sebenarnya. Tanggal jual = perkiraan hari bursa (Sabtu/Minggu dilewati, libur bursa belum diperhitungkan).</div>`;
       }
 
       // posisi dalam masa tahan
