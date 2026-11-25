@@ -1118,6 +1118,52 @@
       mdd, curve: curve.concat([{ date: dates[lastIdx], eq: endEq }]), nSignalDays: sigDocs.length };
   }
 
+  // perbandingan berdampingan: tahan 5 vs 10 hari, dengan & tanpa SL (pengaturan lain sama)
+  function renderSimCompare(docs, dates, indexOf, cfg){
+    const rp = v => v == null ? '-' : 'Rp ' + Math.round(v).toLocaleString('id-ID');
+    const pct = v => v == null || !isFinite(v) ? '-' : (v>=0?'+':'') + v.toFixed(2) + '%';
+    const cls = v => v == null ? '' : (v >= 0 ? 'pos' : 'neg');
+    const combos = [ { hold:5, sl:true }, { hold:5, sl:false }, { hold:10, sl:true }, { hold:10, sl:false } ];
+    const res = combos.map(c => ({ ...c, r: runSim(docs, dates, indexOf, { ...cfg, hold: c.hold, sl: c.sl }) }));
+    const best = res.reduce((a,b) => (b.r.endEq > a.r.endEq ? b : a));
+    let h = `<div class="table-section-title" style="font-size:13px; margin-top:4px;">⚖ Perbandingan tahan 5 vs 10 hari (modal, slot, periode, dan data sama)</div>
+      <div class="preview-table-wrap"><table><thead><tr><th>Skenario</th><th>Nilai akhir</th><th>Hasil</th><th>Transaksi selesai</th><th>Untung / rugi</th><th>Rata untung / rugi per transaksi</th><th>Turun terdalam</th><th>Posisi berjalan</th><th>Dilewati (kas habis)</th></tr></thead><tbody>` +
+      res.map(x => {
+        const r = x.r, n = r.trades.length;
+        const sel = x.hold === cfg.hold && x.sl === cfg.sl;
+        const kas = r.skipped.filter(s => s.why.startsWith('kas habis')).length;
+        return `<tr${sel ? ' style="background:rgba(212,175,55,.08);"' : ''}><td><b>Tahan ${x.hold} hari</b> · ${x.sl ? 'SL −5%' : 'tanpa SL'}${x === best ? ' 🏆' : ''}${sel ? ' <span style="font-size:10px;color:var(--text-faint);">(rincian di bawah)</span>' : ''}</td>
+          <td class="${cls(r.ret)}">${rp(r.endEq)}</td><td class="${cls(r.ret)}">${pct(r.ret)}</td><td>${n}</td>
+          <td>${r.wins} / ${r.losses}${n ? ` (${(r.wins/n*100).toFixed(0)}%)` : ''}</td>
+          <td><span class="pos">${pct(r.avgWin)}</span> / <span class="neg">${pct(r.avgLoss)}</span></td>
+          <td class="${r.mdd < 0 ? 'neg' : ''}">${r.mdd < 0 ? pct(r.mdd) : '0%'}</td><td>${r.running.length}</td><td>${kas}</td></tr>`;
+      }).join('') + `</tbody></table></div>`;
+    // grafik dua garis: 5 vs 10 hari (mengikuti pilihan SL saat ini)
+    const a = res.find(x => x.hold === 5 && x.sl === cfg.sl).r, b = res.find(x => x.hold === 10 && x.sl === cfg.sl).r;
+    const allDates = Array.from(new Set(a.curve.concat(b.curve).map(p => p.date))).sort();
+    if(allDates.length >= 2){
+      const W = 900, Hh = 170, pad = 30;
+      const stepOf = r => { const m = {}; r.curve.forEach(p => { m[p.date] = p.eq; }); let last = cfg.modal; return allDates.map(d => (last = m[d] != null ? m[d] : last)); };
+      const ya = stepOf(a), yb = stepOf(b);
+      const lo = Math.min(...ya, ...yb, cfg.modal * 0.95), hi = Math.max(...ya, ...yb, cfg.modal * 1.05);
+      const x = i => pad + i * (W - 2*pad) / (allDates.length - 1), y = v => Hh - pad/2 - (v - lo) / ((hi - lo) || 1) * (Hh - pad);
+      const path = arr => arr.map((v, i) => `${i ? 'L' : 'M'}${x(i).toFixed(1)},${y(v).toFixed(1)}`).join(' ');
+      h += `<svg viewBox="0 0 ${W} ${Hh}" style="width:100%; max-width:900px; height:auto; margin-top:8px;">
+        <line x1="${pad}" x2="${W-pad}" y1="${y(cfg.modal)}" y2="${y(cfg.modal)}" stroke="currentColor" stroke-opacity=".25" stroke-dasharray="4 4"/>
+        <path d="${path(ya)}" fill="none" stroke="#60a5fa" stroke-width="2"/>
+        <path d="${path(yb)}" fill="none" stroke="#f59e0b" stroke-width="2"/>
+        <text x="${pad}" y="12" fill="currentColor" fill-opacity=".6" font-size="11">${allDates[0]}</text>
+        <text x="${W-pad}" y="12" fill="currentColor" fill-opacity=".6" font-size="11" text-anchor="end">${allDates[allDates.length-1]}</text>
+        <text x="${pad+4}" y="${y(cfg.modal)-4}" fill="currentColor" fill-opacity=".5" font-size="10">modal awal</text>
+        <rect x="${W-pad-210}" y="20" width="10" height="3" fill="#60a5fa"/><text x="${W-pad-195}" y="25" fill="currentColor" fill-opacity=".8" font-size="11">Tahan 5 hari ${pct(a.ret)}</text>
+        <rect x="${W-pad-210}" y="36" width="10" height="3" fill="#f59e0b"/><text x="${W-pad-195}" y="41" fill="currentColor" fill-opacity=".8" font-size="11">Tahan 10 hari ${pct(b.ret)}</text></svg>
+        <div style="font-size:11px; color:var(--text-faint);">Garis = nilai portofolio (${cfg.sl ? 'SL −5%' : 'tanpa SL'}), naik/turun saat posisi dijual; titik akhir termasuk posisi yang masih berjalan.</div>`;
+    }
+    const n5 = a.trades.length, n10 = b.trades.length;
+    h += `<div class="msg-box ${n5 + n10 >= 30 ? 'info' : 'warning'}" style="margin-top:8px;"><div>${n5 + n10 >= 30 ? 'ℹ' : '⚠'} 🏆 = nilai akhir tertinggi di periode ini. Tahan 5 hari memutar modal lebih cepat (lebih banyak transaksi, lebih jarang kas habis); tahan 10 hari memberi waktu pantulan berkembang tapi modal terkunci lebih lama. ${n5 + n10 < 30 ? '<b>Transaksinya masih sedikit</b> — selisih kecil bisa cuma kebetulan; ulangi saat data live bertambah.' : 'Lihat juga apakah pemenangnya sama di "Live saja" dan di "Backtest + live" — kalau beda, belum bisa disimpulkan.'}</div></div>`;
+    return h;
+  }
+
   function renderSim(r){
     const rp = v => v == null ? '-' : 'Rp ' + Math.round(v).toLocaleString('id-ID');
     const pct = v => v == null || !isFinite(v) ? '-' : (v>=0?'+':'') + v.toFixed(2) + '%';
@@ -1316,7 +1362,7 @@
           source: document.getElementById('simSource').value,
         };
         simSaveCfg(cfg);
-        try{ document.getElementById('simResult').innerHTML = renderSim(runSim(docs, dates, indexOf, cfg)); }
+        try{ document.getElementById('simResult').innerHTML = renderSimCompare(docs, dates, indexOf, cfg) + `<div class="table-section-title" style="font-size:13px; margin-top:16px;">Rincian skenario terpilih: tahan ${cfg.hold} hari · ${cfg.sl ? 'SL −5%' : 'tanpa SL'}</div>` + renderSim(runSim(docs, dates, indexOf, cfg)); }
         catch(e){ console.error(e); document.getElementById('simResult').innerHTML = `<div class="msg-box error">Simulasi gagal: ${e.message}</div>`; }
       };
       ['simModal','simSlots','simHold','simSl','simPeriod','simSource'].forEach(id => document.getElementById(id).addEventListener('change', drawSim));
