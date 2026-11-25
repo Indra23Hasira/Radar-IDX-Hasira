@@ -1048,6 +1048,7 @@
     const sigDocs = docs.filter(d => d.si != null && d.si >= startIdx && isB(d) && (d.picks || []).length && d.res && d.res.picks)
       .filter(d => cfg.source === 'all' || (d.source !== 'backfill' && d.date >= '2026-11-09'))
       .sort((a,b) => a.si - b.si);
+    if(sigDocs.length) startIdx = Math.max(startIdx, sigDocs[0].si); // grafik dimulai dari hari pantulan pertama yang dipakai
     // kandidat transaksi per hari entry
     const entriesByIdx = {};
     sigDocs.forEach(d => (d.picks || []).forEach(p => {
@@ -1111,7 +1112,7 @@
     const realized = trades;
     const wins = realized.filter(x => x.pl > 0), losses = realized.filter(x => x.pl <= 0);
     let peak = -Infinity, mdd = 0;
-    curve.forEach(c => { peak = Math.max(peak, c.eq); mdd = Math.min(mdd, (c.eq - peak) / peak * 100); });
+    curve.concat([{ eq: endEq }]).forEach(c => { peak = Math.max(peak, c.eq); mdd = Math.min(mdd, (c.eq - peak) / peak * 100); });
     return { cfg, start: dates[startIdx], end: dates[lastIdx], cash, endEq, ret: (endEq / cfg.modal - 1) * 100, trades: realized, running, skipped,
       wins: wins.length, losses: losses.length, avgWin: wins.length ? rMean(wins.map(x => x.plPct)) : null, avgLoss: losses.length ? rMean(losses.map(x => x.plPct)) : null,
       mdd, curve: curve.concat([{ date: dates[lastIdx], eq: endEq }]), nSignalDays: sigDocs.length };
@@ -1127,7 +1128,8 @@
     let svg = '';
     if(pts.length >= 2){
       const W = 900, Hh = 160, pad = 30;
-      const ys = pts.map(p => p.eq), lo = Math.min(...ys, c.modal), hi = Math.max(...ys, c.modal);
+      // skala minimal ±5% dari modal supaya naik-turun kecil tidak terlihat seperti anjlok
+      const ys = pts.map(p => p.eq), lo = Math.min(...ys, c.modal * 0.95), hi = Math.max(...ys, c.modal * 1.05);
       const x = i => pad + i * (W - 2*pad) / (pts.length - 1), y = v => Hh - pad/2 - (v - lo) / ((hi - lo) || 1) * (Hh - pad);
       const line = pts.map((p, i) => `${i ? 'L' : 'M'}${x(i).toFixed(1)},${y(p.eq).toFixed(1)}`).join(' ');
       svg = `<svg viewBox="0 0 ${W} ${Hh}" style="width:100%; max-width:900px; height:auto; margin-top:8px;">
@@ -1135,14 +1137,15 @@
         <path d="${line}" fill="none" stroke="${r.endEq >= c.modal ? '#4ade80' : '#f87171'}" stroke-width="2"/>
         <text x="${pad}" y="12" fill="currentColor" fill-opacity=".6" font-size="11">${pts[0].date}</text>
         <text x="${W-pad}" y="12" fill="currentColor" fill-opacity=".6" font-size="11" text-anchor="end">${pts[pts.length-1].date}</text>
-        <text x="${pad+4}" y="${y(c.modal)-4}" fill="currentColor" fill-opacity=".5" font-size="10">modal awal</text></svg>`;
+        <text x="${pad+4}" y="${y(c.modal)-4}" fill="currentColor" fill-opacity=".5" font-size="10">modal awal</text>
+        <text x="${W-pad}" y="${Math.min(Hh-4, y(pts[pts.length-1].eq)+14)}" fill="currentColor" fill-opacity=".7" font-size="10" text-anchor="end">${(r.ret>=0?'+':'') + r.ret.toFixed(2)}%</text></svg>`;
     }
     let h = `<div class="stats-grid">
       <div class="stats-card"><div class="sc-label">Modal awal</div><div class="sc-val">${rp(c.modal)}</div><div class="sc-sub">${r.start} s/d ${r.end}</div></div>
       <div class="stats-card"><div class="sc-label">Nilai akhir</div><div class="sc-val ${cls(r.ret)}">${rp(r.endEq)}</div><div class="sc-sub">${pct(r.ret)} · kas ${rp(r.cash)}</div></div>
       <div class="stats-card"><div class="sc-label">Transaksi selesai</div><div class="sc-val">${r.trades.length}</div><div class="sc-sub">${r.wins} untung / ${r.losses} rugi${r.trades.length ? ` (${(r.wins/r.trades.length*100).toFixed(0)}%)` : ''}</div></div>
       <div class="stats-card"><div class="sc-label">Rata untung / rugi</div><div class="sc-val"><span class="pos">${pct(r.avgWin)}</span> / <span class="neg">${pct(r.avgLoss)}</span></div><div class="sc-sub">per transaksi, setelah fee</div></div>
-      <div class="stats-card"><div class="sc-label">Turun terdalam</div><div class="sc-val neg">${pct(r.mdd)}</div><div class="sc-sub">dari puncak ekuitas (terealisasi)</div></div>
+      <div class="stats-card"><div class="sc-label">Turun terdalam</div><div class="sc-val ${r.mdd < 0 ? 'neg' : ''}">${r.mdd < 0 ? pct(r.mdd) : '0%'}</div><div class="sc-sub">dari puncak nilai portofolio</div></div>
       <div class="stats-card"><div class="sc-label">Posisi berjalan</div><div class="sc-val">${r.running.length}</div><div class="sc-sub">${r.nSignalDays} hari pantulan dipakai</div></div>
     </div>${svg}`;
     const rows = r.running.concat(r.trades.slice().reverse());
