@@ -1023,6 +1023,160 @@
   }
   function fmtTgl(s){ if(!s) return '-'; const d = new Date(s + 'T00:00:00Z'); return d.toLocaleDateString('id-ID', { weekday:'short', day:'numeric', month:'short', timeZone:'UTC' }); }
 
+
+  // ============================================================
+  // SIMULASI MODAL (tab Eksekusi): seolah-olah mengikuti aturan aktif dengan uang sungguhan.
+  // Modal bergerak: tiap beli mengurangi kas, tiap jual (untung/rugi) mengembalikan kas.
+  // Aturan: hari catatan dengan kondisi pantulan → beli Top 3 di hari bursa berikutnya dengan
+  // antri di close hari sinyal (kalau tidak terisi → lewat), porsi = ekuitas / jumlah slot,
+  // dibulatkan ke lot (100 lembar), tidak beli saham yang masih dipegang, jual di close hari ke-H
+  // atau di SL −5% kalau tersentuh lebih dulu. Fee beli 0,15% + jual 0,25%.
+  // ============================================================
+  const SIM_FEE_BUY = 0.0015, SIM_FEE_SELL = 0.0025;
+  function simLoadCfg(){
+    const d = { modal: 20000000, slots: 6, hold: 10, sl: true, period: 'all', source: 'all' };
+    try{ return { ...d, ...(JSON.parse(localStorage.getItem('simCfg') || '{}')) }; }catch(e){ return d; }
+  }
+  function simSaveCfg(c){ try{ localStorage.setItem('simCfg', JSON.stringify(c)); }catch(e){} }
+
+  function runSim(docs, dates, indexOf, cfg){
+    const H = cfg.hold;
+    const isB = d => d.market && d.market.mkt5 != null && d.market.mkt5 <= BL_BOUNCE_MKT5;
+    const lastIdx = dates.length - 1;
+    let startIdx = 0;
+    if(cfg.period !== 'all'){ const n = cfg.period === '1m' ? 21 : 63; startIdx = Math.max(0, lastIdx - n); }
+    const sigDocs = docs.filter(d => d.si != null && d.si >= startIdx && isB(d) && (d.picks || []).length && d.res && d.res.picks)
+      .filter(d => cfg.source === 'all' || (d.source !== 'backfill' && d.date >= '2026-11-09'))
+      .sort((a,b) => a.si - b.si);
+    // kandidat transaksi per hari entry
+    const entriesByIdx = {};
+    sigDocs.forEach(d => (d.picks || []).forEach(p => {
+      const o = d.res.picks[p.ticker];
+      if(!o || o.invalid || !(o.done >= 1)) return;
+      (entriesByIdx[d.si + 1] = entriesByIdx[d.si + 1] || []).push({ d, t: p.ticker, o });
+    }));
+    let cash = cfg.modal;
+    const open = []; // posisi dipegang
+    const trades = [], skipped = [];
+    const curve = [{ date: dates[startIdx], eq: cfg.modal }];
+    const realizedEq = () => cash + open.reduce((a,x) => a + x.cost, 0);
+    const closePos = (pos, idx) => {
+      const proceeds = pos.shares * pos.exitPx * (1 - SIM_FEE_SELL);
+      cash += proceeds;
+      const pl = proceeds - pos.cost;
+      trades.push({ ...pos, exitDate: dates[idx], proceeds, pl, plPct: pl / pos.cost * 100, status: 'selesai' });
+    };
+    for(let idx = startIdx; idx <= lastIdx; idx++){
+      // 1) jual yang jatuh tempo hari ini
+      for(let i = open.length - 1; i >= 0; i--){ if(open[i].exitIdx === idx){ closePos(open[i], idx); open.splice(i, 1); } }
+      if(trades.length) curve.push({ date: dates[idx], eq: realizedEq() });
+      // 2) beli yang entry-nya hari ini
+      (entriesByIdx[idx] || []).forEach(({ d, t, o }) => {
+        const tag = `${t} (${d.date})`;
+        if(open.some(x => x.t === t)){ skipped.push({ tag, why: 'masih dipegang' }); return; }
+        const q = o.q;
+        if(q && q.nofill){ skipped.push({ tag, why: 'antrian tidak terisi' }); return; }
+        const v = q && q.entry ? { entry: q.entry, r: q['h'+H], dn: H === 5 ? q.dn5 : q.dn10, hl: q.hl, dnL: q.dnL } : { entry: o.entry || null, r: o['h'+H], dn: H === 5 ? o.dn5 : o.dn10, hl: o.hl, dnL: o.dnL };
+        const alloc = Math.min(cash, realizedEq() / cfg.slots);
+        let shares, cost;
+        if(v.entry){
+          const lots = Math.floor(alloc / (v.entry * 100 * (1 + SIM_FEE_BUY)));
+          if(lots < 1){ skipped.push({ tag, why: cash < realizedEq() / cfg.slots ? 'kas habis (semua slot terpakai)' : 'harga 1 lot melebihi porsi' }); return; }
+          shares = lots * 100; cost = shares * v.entry * (1 + SIM_FEE_BUY);
+        }else{
+          if(alloc < 100000){ skipped.push({ tag, why: 'kas habis (semua slot terpakai)' }); return; }
+          shares = alloc / (1 + SIM_FEE_BUY) / 1000; cost = alloc; v.entry = 1000; // data lama tanpa harga: hitung berdasar nilai, tanpa pembulatan lot
+        }
+        cash -= cost;
+        const exitIdx = d.si + H;
+        const done = exitIdx <= lastIdx && v.r != null;
+        let exitPx = null, reason = '';
+        if(done){
+          const slHit = cfg.sl && v.dn != null && v.dn <= -5;
+          exitPx = slHit ? v.entry * 0.95 : v.entry * (1 + v.r/100);
+          reason = slHit ? 'SL −5%' : `close hari ke-${H}`;
+        }
+        const pos = { t, d, live: d.source !== 'backfill' && d.date >= '2026-11-09', entryDate: dates[idx], entry: v.entry, shares, cost, exitIdx, exitPx, reason, noPrice: !(q && q.entry) && !o.entry, hl: v.hl, dnL: v.dnL };
+        if(done) open.push(pos); else open.push({ ...pos, exitIdx: Infinity });
+      });
+    }
+    // posisi yang belum selesai: nilai berjalan (close terakhir; kalau SL sudah tersentuh, dihitung di −5%)
+    const running = open.map(p => {
+      const slHit = cfg.sl && p.dnL != null && p.dnL <= -5;
+      const r = slHit ? -5 : (p.hl != null ? p.hl : 0);
+      const value = p.shares * p.entry * (1 + r/100) * (1 - SIM_FEE_SELL);
+      return { ...p, value, pl: value - p.cost, plPct: (value - p.cost) / p.cost * 100, status: slHit ? 'berjalan (SL tersentuh)' : 'berjalan' };
+    });
+    const endEq = cash + running.reduce((a,x) => a + x.value, 0);
+    const realized = trades;
+    const wins = realized.filter(x => x.pl > 0), losses = realized.filter(x => x.pl <= 0);
+    let peak = -Infinity, mdd = 0;
+    curve.forEach(c => { peak = Math.max(peak, c.eq); mdd = Math.min(mdd, (c.eq - peak) / peak * 100); });
+    return { cfg, start: dates[startIdx], end: dates[lastIdx], cash, endEq, ret: (endEq / cfg.modal - 1) * 100, trades: realized, running, skipped,
+      wins: wins.length, losses: losses.length, avgWin: wins.length ? rMean(wins.map(x => x.plPct)) : null, avgLoss: losses.length ? rMean(losses.map(x => x.plPct)) : null,
+      mdd, curve: curve.concat([{ date: dates[lastIdx], eq: endEq }]), nSignalDays: sigDocs.length };
+  }
+
+  function renderSim(r){
+    const rp = v => v == null ? '-' : 'Rp ' + Math.round(v).toLocaleString('id-ID');
+    const pct = v => v == null || !isFinite(v) ? '-' : (v>=0?'+':'') + v.toFixed(2) + '%';
+    const cls = v => v == null ? '' : (v >= 0 ? 'pos' : 'neg');
+    const c = r.cfg;
+    // grafik ekuitas sederhana (SVG)
+    const pts = r.curve.filter((p, i, a) => i === 0 || p.date !== a[i-1].date || i === a.length-1);
+    let svg = '';
+    if(pts.length >= 2){
+      const W = 900, Hh = 160, pad = 30;
+      const ys = pts.map(p => p.eq), lo = Math.min(...ys, c.modal), hi = Math.max(...ys, c.modal);
+      const x = i => pad + i * (W - 2*pad) / (pts.length - 1), y = v => Hh - pad/2 - (v - lo) / ((hi - lo) || 1) * (Hh - pad);
+      const line = pts.map((p, i) => `${i ? 'L' : 'M'}${x(i).toFixed(1)},${y(p.eq).toFixed(1)}`).join(' ');
+      svg = `<svg viewBox="0 0 ${W} ${Hh}" style="width:100%; max-width:900px; height:auto; margin-top:8px;">
+        <line x1="${pad}" x2="${W-pad}" y1="${y(c.modal)}" y2="${y(c.modal)}" stroke="currentColor" stroke-opacity=".25" stroke-dasharray="4 4"/>
+        <path d="${line}" fill="none" stroke="${r.endEq >= c.modal ? '#4ade80' : '#f87171'}" stroke-width="2"/>
+        <text x="${pad}" y="12" fill="currentColor" fill-opacity=".6" font-size="11">${pts[0].date}</text>
+        <text x="${W-pad}" y="12" fill="currentColor" fill-opacity=".6" font-size="11" text-anchor="end">${pts[pts.length-1].date}</text>
+        <text x="${pad+4}" y="${y(c.modal)-4}" fill="currentColor" fill-opacity=".5" font-size="10">modal awal</text></svg>`;
+    }
+    let h = `<div class="stats-grid">
+      <div class="stats-card"><div class="sc-label">Modal awal</div><div class="sc-val">${rp(c.modal)}</div><div class="sc-sub">${r.start} s/d ${r.end}</div></div>
+      <div class="stats-card"><div class="sc-label">Nilai akhir</div><div class="sc-val ${cls(r.ret)}">${rp(r.endEq)}</div><div class="sc-sub">${pct(r.ret)} · kas ${rp(r.cash)}</div></div>
+      <div class="stats-card"><div class="sc-label">Transaksi selesai</div><div class="sc-val">${r.trades.length}</div><div class="sc-sub">${r.wins} untung / ${r.losses} rugi${r.trades.length ? ` (${(r.wins/r.trades.length*100).toFixed(0)}%)` : ''}</div></div>
+      <div class="stats-card"><div class="sc-label">Rata untung / rugi</div><div class="sc-val"><span class="pos">${pct(r.avgWin)}</span> / <span class="neg">${pct(r.avgLoss)}</span></div><div class="sc-sub">per transaksi, setelah fee</div></div>
+      <div class="stats-card"><div class="sc-label">Turun terdalam</div><div class="sc-val neg">${pct(r.mdd)}</div><div class="sc-sub">dari puncak ekuitas (terealisasi)</div></div>
+      <div class="stats-card"><div class="sc-label">Posisi berjalan</div><div class="sc-val">${r.running.length}</div><div class="sc-sub">${r.nSignalDays} hari pantulan dipakai</div></div>
+    </div>${svg}`;
+    const rows = r.running.concat(r.trades.slice().reverse());
+    if(rows.length){
+      h += `<div class="preview-table-wrap" style="margin-top:10px;"><table><thead><tr><th>Saham</th><th>Data</th><th>Dicatat</th><th>Beli</th><th>Lembar</th><th>Modal terpakai</th><th>Jual</th><th>Hasil (Rp)</th><th>Hasil (%)</th><th>Status</th></tr></thead><tbody>` +
+        rows.map(x => `<tr><td><b>${x.t}</b></td><td>${x.live ? 'live' : '<span style="color:var(--text-faint);">backtest</span>'}</td><td>${x.d.date}</td>
+          <td>${x.entryDate}${x.noPrice ? '' : ` · ${Math.round(x.entry).toLocaleString('id-ID')}`}</td><td>${x.noPrice ? '-' : x.shares.toLocaleString('id-ID')}</td><td>${rp(x.cost)}</td>
+          <td>${x.status === 'selesai' ? `${x.exitDate}${x.noPrice ? '' : ' · ' + Math.round(x.exitPx).toLocaleString('id-ID')} <span style="font-size:10px;color:var(--text-faint);">(${x.reason})</span>` : '-'}</td>
+          <td class="${cls(x.pl)}">${rp(x.pl)}</td><td class="${cls(x.plPct)}">${pct(x.plPct)}</td><td>${x.status}</td></tr>`).join('') + `</tbody></table></div>`;
+    }else{
+      h += `<div class="empty-state"><div class="msg">Belum ada transaksi di periode ini (tidak ada hari pantulan).</div></div>`;
+    }
+    if(r.skipped.length){
+      const cnt = {}; r.skipped.forEach(s => { cnt[s.why] = (cnt[s.why] || 0) + 1; });
+      h += `<div style="font-size:11px; color:var(--text-faint); margin-top:6px;">Tidak dibeli: ${Object.entries(cnt).map(([k,v]) => `${v}× ${k}`).join(', ')}.</div>`;
+    }
+    h += `<div style="font-size:11px; color:var(--text-faint); margin-top:6px;">Asumsi: antrian beli di close hari sinyal (terisi kalau open atau harga terendah hari itu ≤ level antri), fee beli 0,15% + jual 0,25%, porsi = nilai portofolio ÷ jumlah slot (dibulatkan ke lot 100 lembar, dibatasi kas yang ada), jual di close hari ke-${c.hold} atau di −5% kalau SL aktif dan tersentuh lebih dulu (uang hasil SL baru dianggap kembali di hari ke-${c.hold}). Gap turun di bawah SL dan antrian yang tidak kebagian belum diperhitungkan, jadi hasil nyata bisa sedikit lebih jelek. Data lama yang belum punya harga antri dihitung dari open; jalankan Diagnosa "Rapikan riwayat" sekali supaya semua memakai harga antri.</div>`;
+    return h;
+  }
+
+  function simControlsHtml(c){
+    const opt = (v, cur, label) => `<option value="${v}" ${String(v) === String(cur) ? 'selected' : ''}>${label}</option>`;
+    return `<div class="table-section-title">🧪 Simulasi modal — seolah-olah mengikuti tab ini dengan uang sungguhan</div>
+      <div style="display:flex; gap:12px; flex-wrap:wrap; align-items:flex-end; font-size:12px; color:var(--text-dim); margin-bottom:6px;">
+        <label>Modal awal (Rp)<br><input type="number" id="simModal" value="${c.modal}" min="1000000" step="1000000" style="width:140px;"></label>
+        <label>Jumlah slot posisi<br><select id="simSlots">${[3,4,5,6,8,10].map(n => opt(n, c.slots, n + ' slot')).join('')}</select></label>
+        <label>Tahan<br><select id="simHold">${opt(5, c.hold, '5 hari bursa')}${opt(10, c.hold, '10 hari bursa')}</select></label>
+        <label>Stop loss<br><select id="simSl">${opt('1', c.sl ? '1' : '0', 'SL −5%')}${opt('0', c.sl ? '1' : '0', 'Tanpa SL')}</select></label>
+        <label>Periode<br><select id="simPeriod">${opt('1m', c.period, '1 bulan terakhir')}${opt('3m', c.period, '3 bulan terakhir')}${opt('all', c.period, 'Semua data')}</select></label>
+        <label>Data<br><select id="simSource">${opt('all', c.source, 'Backtest + live')}${opt('live', c.source, 'Live saja (sejak 9 Nov)')}</select></label>
+      </div>
+      <div id="simResult"></div>`;
+  }
+
   async function loadExecTab(){
     const box = document.getElementById('execContent');
     box.innerHTML = `<div class="loading-msg">Menyiapkan daftar eksekusi...</div>`;
@@ -1144,7 +1298,26 @@
         <div class="msg-box info"><div>${bl.length ? bl.map(t => `<b style="color:var(--gold);">${t}</b>`).join(', ') : 'Tidak ada hari ini.'} — unggul dari pasar di backtest, tapi <b>belum ada aturan waktu masuk</b> (saat pantulan justru jelek). Jangan dijadikan sinyal beli dulu.</div></div>`;
 
       html += `<div class="msg-box warning"><div>⚠ Pengingat: (1) entry hanya saat ✅ BOLEH ENTRY, antri di close kemarin — jangan kejar; (2) analisa chart/berita tetap wajib; (3) lot kecil — sekitar separuh posisi sempat turun ≥5% sebelum hasil akhir; (4) jangan beli saham yang sama dua kali selama masih dalam masa tahan.</div></div>`;
+
+      // simulasi modal
+      const simCfg = simLoadCfg();
+      html += simControlsHtml(simCfg);
       box.innerHTML = html;
+      const drawSim = () => {
+        const cfg = {
+          modal: Math.max(1000000, parseFloat(document.getElementById('simModal').value) || 20000000),
+          slots: parseInt(document.getElementById('simSlots').value, 10) || 6,
+          hold: parseInt(document.getElementById('simHold').value, 10) || 10,
+          sl: document.getElementById('simSl').value === '1',
+          period: document.getElementById('simPeriod').value,
+          source: document.getElementById('simSource').value,
+        };
+        simSaveCfg(cfg);
+        try{ document.getElementById('simResult').innerHTML = renderSim(runSim(docs, dates, indexOf, cfg)); }
+        catch(e){ console.error(e); document.getElementById('simResult').innerHTML = `<div class="msg-box error">Simulasi gagal: ${e.message}</div>`; }
+      };
+      ['simModal','simSlots','simHold','simSl','simPeriod','simSource'].forEach(id => document.getElementById(id).addEventListener('change', drawSim));
+      drawSim();
     }catch(err){
       console.error('loadExecTab gagal:', err);
       box.innerHTML = `<div class="empty-state"><div class="big">⚠</div><div class="msg">Gagal menyiapkan daftar eksekusi.</div><div class="sub">${err.message}</div></div>`;

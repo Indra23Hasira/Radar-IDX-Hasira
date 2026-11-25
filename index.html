@@ -3274,6 +3274,7 @@
       up = Math.max(up, r.high); dn = Math.min(dn, r.low);
       if(SW_HS.includes(k)) o['h'+k] = swR((r.close/entry - 1)*100);
       if(k === 3){ o.up3 = swR((up/entry-1)*100); o.dn3 = swR((dn/entry-1)*100); }
+      if(k === 5){ o.up5 = swR((up/entry-1)*100); o.dn5 = swR((dn/entry-1)*100); }
       if(k === 10){ o.up10 = swR((up/entry-1)*100); o.dn10 = swR((dn/entry-1)*100); }
       // posisi berjalan (untuk tab Eksekusi): hasil & naik/turun terjauh sampai hari terakhir yang ada
       o.hl = swR((r.close/entry - 1)*100); o.upL = swR((up/entry-1)*100); o.dnL = swR((dn/entry-1)*100);
@@ -3294,6 +3295,7 @@
           const r = rowsByDate[dates[si+k]];
           qu = Math.max(qu, r.high); qd = Math.min(qd, r.low);
           if(SW_HS.includes(k)) q['h'+k] = swR((r.close/qe - 1)*100);
+          if(k === 5){ q.up5 = swR((qu/qe-1)*100); q.dn5 = swR((qd/qe-1)*100); }
           if(k === 10){ q.up10 = swR((qu/qe-1)*100); q.dn10 = swR((qd/qe-1)*100); }
           q.hl = swR((r.close/qe - 1)*100); q.upL = swR((qu/qe-1)*100); q.dnL = swR((qd/qe-1)*100);
         }
