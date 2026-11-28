@@ -25,7 +25,7 @@ ownership untuk Konglo.
 ## Setup (sekali)
 
 Firebase Console → project **radar-idx-hasira** → Firestore Database → **Rules** → tempel isi
-`firestore.rules.radarbundles` di dalam `match /databases/{database}/documents { … }` → **Publish**.
+`firestore.rules` (rules lengkap untuk semua koleksi, termasuk `radarBundles`) → ganti seluruh isi → isi UID pemilik → **Publish**.
 
 Sebelum rules dipasang aplikasi tetap jalan normal (cara lama) dan halaman upload menampilkan peringatan
 "Arsip hemat … gagal ditulis".

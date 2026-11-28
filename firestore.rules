@@ -1,0 +1,60 @@
+rules_version = '2';
+// =====================================================================
+// Firestore rules LENGKAP untuk project radar-idx-hasira
+// (dipakai bersama: Radar IDX, Dashboard, Radar Konglo, Radar Pengendali, Radar-DayTrade)
+//
+// Prinsip:
+//  - Hanya PEMILIK (1 akun, dikenali dari UID — bukan email, supaya data pribadi tidak
+//    tertulis di repo publik) yang boleh MENULIS apa pun.
+//  - Data pribadi (watchlist, catatan pick, statistik, fundamental tersimpan, dll.) hanya
+//    boleh DIBACA pemilik.
+//  - Hanya data pasar yang dipakai halaman publik Radar Konglo yang boleh dibaca tanpa login.
+//  - Tidak ada aturan "catch-all": koleksi yang tidak disebut di sini otomatis DITOLAK.
+//  - Radar-DayTrade runner memakai firebase-admin (service account) → tidak terkena rules ini.
+//
+// Cara pasang: Firebase Console → Firestore Database → Rules → ganti SELURUH isi dengan file
+// ini → ganti GANTI_DENGAN_UID_PEMILIK dengan UID akunmu (Authentication → Users → kolom
+// "User UID") → Publish. UID bukan rahasia; aman disimpan di repo.
+// =====================================================================
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function isOwner() {
+      return request.auth != null && request.auth.uid == "GANTI_DENGAN_UID_PEMILIK";
+    }
+
+    // ---------- Data pasar yang dipakai halaman publik Radar Konglo (baca tanpa login) ----------
+    match /dailySummary/{document=**} {
+      allow read: if true;
+      allow write: if isOwner();
+    }
+    match /ownership/{document=**} {
+      allow read: if true;
+      allow write: if isOwner();
+    }
+    // Arsip hemat: ringkasan harian & ownership publik; salinan rolling stats dll. hanya pemilik
+    match /radarBundles/{docId} {
+      allow read: if docId == "meta" || docId.matches("day_.*") || docId.matches("ownership.*") || isOwner();
+      allow write: if isOwner();
+    }
+
+    // ---------- Data milik pemilik saja (baca & tulis) ----------
+    match /tickerHistory/{document=**}       { allow read, write: if isOwner(); }
+    match /tickerRollingStats/{document=**}  { allow read, write: if isOwner(); }
+    match /tickerIndicators/{document=**}    { allow read, write: if isOwner(); }
+    match /tickerFundamental/{document=**}   { allow read, write: if isOwner(); }
+    match /holdFundamentalData/{document=**} { allow read, write: if isOwner(); }
+    match /watchlist/{document=**}           { allow read, write: if isOwner(); }
+    match /topPicks/{document=**}            { allow read, write: if isOwner(); }
+    match /statsHistory/{document=**}        { allow read, write: if isOwner(); }
+    match /systemMeta/{document=**}          { allow read, write: if isOwner(); }
+    match /uploadHistory/{document=**}       { allow read, write: if isOwner(); }
+    match /holders/{document=**}             { allow read, write: if isOwner(); }
+    match /groups/{document=**}              { allow read, write: if isOwner(); }
+
+    // ---------- Radar-DayTrade (koleksi daytrade*) ----------
+    match /{col}/{docId} {
+      allow read, write: if col.matches('daytrade.*') && isOwner();
+    }
+  }
+}
