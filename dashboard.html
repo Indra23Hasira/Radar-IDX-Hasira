@@ -4,6 +4,34 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Stock Radar — Dashboard</title>
+<script>
+  // ============================================================
+  // MODE DEMO — buka dashboard.html?demo=1
+  // Data saham FIKTIF (kode berawalan X) dari demo/demo-data.json, Firebase
+  // diganti demo/fake-firebase.js (berjalan di memori browser): tanpa login,
+  // tanpa satu pun permintaan ke Firebase/Google, tanpa internet luar.
+  // ============================================================
+  window.RADAR_DEMO = new URLSearchParams(location.search).get('demo') === '1';
+  if(window.RADAR_DEMO){
+    document.documentElement.classList.add('demo');
+    // jam dibekukan ke akhir data demo (Jumat 27 Nov 2026, 18.00 WIB), supaya
+    // hitungan "hari ini / sudah berapa hari" selalu cocok dengan data fiktifnya
+    const OFF = Date.parse('2026-11-27T11:00:00Z') - Date.now();
+    const RealDate = Date;
+    class DemoDate extends RealDate {
+      constructor(...a){ if(a.length) super(...a); else super(RealDate.now() + OFF); }
+      static now(){ return RealDate.now() + OFF; }
+    }
+    window.Date = DemoDate;
+    // pagar pengaman: semua fetch ke luar situs ini ditolak
+    const realFetch = window.fetch.bind(window);
+    window.fetch = (input, init) => {
+      const u = new URL(typeof input === 'string' ? input : input.url, location.href);
+      if(u.origin !== location.origin) return Promise.reject(new TypeError('Mode demo: akses ke luar dimatikan (' + u.host + ')'));
+      return realFetch(input, init);
+    };
+  }
+</script>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Big+Shoulders+Display:wght@600;700;800&family=Inter:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
 <style>
@@ -264,10 +292,19 @@
   .metric-tag{ font-family:'IBM Plex Mono'; font-size:10.5px; padding:2px 6px; border-radius:3px; background:var(--panel-alt);
     border:1px solid var(--border-soft); color:var(--amber-flag); white-space:nowrap; }
   .metric-note{ font-size:9.5px; color:var(--text-faint); display:block; margin-top:2px; }
+
+  /* MODE DEMO */
+  .demo-banner{ display:none; background:repeating-linear-gradient(135deg, #3a2a05 0 14px, #2c2004 14px 28px); border-bottom:1px solid #8a6a12;
+    color:#F5D67A; font-size:12px; padding:8px 20px; text-align:center; line-height:1.5; }
+  .demo-banner b{ letter-spacing:.12em; }
+  html.demo .demo-banner{ display:block; }
+  html.demo #tabHoldBtn, html.demo #btnLogout, html.demo .header-nav a[href="index.html"], html.demo #loginOverlay,
+  html.demo a[href*="stockbit.com"]{ display:none !important; }
 </style>
 </head>
 <body>
 
+<div class="demo-banner" id="demoBanner"><b>MODE DEMO</b> · semua saham &amp; angka di sini FIKTIF (kode berawalan X), bukan rekomendasi. Tidak terhubung ke database — perubahan hanya tersimpan sampai halaman ditutup.</div>
 <header>
   <div class="brand">
     <div class="radar-icon"><div class="radar-sweep"></div></div>
@@ -299,6 +336,7 @@
       <div id="loginError" style="display:none; color:var(--negative); font-size:12px; margin-bottom:10px;"></div>
       <button type="submit" class="btn-apply" style="width:100%;">Masuk</button>
     </form>
+    <div style="text-align:center; margin-top:14px; font-size:12px;"><a href="?demo=1" style="color:var(--text-dim);">Lihat mode demo (data fiktif, tanpa login) →</a></div>
   </div>
 </div>
 
@@ -469,15 +507,28 @@
 
   async function initFirebase(){
     try{
-      const { initializeApp } = await import("https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js");
-      const fs = await import("https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js");
-      const af = await import("https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js");
-      const app = initializeApp(firebaseConfig);
+      let initializeApp, fs, af;
+      if(window.RADAR_DEMO){
+        document.documentElement.classList.add('demo');
+        document.title = 'Stock Radar — Demo (data fiktif)';
+        const demo = await import('./demo/fake-firebase.js');
+        const res = await fetch('./demo/demo-data.json');
+        if(!res.ok) throw new Error('data demo tidak ditemukan (HTTP ' + res.status + ')');
+        demo.__loadStore(await res.json());
+        initializeApp = demo.initializeApp; fs = demo; af = demo;
+      }else{
+        ({ initializeApp } = await import("https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js"));
+        fs = await import("https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js");
+        af = await import("https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js");
+      }
+      const app = initializeApp(window.RADAR_DEMO ? {} : firebaseConfig);
       db = fs.getFirestore(app);
       auth = af.getAuth(app);
       firestoreFns = fs;
       authFns = af;
-      try{
+      // demo: arsip hemat dimatikan — cache IndexedDB-nya dipakai bersama aplikasi asli
+      // di domain yang sama, jadi data fiktif tidak boleh ikut masuk ke sana
+      if(!window.RADAR_DEMO) try{
         const rbm = await import('./radar-bundle.js?v=1');
         RB = rbm.createRadarBundles({ db, fs, log: (t) => console.info('[arsip hemat]', t) });
       }catch(e){ console.warn('Arsip hemat tidak aktif (pakai cara lama):', e); RB = null; }
@@ -1602,6 +1653,7 @@
   document.getElementById('tabExecBtn').addEventListener('click', () => switchTab('exec'));
 
   function switchTab(tab){
+    if(tab === 'hold' && window.RADAR_DEMO) tab = 'radar'; // tab Hold butuh data fundamental & internet — tidak ada di demo
     currentTab = tab;
     document.getElementById('tabRadarBtn').classList.toggle('active', tab === 'radar');
     document.getElementById('tabWatchlistBtn').classList.toggle('active', tab === 'watchlist');

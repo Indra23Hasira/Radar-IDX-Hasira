@@ -1,0 +1,4 @@
+.xlsx/
+.store-full.json
+node_modules/
+package*.json
