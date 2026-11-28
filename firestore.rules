@@ -13,7 +13,7 @@ rules_version = '2';
 //  - Radar-DayTrade runner memakai firebase-admin (service account) → tidak terkena rules ini.
 //
 // Cara pasang: Firebase Console → Firestore Database → Rules → ganti SELURUH isi dengan file
-// ini → ganti GANTI_DENGAN_UID_PEMILIK dengan UID akunmu (Authentication → Users → kolom
+// ini (UID pemilik sudah terisi; kalau akun pemilik berganti, ganti UID-nya — Authentication → Users → kolom
 // "User UID") → Publish. UID bukan rahasia; aman disimpan di repo.
 // =====================================================================
 service cloud.firestore {
