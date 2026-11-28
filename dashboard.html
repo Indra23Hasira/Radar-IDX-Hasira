@@ -298,13 +298,16 @@
     color:#F5D67A; font-size:12px; padding:8px 20px; text-align:center; line-height:1.5; }
   .demo-banner b{ letter-spacing:.12em; }
   html.demo .demo-banner{ display:block; }
+  .demo-exit{ display:inline-block; margin-left:12px; padding:3px 10px; border:1px solid #F5D67A; border-radius:4px;
+    color:#F5D67A; text-decoration:none; font-weight:600; white-space:nowrap; }
+  .demo-exit:hover{ background:#F5D67A; color:#2c2004; }
   html.demo #tabHoldBtn, html.demo #btnLogout, html.demo .header-nav a[href="index.html"], html.demo #loginOverlay,
   html.demo a[href*="stockbit.com"]{ display:none !important; }
 </style>
 </head>
 <body>
 
-<div class="demo-banner" id="demoBanner"><b>MODE DEMO</b> · semua saham &amp; angka di sini FIKTIF (kode berawalan X), bukan rekomendasi. Tidak terhubung ke database — perubahan hanya tersimpan sampai halaman ditutup.</div>
+<div class="demo-banner" id="demoBanner"><b>MODE DEMO</b> · semua saham &amp; angka di sini FIKTIF (kode berawalan X), bukan rekomendasi. Tidak terhubung ke database — perubahan hanya tersimpan sampai halaman ditutup. <a href="dashboard.html" class="demo-exit">✕ Keluar dari demo</a></div>
 <header>
   <div class="brand">
     <div class="radar-icon"><div class="radar-sweep"></div></div>
